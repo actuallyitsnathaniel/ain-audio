@@ -13,6 +13,7 @@ const useHover = () => {
 };
 
 const Home = () => {
+  // eslint-disable-next-line no-unused-vars
   const [titleIsHovering, titleHoverProps] = useHover();
 
   return (
