@@ -13,7 +13,7 @@ export const NavItem = (props) => {
   return (
     <li className="transition-all duration-100 hover:scale-105">
       <Link
-        className={`group hover:text-cyan-500 hover:scale-110 p-5 font-normal`}
+        className={`group hover:text-cyan-500 hover:scale-110 p-5 font-light`}
         to={props.link}
         onClick={() => {
           props.setExpanded && props.setExpanded(false);

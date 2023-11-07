@@ -3,6 +3,8 @@ import profilePic from "../assets/images/ain-pfp.jpeg";
 import { TextCursor } from "../components/text-cursor";
 import TypeIt from "typeit-react";
 
+import { SocialLinks } from "../components/social-links";
+
 const useHover = () => {
   const [hovering, setHovering] = useState(false);
   const onHoverProps = {
@@ -19,11 +21,11 @@ const Home = () => {
   return (
     <div className="flex h-screen flex-wrap flex-col justify-center">
       {
-        <h1 className="group hover:text-cyan-500 font-light flex my-7 justify-center mx-auto w-fit md:translate-x-2 overflow-clip">
-          <span>
+        <h1 className="group font-light flex my-7 justify-center mx-auto w-fit md:translate-x-2 overflow-clip">
+          <span className="flex flex-nowrap text-base md:text-2xl">
             <TypeIt options={{ cursor: "", speed: 90 }}>
               <a
-                className="hover:text-cyan-500 font-light "
+                className="font-light hover:text-white"
                 href="https://www.instagram.com/actuallyitsnathaniel"
                 rel="noopener noreferrer"
                 target="_blank"
@@ -42,6 +44,7 @@ const Home = () => {
       <div className="flex h-1/3 justify-center overflow-clip">
         <img src={profilePic} className="rounded-full" alt="profilePic" />
       </div>
+      <SocialLinks />
     </div>
   );
 };
