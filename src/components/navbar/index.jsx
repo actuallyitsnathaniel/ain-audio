@@ -28,7 +28,7 @@ const MobileNav = (props) => {
           props.expanded ? "translate-x-[0%]" : "translate-x-[-100%]"
         }`}
       >
-        <ul className="flex flex-col h-[90%] justify-evenly text-center">
+        <ul className="flex flex-col h-[90%] justify-evenly text-center backdrop-blur-lg">
           <NavItem text="Home" link={`#home`} setExpanded={props.setExpanded} />
           <NavItem
             text="About Me"
@@ -94,7 +94,7 @@ export const NavBar = () => {
   return isMobile ? (
     <div className="">
       <div
-        className={`fixed transition-all duration-100 h-screen w-screen overflow-visible backdrop-blur-lg brightness-80 bg-gradient-to-tr from-transparent via-transparent to-emerald-950 ${
+        className={`fixed transition-all duration-100 h-screen w-screen overflow-visible brightness-80 bg-gradient-to-tr from-transparent via-transparent to-emerald-950 ${
           !expanded && "hidden"
         }`}
       />
