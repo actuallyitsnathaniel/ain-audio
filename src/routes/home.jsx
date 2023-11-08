@@ -25,7 +25,7 @@ const Home = () => {
           <span className="flex flex-nowrap text-base md:text-2xl">
             <TypeIt options={{ cursor: "", speed: 90 }}>
               <a
-                className="font-light hover:text-white"
+                className="font-light transition-all duration-100 hover:text-white hover:scale-105"
                 href="https://www.instagram.com/actuallyitsnathaniel"
                 rel="noopener noreferrer"
                 target="_blank"
