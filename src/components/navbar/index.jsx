@@ -8,7 +8,7 @@ import CloseIcon from "../../assets/images/icons/navbar/close-icon.svg";
 const DesktopNav = () => {
   return (
     <nav className="transition-transform duration-100 fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow lowercase">
-      <ul className="flex transition-transform duration-100 text-center flex-wrap flex-col md:flex-row py-4 w-screen justify-evenly">
+      <ul className="flex transition-transform duration-100 text-center flex-wrap flex-col md:flex-row py-4 justify-evenly">
         <NavItem text={`Home`} link={`#home`} />
         <NavItem text="About Me" link={`#about-me`} />
         <NavItem text="Music" link={`#music`} />
@@ -24,7 +24,7 @@ const MobileNav = (props) => {
       className={`fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow `}
     >
       <div
-        className={`fixed origin-left transition-transform duration-200 overflow-visible flex flex-col bg-black/60 h-screen w-screen ${
+        className={`fixed origin-left transition-transform duration-200 flex flex-col bg-black/60 h-screen ${
           props.expanded ? "translate-x-[0%]" : "translate-x-[-100%]"
         }`}
       >
@@ -94,7 +94,7 @@ export const NavBar = () => {
   return isMobile ? (
     <div className="">
       <div
-        className={`fixed transition-all duration-100 h-screen w-screen overflow-visible brightness-80 bg-gradient-to-tr from-transparent via-transparent to-emerald-950 ${
+        className={`fixed transition-all duration-100 h-screen brightness-80 bg-gradient-to-tr from-transparent via-transparent to-emerald-950 ${
           !expanded && "hidden"
         }`}
       />

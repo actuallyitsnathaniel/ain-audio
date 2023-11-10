@@ -8,7 +8,7 @@ const Root = () => {
   return (
     <div
       id="root"
-      className="flex max-w-screen h-screen justify-center text-center align-middle"
+      className="flex w-screen h-screen justify-center text-center align-middle"
     >
       <div id="root-wrapper">
         <Home />

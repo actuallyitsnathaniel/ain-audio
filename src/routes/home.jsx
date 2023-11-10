@@ -21,7 +21,7 @@ const Home = () => {
   return (
     <div className="flex h-screen flex-wrap flex-col justify-center">
       {
-        <h1 className="group font-light flex my-7 justify-center mx-auto w-fit md:translate-x-2 overflow-clip">
+        <h1 className="group font-light flex my-7 justify-center mx-auto">
           <span className="flex flex-nowrap text-base md:text-2xl">
             <TypeIt options={{ cursor: "", speed: 90 }}>
               <a
@@ -41,7 +41,7 @@ const Home = () => {
           </span>
         </h1>
       }
-      <div className="flex h-1/3 justify-center overflow-clip">
+      <div className="flex h-1/3 justify-center">
         <img src={profilePic} className="rounded-full" alt="profilePic" />
       </div>
       <SocialLinks />
