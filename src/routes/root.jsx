@@ -6,10 +6,7 @@ import ScrollToHashElement from "../utilities/ScrollToHashElement";
 
 const Root = () => {
   return (
-    <div
-      id="root"
-      className="flex w-screen h-screen justify-center text-center align-middle"
-    >
+    <div id="root" className="flex justify-center text-center">
       <div id="root-wrapper">
         <Home />
         <AboutMe />
