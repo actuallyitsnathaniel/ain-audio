@@ -11,7 +11,7 @@ const DesktopNav = () => {
       <ul className="flex transition-transform duration-100 text-center flex-wrap flex-col md:flex-row py-4 w-screen justify-evenly">
         <NavItem text={`Home`} link={`#home`} />
         <NavItem text="About Me" link={`#about-me`} />
-        {/* <NavItem text="Music" link={`#music`} /> */}
+        <NavItem text="Music" link={`#music`} />
         {/* <NavItem text="Connect" link={`#connect`} /> */}
       </ul>
     </nav>
