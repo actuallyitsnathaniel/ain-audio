@@ -8,9 +8,17 @@ import { NavBar } from "../components/navbar";
 import ScrollToHashElement from "../utilities/ScrollToHashElement";
 
 const Root = () => {
-  // TODO: desktop navbar to become icons?
-  // NO. actually have one that can play all your stuff.
-  // TODO: sideways scrollbar, style it like an ableton session
+  /**
+   *
+   * TODO: desktop navbar to become icons?
+   * NO. actually have one that can play all your stuff.
+   * TODO: sideways scrollbar, style it like an ableton session
+   */
+
+  /**
+   * TODO: favicon to be "@in"
+   * TODO: mobile navbar check
+   */
   return (
     <div id="root" className="flex justify-center text-center">
       <div id="root-wrapper">
