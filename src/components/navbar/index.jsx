@@ -40,7 +40,7 @@ const MobileNav = ({ expanded, setExpanded }) => {
           <NavItem text="Press" link={`#press`} setExpanded={setExpanded} />
         </ul>
       </div>
-      <MobileNavButton {...{ expanded, setExpanded }} />
+      <MobileNavButton type="browser" {...{ expanded, setExpanded }} />
     </nav>
   );
 };
