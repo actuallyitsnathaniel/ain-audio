@@ -1,6 +1,6 @@
 import { PressLink } from "../components/press-link";
 
-export const Press = () => {
+const Press = () => {
   return (
     <div id="press">
       <h1>Press</h1>
@@ -21,3 +21,5 @@ export const Press = () => {
     </div>
   );
 };
+
+export default Press;

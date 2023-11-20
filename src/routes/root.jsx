@@ -4,7 +4,7 @@ import Music from "./music";
 import Footer from "../components/footer";
 import { NavBar } from "../components/navbar";
 import ScrollToHashElement from "../utilities/ScrollToHashElement";
-import { Press } from "./Press";
+import Press from "./Press";
 
 const Root = () => {
   // TODO: desktop navbar to become icons?
