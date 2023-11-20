@@ -13,6 +13,7 @@ const DesktopNav = () => {
         <NavItem text="About Me" link={`#about-me`} />
         <NavItem text="Music" link={`#music`} />
         {/* <NavItem text="Connect" link={`#connect`} /> */}
+        <NavItem text="Press" link={`#press`} />
       </ul>
     </nav>
   );
@@ -43,6 +44,11 @@ const MobileNav = (props) => {
           <NavItem
             text="Connect"
             link={`#connect`}
+            setExpanded={props.setExpanded}
+          />
+          <NavItem
+            text="Press"
+            link={`#press`}
             setExpanded={props.setExpanded}
           />
         </ul>

@@ -23,6 +23,9 @@ const router = createBrowserRouter([
       {
         path: "#connect",
       },
+      {
+        path: "#press",
+      },
     ],
   },
 ]);
