@@ -2,14 +2,15 @@ import { useState } from "react";
 import { SamDenton } from "./projects/sam-denton";
 
 const Music = () => {
-  const [expanded, setExpanded] = useState(-1);
+  const [index, setIndex] = useState(-1);
 
   const HandleActiveArtist = (i) => {
-    console.log(i);
-    if (i == expanded) {
-      setExpanded(-1);
+    console.log({ i });
+    console.log({ index });
+    if (i == index) {
+      setIndex(-1);
     } else {
-      setExpanded(i);
+      setIndex(i);
     }
   };
 
@@ -20,7 +21,7 @@ const Music = () => {
       className="p-5 flex flex-col min-h-screen justify-center text-4xl"
     >
       <h1 className="text-4xl py-10">projects/music</h1>
-      <SamDenton {...{ HandleActiveArtist, expanded }} />
+      <SamDenton {...{ HandleActiveArtist, index }} i={0} />
     </div>
   );
 };

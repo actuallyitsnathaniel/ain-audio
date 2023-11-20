@@ -29,7 +29,7 @@ const Disc = ({
       onClick={() => {
         setActiveDisc(i);
       }}
-      className={`${className} transition-scale duration-100 text-8xl p-6 hover:scale-110 group`}
+      className={`${className} transition-scale duration-100 text-8xl py-6 md:px-6 hover:scale-110 group`}
     >
       <div className={"h-[300px] w-[300px]"}>
         <MusicPlatformLinks
@@ -47,7 +47,7 @@ const Disc = ({
         />
         <img height={"300px"} width={"300px"} src={artwork} alt={title} />
       </div>
-      <div className="flex flex-row w-[300px] flex-wrap text-center justify-center transition-scale duration-100 origin-top text-xl pt-2 md:scale-0 md:group-hover:scale-90">
+      <div className="flex flex-row w-[300px] flex-wrap text-center justify-center transition-scale duration-100 origin-top text-xl pt-2 md:invisible md:group-hover:visible md:scale-0 md:group-hover:scale-90">
         {title}
       </div>
     </div>

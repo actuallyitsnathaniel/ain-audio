@@ -15,23 +15,22 @@ import first from "../../../assets/images/projects/sam-denton/Singles_EPs/first_
 import better from "../../../assets/images/projects/sam-denton/Singles_EPs/better_2021_single_600x600bb.jpeg";
 import dreams from "../../../assets/images/projects/sam-denton/Singles_EPs/dreams_600x600bb.jpeg";
 
-export const SamDenton = ({ HandleActiveArtist, expanded }) => {
-  // TODO: implement counter, i in props
+export const SamDenton = ({ HandleActiveArtist, index, i }) => {
   return (
     <div
       id="project-sam-denton"
-      className={`flex flex-col flex-wrap [&>*]:transition-all [&>*]:duration-100 text-white backdrop-blur`}
+      className={`flex flex-col flex-wrap items-center text-white backdrop-blur`}
     >
       <button
-        id={0}
-        className="appearance-none text-3xl justify-center mx-auto"
+        className="appearance-none flex shrink flex-col text-3xl items-center"
         title="Sam Denton"
-        onClick={(e) => HandleActiveArtist(e.target.id)}
+        onClick={(e) => HandleActiveArtist(parseInt(e.target.id))}
       >
         <img
           src={samPfp}
+          id={i}
           alt="sam-denton-alt"
-          className="flex max-h-[300px] justify-center object-contain rounded-xl"
+          className="max-h-[300px] object-contain rounded-xl"
         />
         <span>Sam Denton</span>
       </button>
@@ -41,8 +40,8 @@ export const SamDenton = ({ HandleActiveArtist, expanded }) => {
       </p>
       <div
         id="music-page"
-        className={`origin-top backdrop-blur-md ${
-          expanded == 0 ? "scale-100 block blur-none" : "scale-0 h-min blur-md"
+        className={`transition-all duration-100 ease-in-out origin-top backdrop-blur-md ${
+          index == i ? "scale-100 h-0 blur-none" : "scale-0 h-min blur-lg"
         }`}
       >
         <div id="discography-wrapper">
@@ -161,5 +160,6 @@ export const SamDenton = ({ HandleActiveArtist, expanded }) => {
 
 SamDenton.propTypes = {
   HandleActiveArtist: PropTypes.func,
-  expanded: PropTypes.number,
+  index: PropTypes.number,
+  i: PropTypes.number,
 };

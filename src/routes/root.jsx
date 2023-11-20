@@ -1,6 +1,6 @@
 import Home from "./home";
 import AboutMe from "./about-me";
-import Music from "./music/music";
+import Music from "./music/index";
 import Press from "./press";
 
 import Footer from "../components/footer";
@@ -15,10 +15,6 @@ const Root = () => {
    * TODO: sideways scrollbar, style it like an ableton session
    */
 
-  /**
-   * TODO: favicon to be "@in"
-   * TODO: mobile navbar check
-   */
   return (
     <div id="root" className="flex justify-center text-center">
       <div id="root-wrapper">
