@@ -7,7 +7,7 @@ import { SocialLinks } from "../components/social-links";
 const Home = () => {
   return (
     <div className="flex h-screen flex-wrap flex-col justify-center">
-      <h1 className="group w-min mx-auto duration-100 hover:scale-110">
+      <h1 className="group w-min mx-auto duration-100 hover:scale-110 hover:text-white">
         <SocialLinks
           className={
             "group-hover:scale-100 md:scale-0 md:blur-xl group-hover:blur-0"
@@ -15,7 +15,7 @@ const Home = () => {
         />
         <span className="flex-nowrap text-base md:text-2xl font-light flex mb-7 justify-center mx-auto">
           <TypeIt options={{ cursor: "", speed: 55 }}>
-            <span className="font-light hover:text-white -translate-x-6 cursor-default">
+            <span className="font-light -translate-x-6 cursor-default">
               @actuallyitsnathaniel
             </span>
 
