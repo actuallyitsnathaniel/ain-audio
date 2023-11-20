@@ -2,9 +2,12 @@ import { PressLink } from "../components/press-link";
 
 const Press = () => {
   return (
-    <div id="press">
-      <h1>Press</h1>
-      <h3 className="text-center py-5 underline text-5xl font-extrabold">
+    <div
+      id="press"
+      className="p-5 flex flex-col justify-center min-h-screen md:pt-16"
+    >
+      <h1 className="text-4xl">press</h1>
+      <h3 className="text-center py-5 underline text-3xl font-bold">
         press highlights
       </h3>
       <a href="" target="_blank" rel="noreferrer noopener">

@@ -6,7 +6,7 @@ import { SocialLinks } from "../components/social-links";
 
 const Home = () => {
   return (
-    <div className="flex h-screen flex-wrap flex-col justify-center">
+    <div id="home" className="flex h-screen flex-wrap flex-col justify-center">
       <h1 className="group w-min mx-auto duration-100 hover:scale-110 hover:text-white">
         <SocialLinks
           className={
