@@ -1,10 +1,11 @@
 import Home from "./home";
 import AboutMe from "./about-me";
 import Music from "./music";
+import Press from "./press";
+
 import Footer from "../components/footer";
 import { NavBar } from "../components/navbar";
 import ScrollToHashElement from "../utilities/ScrollToHashElement";
-import Press from "./press";
 
 const Root = () => {
   // TODO: desktop navbar to become icons?
