@@ -18,7 +18,7 @@ import dreams from "../../../assets/images/projects/sam-denton/Singles_EPs/dream
 
 export const SamDenton = ({ i, expanded, setExpanded }) => {
   return (
-    <div>
+    <div id="sam-denton">
       <ProfilePic
         i={i}
         image={samPfp}
@@ -138,6 +138,6 @@ export const SamDenton = ({ i, expanded, setExpanded }) => {
 
 SamDenton.propTypes = {
   i: PropTypes.number,
-  expanded: PropTypes.string,
+  expanded: PropTypes.bool,
   setExpanded: PropTypes.func,
 };

@@ -25,12 +25,12 @@ export const ProfilePic = ({
 
 export const Title = ({ artistName, subtitle }) => {
   return (
-    <>
-      <p className="flex justify-center w-full">{artistName}</p>
-      <p id="desc" className="text-xl italic w-full justify-center">
+    <div className="py-3 justify-center w-full">
+      <p className="flex justify-center">{artistName}</p>
+      <p id="desc" className="text-xl italic">
         {subtitle}
       </p>
-    </>
+    </div>
   );
 };
 
@@ -42,7 +42,7 @@ export const Project = ({
 }) => {
   return (
     <div
-      id="projects"
+      id="project"
       className={`fixed top-0 left-0 z-[4] flex flex-col items-center text-white transition-all duration-100 ease-in-out bg-black bg-opacity-75 backdrop-blur-md ${
         expanded ? "scale-100 h-screen blur-none" : "scale-0 h-0 blur-lg"
       }`}

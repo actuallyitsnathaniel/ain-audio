@@ -1,6 +1,6 @@
 import Home from "./home";
 import AboutMe from "./about-me";
-import Music from "./music/index";
+import Music from "./music/music";
 import Press from "./press";
 
 import Footer from "../components/footer";
