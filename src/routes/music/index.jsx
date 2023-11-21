@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ProfilePic, Projects } from "./projects/project";
+import { SamDenton } from "./projects/sam-denton";
 
 const Music = () => {
   // const [index, setIndex] = useState(-1);
@@ -22,8 +22,7 @@ const Music = () => {
       className="p-5 flex flex-col min-h-screen justify-center text-4xl"
     >
       <h1 className="text-4xl py-10">projects/music</h1>
-      <Projects i={0} {...{ expanded, setExpanded }} />
-      <ProfilePic i={0} {...{ expanded, setExpanded }} />
+      <SamDenton i={0} {...{ expanded, setExpanded }} />
     </div>
   );
 };
