@@ -1,21 +1,21 @@
-import { useState } from "react";
 import { PropTypes } from "prop-types";
 
 import MusicPlatformLinks from "./platform-links";
 
 const Disc = ({
+  expanded,
+  setExpanded,
   i,
   className,
   appleMusicLink,
   spotifyLink,
   soundcloudLink,
+  tidalLink,
   youtubeLink,
   album,
   artwork,
   title,
 }) => {
-  const [expanded, setExpanded] = useState(-1);
-
   const setActiveDisc = (i) => {
     if (i === expanded) {
       setExpanded(-1);
@@ -42,6 +42,7 @@ const Disc = ({
           appleMusicLink={appleMusicLink}
           spotifyLink={spotifyLink}
           soundcloudLink={soundcloudLink}
+          tidalLink={tidalLink}
           youtubeLink={youtubeLink}
           album={album}
         />
@@ -55,11 +56,14 @@ const Disc = ({
 };
 
 Disc.propTypes = {
+  expanded: PropTypes.number,
+  setExpanded: PropTypes.func,
   i: PropTypes.number,
   className: PropTypes.string,
   appleMusicLink: PropTypes.string,
   spotifyLink: PropTypes.string,
   soundcloudLink: PropTypes.string,
+  tidalLink: PropTypes.string,
   youtubeLink: PropTypes.string,
   album: PropTypes.string,
   artwork: PropTypes.string,

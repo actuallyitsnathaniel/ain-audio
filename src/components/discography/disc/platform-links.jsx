@@ -4,6 +4,25 @@ import appleMusic from "../../../assets/images/icons/music-platforms/apple-music
 import spotify from "../../../assets/images/icons/music-platforms/spotify.svg";
 import soundcloud from "../../../assets/images/icons/music-platforms/soundcloud.svg";
 import youtube from "../../../assets/images/icons/music-platforms/youtube.svg";
+import tidal from "../../../assets/images/icons/music-platforms/tidal.svg";
+
+const Link = ({ href, image }) => {
+  return (
+    <a
+      href={href}
+      className={`${href === "" && "hidden"}`}
+      rel="noopener noreferrer"
+      target="_blank"
+    >
+      <img
+        className="transition-all duration-75 md:hover:scale-110"
+        height={"75px"}
+        alt="music-link"
+        src={image}
+      />
+    </a>
+  );
+};
 
 const MusicPlatformLinks = ({
   className,
@@ -11,6 +30,7 @@ const MusicPlatformLinks = ({
   spotifyLink,
   appleMusicLink,
   soundcloudLink,
+  tidalLink,
   youtubeLink,
 }) => {
   return (
@@ -21,63 +41,18 @@ const MusicPlatformLinks = ({
       } justify-items-center items-center -translate-x-1 -translate-y-1 p-4
       `}
     >
-      <a
-        href={spotifyLink}
-        className={`${spotifyLink === "" && "hidden"}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        <img
-          className="transition-all duration-75 hover:scale-110"
-          height={"75px"}
-          alt="spotify-link"
-          src={spotify}
-        />
-      </a>
-
-      <a
-        href={appleMusicLink}
-        className={`${appleMusicLink === "" && "hidden"}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        <img
-          className="transition-all duration-75 hover:scale-110"
-          height={"75px"}
-          alt="apple-music-link"
-          src={appleMusic}
-        />
-      </a>
-
-      <a
-        href={soundcloudLink}
-        className={`${soundcloudLink === "" && "hidden"}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        <img
-          className={`transition-all duration-75 scale-110 hover:scale-125`}
-          height={"75px"}
-          alt="soundcloud-link"
-          src={soundcloud}
-        />
-      </a>
-
-      <a
-        href={youtubeLink}
-        className={`${youtubeLink === "" && "hidden"}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        <img
-          className="transition-all duration-75 hover:scale-110"
-          height={"75px"}
-          alt="youtube-link"
-          src={youtube}
-        />
-      </a>
+      <Link href={spotifyLink} image={spotify} />
+      <Link href={appleMusicLink} image={appleMusic} />
+      <Link href={soundcloudLink} image={soundcloud} />
+      <Link href={tidalLink} image={tidal} />
+      <Link href={youtubeLink} image={youtube} />
     </div>
   );
+};
+
+Link.propTypes = {
+  href: PropTypes.string,
+  image: PropTypes.string,
 };
 
 MusicPlatformLinks.propTypes = {
@@ -86,6 +61,7 @@ MusicPlatformLinks.propTypes = {
   spotifyLink: PropTypes.string,
   appleMusicLink: PropTypes.string,
   soundcloudLink: PropTypes.string,
+  tidalLink: PropTypes.string,
   youtubeLink: PropTypes.string,
 };
 

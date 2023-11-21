@@ -59,7 +59,6 @@ export const Projects = ({ expanded, setExpanded }) => {
         <Discography>
           {/** Albums */}
           <Discography.Disc
-            recordType={"album"}
             artwork={forNow}
             title={"for now,"}
             spotifyLink={
@@ -75,33 +74,30 @@ export const Projects = ({ expanded, setExpanded }) => {
 
           {/** Singles / EPs */}
           <Discography.Disc
-            recordType="single"
             artwork={dreams}
             title="dreams"
             spotifyLink="https://open.spotify.com/track/5X0UGqgAEsG0YWGtkqtvBt?si=0a9f3e0664a54c9a"
             appleMusicLink="https://music.apple.com/us/album/dreams/1573467286?i=1573467301"
             tidalLink="https://tidal.com/browse/track/243956491"
-            soundcloudLink=""
+            soundcloudLink={""}
             youtubeLink="https://www.youtube.com/watch?v=lA42ghfjvCo"
           />
           <Discography.Disc
-            recordType="single"
             artwork={better}
             title="better (with riley & john white)"
             spotifyLink="https://open.spotify.com/track/52lu5hXrnYdWtPb90ImyA6?si=d8d3dedf5e23468b"
             appleMusicLink="https://music.apple.com/us/album/better/1556313448?i=1556313450"
             tidalLink="https://tidal.com/browse/track/244622029"
-            soundcloudLink=""
+            soundcloudLink={""}
             youtubeLink="https://www.youtube.com/watch?v=YkTWodHhM0o"
           />
           <Discography.Disc
-            recordType="single"
             artwork={first}
             title="first"
             spotifyLink="https://open.spotify.com/track/1w4i5qwiRwGOkbMxEBjfyJ?si=f040acca342a4e49"
             appleMusicLink="https://music.apple.com/us/album/first/1493852002?i=1493852052"
             tidalLink="https://tidal.com/browse/track/243488656"
-            soundcloudLink=""
+            soundcloudLink={""}
             youtubeLink="https://www.youtube.com/watch?v=0QWcpO3q1kA"
           />
           <Discography.Disc
@@ -111,21 +107,19 @@ export const Projects = ({ expanded, setExpanded }) => {
             spotifyLink="https://open.spotify.com/track/2qazwrjvUxVr8cRSUfDJJt?si=c9166f78e2df4ce6"
             appleMusicLink="https://music.apple.com/us/album/i-just-might/1472805738?i=1472805927"
             tidalLink="https://tidal.com/browse/track/246002376"
-            soundcloudLink=""
+            soundcloudLink={""}
             youtubeLink="https://www.youtube.com/watch?v=w1bNk5EvylU"
           />
           <Discography.Disc
-            recordType="single"
             artwork={smokeInTheMirror}
             title="smoke in the mirror (with samiere)"
             spotifyLink="https://open.spotify.com/track/6hwmodBKdK50qtvvIPU2kT?si=6803c09fc91d47a5"
             appleMusicLink="https://music.apple.com/us/album/smoke-in-the-mirror-with-samiere/1466027622?i=1466027633"
             tidalLink="https://tidal.com/browse/track/245912176"
-            soundcloudLink=""
+            soundcloudLink={""}
             youtubeLink="https://www.youtube.com/watch?v=DiubEmfg1oM"
           />
           <Discography.Disc
-            recordType="single"
             artwork={_209}
             title="2:09"
             spotifyLink="https://open.spotify.com/track/0dhX55OSXJdHfqeNxt4jNg?si=723c5458a64b484d"
@@ -135,7 +129,6 @@ export const Projects = ({ expanded, setExpanded }) => {
             youtubeLink={"https://www.youtube.com/watch?v=LWqM12QvhXw"}
           />
           <Discography.Disc
-            recordType="single"
             artwork={idkya}
             title={"idkya"}
             spotifyLink={
@@ -149,7 +142,6 @@ export const Projects = ({ expanded, setExpanded }) => {
             youtubeLink={"https://www.youtube.com/watch?v=bUUB3sBHwyA"}
           />
           <Discography.Disc
-            recordType={"single"}
             artwork={backToYou}
             title={"back to you"}
             spotifyLink={

@@ -1,16 +1,17 @@
-import React from "react";
+import React, { useState } from "react";
 import { PropTypes } from "prop-types";
 
 import Disc from "./disc";
 
 const Discography = ({ children }) => {
+  const [expanded, setExpanded] = useState(-1);
   return (
     <div>
       <div
         className={"flex flex-wrap w-full md:w-5/6 md:mx-auto justify-center"}
       >
-        {React.Children.map(children, (child) => {
-          return React.cloneElement(child);
+        {React.Children.map(children, (child, i) => {
+          return React.cloneElement(child, { expanded, setExpanded, i });
         })}
       </div>
     </div>
