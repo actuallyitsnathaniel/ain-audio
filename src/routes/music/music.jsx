@@ -17,13 +17,14 @@ const Music = () => {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    // TODO: integrate modal effect, make artist page absolute.
     <div
       id="music"
       className="p-5 flex flex-col min-h-screen justify-center text-4xl"
     >
       <h1 className="text-4xl py-10">projects/music</h1>
       <div id="projects" className="flex flex-wrap justify-center space-x-32">
+        {/* TODO: integrate socials for each artist, just under title
+            TODO: add descriptions for each artist, under socials */}
         <SamDenton i={0} {...{ expanded, setExpanded }} />
         <Ryland i={1} {...{ expanded, setExpanded }} />
         {/* 
