@@ -3,13 +3,13 @@ import { PropTypes } from "prop-types";
 export const ProfilePic = ({
   i,
   expanded,
-  setExpanded,
+  HandleActiveArtist,
   image,
   titleComponent,
 }) => {
   return (
     <button
-      onClick={() => setExpanded(!expanded)}
+      onClick={() => HandleActiveArtist(i, expanded)}
       className="appearance-none flex flex-col text-3xl mx-auto p-4"
     >
       <img
@@ -35,8 +35,9 @@ export const Title = ({ artistName, subtitle }) => {
 };
 
 export const Project = ({
+  i,
   expanded,
-  setExpanded,
+  HandleActiveArtist,
   discography,
   titleComponent,
 }) => {
@@ -44,10 +45,10 @@ export const Project = ({
     <div
       id="project"
       className={`fixed top-0 left-0 z-[4] flex flex-col items-center text-white transition-all duration-100 ease-in-out bg-black bg-opacity-75 backdrop-blur-md ${
-        expanded ? "scale-100 h-screen blur-none" : "scale-0 h-0 blur-lg"
+        expanded == i ? "scale-100 h-screen blur-none" : "scale-0 h-0 blur-lg"
       }`}
     >
-      <ProjectsToggleButton {...{ expanded, setExpanded }} />
+      <ProjectsToggleButton {...{ expanded, HandleActiveArtist }} />
       <div
         id="projects-wrapper"
         className="pt-10 h-full overflow-y-scroll overscroll-contain"
@@ -59,7 +60,7 @@ export const Project = ({
   );
 };
 
-const ProjectsToggleButton = ({ expanded, setExpanded }) => {
+const ProjectsToggleButton = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <button
       data-collapse-toggle="navbar"
@@ -69,24 +70,26 @@ const ProjectsToggleButton = ({ expanded, setExpanded }) => {
       aria-controls="navbar"
       aria-expanded="false"
       onClick={() => {
-        setExpanded(!expanded);
+        HandleActiveArtist(i, expanded);
       }}
     >
       <span
         className={`flex w-12 h-1 mb-2.5 relative bg-white rounded-sm origin-top-left duration-200 ${
-          expanded ? "rotate-45" : "rotate-0"
+          expanded != i ? "rotate-45" : "rotate-0"
         }`}
       />
       <span
         className={`flex w-12 h-1 mb-2.5 relative bg-white rounded-sm origin-center duration-200 ${
-          expanded
+          expanded != i
             ? "rotate-180 opacity-0 scale-0"
             : "rotate-0 scale-100 opacity-100"
         }`}
       />
       <span
         className={`flex w-12 h-1 mb-2.5 relative bg-white rounded-sm origin-bottom-left duration-200 ${
-          expanded ? "-rotate-45 translate-y-[5px]" : "rotate-0 translate-y-0"
+          expanded != i
+            ? "-rotate-45 translate-y-[5px]"
+            : "rotate-0 translate-y-0"
         }`}
       />
     </button>
@@ -100,20 +103,22 @@ Title.propTypes = {
 
 ProfilePic.propTypes = {
   i: PropTypes.number,
-  expanded: PropTypes.bool,
-  setExpanded: PropTypes.func,
+  expanded: PropTypes.number,
+  HandleActiveArtist: PropTypes.func,
   image: PropTypes.string,
   titleComponent: PropTypes.object,
 };
 
 Project.propTypes = {
-  setExpanded: PropTypes.func,
-  expanded: PropTypes.bool,
+  i: PropTypes.number,
+  HandleActiveArtist: PropTypes.func,
+  expanded: PropTypes.number,
   discography: PropTypes.object,
   titleComponent: PropTypes.object,
 };
 
 ProjectsToggleButton.propTypes = {
-  setExpanded: PropTypes.func,
-  expanded: PropTypes.bool,
+  i: PropTypes.number,
+  HandleActiveArtist: PropTypes.func,
+  expanded: PropTypes.number,
 };

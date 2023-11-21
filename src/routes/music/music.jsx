@@ -3,18 +3,16 @@ import { SamDenton } from "./projects/sam-denton";
 import { Ryland } from "./projects/ryland";
 
 const Music = () => {
-  // const [index, setIndex] = useState(-1);
-
-  // const HandleActiveArtist = (i) => {
-  //   console.log({ i });
-  //   console.log({ index });
-  //   if (i == index) {
-  //     setIndex(-1);
-  //   } else {
-  //     setIndex(parseInt(i));
-  //   }
-  // };
-  const [expanded, setExpanded] = useState(false);
+  const HandleActiveArtist = (i, expanded) => {
+    console.log({ i });
+    console.log({ expanded });
+    if (i == expanded) {
+      setExpanded(-1);
+    } else {
+      setExpanded(parseInt(i));
+    }
+  };
+  const [expanded, setExpanded] = useState(-1);
 
   return (
     <div
@@ -25,8 +23,8 @@ const Music = () => {
       <div id="projects" className="flex flex-wrap justify-around">
         {/* TODO: integrate socials for each artist, just under title
             TODO: add descriptions for each artist, under socials */}
-        <SamDenton i={0} {...{ expanded, setExpanded }} />
-        <Ryland i={1} {...{ expanded, setExpanded }} />
+        <SamDenton i={0} {...{ expanded, HandleActiveArtist }} />
+        <Ryland i={1} {...{ expanded, HandleActiveArtist }} />
         {/* 
           TODO: literally the rest. go through projects PDF.
         */}

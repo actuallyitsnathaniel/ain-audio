@@ -19,17 +19,17 @@ import karma from "../../../assets/images/projects/ryland/Singles_EPs/Karma-Sing
 import stairwell from "../../../assets/images/projects/ryland/Singles_EPs/Stairwell-Single_600x600bb.jpeg";
 import talking from "../../../assets/images/projects/ryland/Singles_EPs/Talking-Single_600x600bb.jpeg";
 
-export const Ryland = ({ i, expanded, setExpanded }) => {
+export const Ryland = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="ryland">
       <ProfilePic
         i={i}
         image={rylandPfp}
-        {...{ expanded, setExpanded }}
+        {...{ expanded, HandleActiveArtist }}
         titleComponent={<Title artistName={"Ryland"} subtitle="band" />}
       />
       <Project
-        {...{ expanded, setExpanded }}
+        {...{ i, expanded, HandleActiveArtist }}
         titleComponent={<Title artistName="Ryland" subtitle="band" />}
         discography={
           <Discography>
@@ -143,13 +143,13 @@ export const Ryland = ({ i, expanded, setExpanded }) => {
             />
           </Discography>
         }
-      ></Project>
+      />
     </div>
   );
 };
 
 Ryland.propTypes = {
   i: PropTypes.number,
-  expanded: PropTypes.bool,
-  setExpanded: PropTypes.func,
+  expanded: PropTypes.number,
+  HandleActiveArtist: PropTypes.func,
 };

@@ -16,19 +16,19 @@ import first from "../../../assets/images/projects/sam-denton/Singles_EPs/first_
 import better from "../../../assets/images/projects/sam-denton/Singles_EPs/better_2021_single_600x600bb.jpeg";
 import dreams from "../../../assets/images/projects/sam-denton/Singles_EPs/dreams_600x600bb.jpeg";
 
-export const SamDenton = ({ i, expanded, setExpanded }) => {
+export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="sam-denton">
       <ProfilePic
         i={i}
         image={samPfp}
-        {...{ expanded, setExpanded }}
+        {...{ expanded, HandleActiveArtist }}
         titleComponent={
           <Title artistName="Sam Denton" subtitle="singer/songwriter" />
         }
       />
       <Project
-        {...{ expanded, setExpanded }}
+        {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
           <Title artistName="Sam Denton" subtitle="singer/songwriter" />
         }
@@ -138,6 +138,6 @@ export const SamDenton = ({ i, expanded, setExpanded }) => {
 
 SamDenton.propTypes = {
   i: PropTypes.number,
-  expanded: PropTypes.bool,
-  setExpanded: PropTypes.func,
+  expanded: PropTypes.number,
+  HandleActiveArtist: PropTypes.func,
 };
