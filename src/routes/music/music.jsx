@@ -20,7 +20,10 @@ const Music = () => {
       className="p-5 flex flex-col min-h-screen justify-center text-4xl"
     >
       <h1 className="text-4xl py-10">projects/music</h1>
-      <div id="projects" className="flex flex-wrap justify-around">
+      <div
+        id="projects"
+        className="flex flex-wrap justify-around flex-col md:flex-row"
+      >
         {/* TODO: integrate socials for each artist, just under title
             TODO: add descriptions for each artist, under socials */}
         <SamDenton i={0} {...{ expanded, HandleActiveArtist }} />
