@@ -36,7 +36,7 @@ const MobileNav = ({ expanded, setExpanded }) => {
             setExpanded={setExpanded}
           />
           <NavItem text="Music" link={`#music`} setExpanded={setExpanded} />
-          <NavItem text="Connect" link={`#connect`} setExpanded={setExpanded} />
+          {/* <NavItem text="Connect" link={`#connect`} setExpanded={setExpanded} /> */}
           <NavItem text="Press" link={`#press`} setExpanded={setExpanded} />
         </ul>
       </div>

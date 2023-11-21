@@ -1,14 +1,12 @@
 import { PropTypes } from "prop-types";
 
-export const MobileNavButton = ({ expanded, setExpanded, type }) => {
+export const MobileNavButton = ({ expanded, setExpanded }) => {
   return (
     <button
       data-collapse-toggle="navbar"
       id="navbar-icon"
       type="button"
-      className={`flex flex-col fixed top-3 ${
-        type == "browser" && "right-3"
-      } m-4 z-[1] select-none duration-200`}
+      className={`flex flex-col fixed top-3 right-3 m-4 z-[1] select-none duration-200`}
       aria-controls="navbar"
       aria-expanded="false"
       onClick={() => {
@@ -39,5 +37,4 @@ export const MobileNavButton = ({ expanded, setExpanded, type }) => {
 MobileNavButton.propTypes = {
   setExpanded: PropTypes.func,
   expanded: PropTypes.bool,
-  type: PropTypes.string,
 };
