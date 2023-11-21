@@ -10,13 +10,14 @@ const Link = ({ href, image }) => {
   return (
     <a
       href={href}
-      className={`${href === "" && "hidden"}`}
+      className={`${!href && "hidden"}`}
       rel="noopener noreferrer"
       target="_blank"
     >
       <img
         className="transition-all duration-75 md:hover:scale-110"
         height={"75px"}
+        width={"75px"}
         alt="music-link"
         src={image}
       />
@@ -26,7 +27,6 @@ const Link = ({ href, image }) => {
 
 const MusicPlatformLinks = ({
   className,
-  width,
   spotifyLink,
   appleMusicLink,
   soundcloudLink,
@@ -35,17 +35,15 @@ const MusicPlatformLinks = ({
 }) => {
   return (
     <div
-      className={`absolute grid grid-cols-2 
-      ${className} h-[305px]  ${
-        width ? width : "w-[305px]"
-      } justify-items-center items-center -translate-x-1 -translate-y-1 p-4
+      className={`absolute grid grid-cols-2 gap-2
+      ${className} h-[305px] w-[305px] justify-items-center items-center -translate-x-1 -translate-y-1  p-4
       `}
     >
-      <Link href={spotifyLink} image={spotify} />
-      <Link href={appleMusicLink} image={appleMusic} />
-      <Link href={soundcloudLink} image={soundcloud} />
-      <Link href={tidalLink} image={tidal} />
-      <Link href={youtubeLink} image={youtube} />
+      {spotifyLink && <Link href={spotifyLink} image={spotify} />}
+      {appleMusicLink && <Link href={appleMusicLink} image={appleMusic} />}
+      {soundcloudLink && <Link href={soundcloudLink} image={soundcloud} />}
+      {tidalLink && <Link href={tidalLink} image={tidal} />}
+      {youtubeLink && <Link href={youtubeLink} image={youtube} />}
     </div>
   );
 };

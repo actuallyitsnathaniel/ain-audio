@@ -103,7 +103,7 @@ ProfilePic.propTypes = {
   expanded: PropTypes.bool,
   setExpanded: PropTypes.func,
   image: PropTypes.string,
-  titleComponent: PropTypes.string,
+  titleComponent: PropTypes.object,
 };
 
 Project.propTypes = {

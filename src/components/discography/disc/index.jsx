@@ -33,18 +33,20 @@ const Disc = ({
     >
       <div className={"h-[300px] w-[300px]"}>
         <MusicPlatformLinks
-          className={`transition-all origin-content bg-black overflow-visible
+          className={`transition-all origin-content bg-black
           ${
             expanded === i
               ? "bg-opacity-50 backdrop-blur-md opacity-100 visible"
               : "invisible opacity-0 bg-opacity-0 backdrop-blur-none"
           }`}
-          appleMusicLink={appleMusicLink}
-          spotifyLink={spotifyLink}
-          soundcloudLink={soundcloudLink}
-          tidalLink={tidalLink}
-          youtubeLink={youtubeLink}
-          album={album}
+          {...{
+            appleMusicLink,
+            spotifyLink,
+            soundcloudLink,
+            tidalLink,
+            youtubeLink,
+            album,
+          }}
         />
         <img height={"300px"} width={"300px"} src={artwork} alt={title} />
       </div>
