@@ -4,15 +4,23 @@ import { PropTypes } from "prop-types";
 import { NavItem } from "./nav-item";
 import { MobileNavButton } from "./mobile-nav-button";
 
+const NavList = ({ setExpanded }) => {
+  return (
+    <>
+      <NavItem text="Home" link={`#home`} setExpanded={setExpanded} />
+      <NavItem text="About Me" link={`#about-me`} setExpanded={setExpanded} />
+      <NavItem text="Music" link={`#music`} setExpanded={setExpanded} />
+      {/* <NavItem text="Connect" link={`#connect`} setExpanded={setExpanded} /> */}
+      <NavItem text="Press" link={`#press`} setExpanded={setExpanded} />
+    </>
+  );
+};
+
 const DesktopNav = () => {
   return (
     <nav className="transition-transform duration-100 fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow lowercase">
       <ul className="flex transition-transform duration-100 text-center flex-wrap flex-col md:flex-row py-4 w-screen justify-evenly">
-        <NavItem text={`Home`} link={`#home`} />
-        <NavItem text="About Me" link={`#about-me`} />
-        <NavItem text="Music" link={`#music`} />
-        {/* <NavItem text="Connect" link={`#connect`} /> */}
-        <NavItem text="Press" link={`#press`} />
+        <NavList />
       </ul>
     </nav>
   );
@@ -29,15 +37,7 @@ const MobileNav = ({ expanded, setExpanded }) => {
         }`}
       >
         <ul className="flex flex-col h-[90%] justify-evenly text-center backdrop-blur-lg">
-          <NavItem text="Home" link={`#home`} setExpanded={setExpanded} />
-          <NavItem
-            text="About Me"
-            link={`#about-me`}
-            setExpanded={setExpanded}
-          />
-          <NavItem text="Music" link={`#music`} setExpanded={setExpanded} />
-          {/* <NavItem text="Connect" link={`#connect`} setExpanded={setExpanded} /> */}
-          <NavItem text="Press" link={`#press`} setExpanded={setExpanded} />
+          <NavList {...{ setExpanded }} />
         </ul>
       </div>
       <MobileNavButton type="browser" {...{ expanded, setExpanded }} />
@@ -48,6 +48,10 @@ const MobileNav = ({ expanded, setExpanded }) => {
 MobileNav.propTypes = {
   setExpanded: PropTypes.func,
   expanded: PropTypes.bool,
+};
+
+NavList.propTypes = {
+  setExpanded: PropTypes.func,
 };
 
 export const NavBar = () => {
