@@ -6,6 +6,7 @@ import Discography from "../../../components/discography";
 import rileyPfp from "../../../assets/images/projects/riley/riley.jpg";
 import losingHearts from "../../../assets/images/projects/riley/Singles_EPs/losing-hearts.jpg";
 import iWas9Remix from "../../../assets/images/projects/riley/Singles_EPs/i-was-9-remix.png";
+import better from "../../../assets/images/projects/riley/Singles_EPs/better.jpeg";
 
 export const Riley = ({ i, expanded, HandleActiveArtist }) => {
   return (
@@ -22,16 +23,24 @@ export const Riley = ({ i, expanded, HandleActiveArtist }) => {
         discography={
           <Discography>
             <Discography.Disc
-              artwork={losingHearts}
-              title="Losing Hearts (feat. John White)"
+              artwork={iWas9Remix}
+              title="I Was 9 (riley remix)"
               appleMusicLink=""
               spotifyLink=""
               tidalLink=""
               youtubeLink=""
             />
             <Discography.Disc
-              artwork={iWas9Remix}
-              title="I Was 9 (riley remix)"
+              artwork={better}
+              title="Better (with John White and riley)"
+              appleMusicLink=""
+              spotifyLink=""
+              tidalLink=""
+              youtubeLink=""
+            />
+            <Discography.Disc
+              artwork={losingHearts}
+              title="Losing Hearts (feat. John White)"
               appleMusicLink=""
               spotifyLink=""
               tidalLink=""

@@ -44,7 +44,7 @@ export const Project = ({
   return (
     <div
       id="project"
-      className={`fixed top-0 left-0 z-[4] flex flex-col items-center text-white transition-all duration-100 ease-in-out bg-black bg-opacity-75 backdrop-blur-md ${
+      className={`fixed top-0 left-0 z-[4] flex flex-col items-center text-white transition-all duration-100 ease-in-out bg-black bg-opacity-75 w-screen backdrop-blur-md ${
         expanded == i ? "scale-100 h-screen blur-none" : "scale-0 h-0 blur-lg"
       }`}
     >
