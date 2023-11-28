@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { SamDenton } from "./projects/sam-denton";
 import { Ryland } from "./projects/ryland";
+import { Riley } from "./projects/riley";
 
 const Music = () => {
   const HandleActiveArtist = (i, expanded) => {
-    console.log({ i });
-    console.log({ expanded });
+    // console.log({ i });
+    // console.log({ expanded });
     if (i == expanded) {
       setExpanded(-1);
     } else {
@@ -28,6 +29,7 @@ const Music = () => {
             TODO: add descriptions for each artist, under socials */}
         <SamDenton i={0} {...{ expanded, HandleActiveArtist }} />
         <Ryland i={1} {...{ expanded, HandleActiveArtist }} />
+        <Riley i={2} {...{ expanded, HandleActiveArtist }} />
         {/* 
           TODO: literally the rest. go through projects PDF.
         */}
