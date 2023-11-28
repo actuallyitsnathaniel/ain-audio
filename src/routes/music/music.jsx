@@ -2,6 +2,7 @@ import { useState } from "react";
 import { SamDenton } from "./projects/sam-denton";
 import { Ryland } from "./projects/ryland";
 import { Riley } from "./projects/riley";
+import { JohnWhite } from "./projects/john-white";
 
 const Music = () => {
   const HandleActiveArtist = (i, expanded) => {
@@ -30,6 +31,7 @@ const Music = () => {
         <SamDenton i={0} {...{ expanded, HandleActiveArtist }} />
         <Ryland i={1} {...{ expanded, HandleActiveArtist }} />
         <Riley i={2} {...{ expanded, HandleActiveArtist }} />
+        <JohnWhite i={3} {...{ expanded, HandleActiveArtist }} />
         {/* 
           TODO: literally the rest. go through projects PDF.
         */}

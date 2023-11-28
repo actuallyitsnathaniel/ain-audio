@@ -5,7 +5,7 @@ export const KRPTK = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="krptk">
       {/* 
-     TODO: put in 'NORML', and 'mudo' stuff
+    
     
     */}
     </div>

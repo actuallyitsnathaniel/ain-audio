@@ -10,15 +10,17 @@ export const ProfilePic = ({
   return (
     <button
       onClick={() => HandleActiveArtist(i, expanded)}
-      className="appearance-none flex flex-col text-3xl mx-auto p-4"
+      className="group appearance-none flex flex-col text-3xl mx-auto p-8 duration-100 md:hover:scale-105 border-none"
     >
       <img
         src={image}
         id={i}
         alt="profile-pic-alt"
-        className="max-h-[300px] object-contain rounded-xl"
+        className="transition-scale max-h-[300px] object-contain rounded-xl"
       />
-      {titleComponent}
+      <div className="flex transition-translate duration-75 md:group-hover:translate-y-0.5 mx-auto">
+        {titleComponent}
+      </div>
     </button>
   );
 };
