@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import Root from "./routes/root.jsx";
+import Secret from "./routes/secret.jsx";
 import ErrorPage from "./error-page.jsx";
 import "./index.css";
 
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
       },
     ],
   },
+  { path: "/secret", element: <Secret />, errorElement: <ErrorPage /> },
 ]);
 
 ReactDOM.createRoot(document.getElementById("root")).render(
