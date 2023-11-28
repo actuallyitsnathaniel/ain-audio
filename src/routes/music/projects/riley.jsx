@@ -7,6 +7,7 @@ import rileyPfp from "../../../assets/images/projects/riley/riley.jpg";
 import losingHearts from "../../../assets/images/projects/riley/Singles_EPs/losing-hearts.jpg";
 import iWas9Remix from "../../../assets/images/projects/riley/Singles_EPs/i-was-9-remix.png";
 import better from "../../../assets/images/projects/riley/Singles_EPs/better.jpeg";
+import starsRemix from "../../../assets/images/projects/riley/Singles_EPs/stars-remix.jpeg";
 
 export const Riley = ({ i, expanded, HandleActiveArtist }) => {
   return (
@@ -22,6 +23,15 @@ export const Riley = ({ i, expanded, HandleActiveArtist }) => {
         titleComponent={<Title artistName="riley" subtitle="artist" />}
         discography={
           <Discography>
+            {/* TODO: get all links */}
+            <Discography.Disc
+              artwork={starsRemix}
+              title="Stars (riley remix)"
+              appleMusicLink=""
+              spotifyLink=""
+              tidalLink=""
+              youtubeLink=""
+            />
             <Discography.Disc
               artwork={iWas9Remix}
               title="I Was 9 (riley remix)"
