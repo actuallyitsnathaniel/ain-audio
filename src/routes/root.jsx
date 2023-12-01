@@ -19,13 +19,14 @@ const Root = () => {
       id="root"
       className="flex flex-wrap justify-center text-center flex-col font-light [&>*]:text-white"
     >
+      <ScrollToHashElement />
       <Home />
       <AboutMe />
       <Music />
       <Press />
       {/* <Connect /> */}
       <Footer />
-      <ScrollToHashElement />
+
       <NavBar />
     </div>
   );
