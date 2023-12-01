@@ -32,11 +32,11 @@ const MobileNav = ({ expanded, setExpanded }) => {
       className={`fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow `}
     >
       <div
-        className={`fixed origin-left transition-transform duration-200 flex flex-col bg-black/60 h-screen w-screen ${
+        className={`fixed origin-left transition-transform duration-200 flex flex-col backdrop-blur-lg bg-black/60 h-screen w-screen ${
           expanded ? "translate-x-[0%]" : "translate-x-[-100%]"
         }`}
       >
-        <ul className="flex flex-col h-[90%] justify-evenly text-center backdrop-blur-lg">
+        <ul className="flex flex-col h-[90%] justify-evenly text-center">
           <NavList {...{ setExpanded }} />
         </ul>
       </div>
