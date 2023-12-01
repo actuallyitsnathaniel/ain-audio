@@ -25,7 +25,7 @@ const ScrollToHashElement = () => {
     if (hashElement) {
       hashElement.scrollIntoView({
         behavior: "smooth",
-        block: "end",
+        block: "start",
         inline: "nearest",
       });
     }

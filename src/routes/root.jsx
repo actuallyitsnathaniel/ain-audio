@@ -9,23 +9,23 @@ import ScrollToHashElement from "../utilities/ScrollToHashElement";
 
 const Root = () => {
   /**
-   *
    * TODO: desktop navbar to become icons?
    * NO. actually have one that can play all your stuff.
    * TODO: sideways scrollbar, style it like an ableton session
    */
 
   return (
-    <div id="root" className="flex justify-center text-center">
-      <div id="root-wrapper">
-        <Home />
-        <AboutMe />
-        <Music />
-        <Press />
-        {/* <Connect /> */}
-        <Footer />
-        <ScrollToHashElement />
-      </div>
+    <div
+      id="root"
+      className="flex flex-wrap justify-center text-center flex-col font-light [&>*]:text-white"
+    >
+      <Home />
+      <AboutMe />
+      <Music />
+      <Press />
+      {/* <Connect /> */}
+      <Footer />
+      <ScrollToHashElement />
       <NavBar />
     </div>
   );

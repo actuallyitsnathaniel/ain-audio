@@ -17,15 +17,9 @@ const Music = () => {
   const [expanded, setExpanded] = useState(-1);
 
   return (
-    <div
-      id="music"
-      className="p-5 flex flex-col min-h-screen justify-center text-4xl"
-    >
-      <h1 className="text-4xl py-10">projects/music</h1>
-      <div
-        id="projects"
-        className="flex flex-wrap justify-around flex-col md:flex-row"
-      >
+    <div id="music" className="md:pt-16">
+      <h1 className="p-5 flex justify-center text-4xl">music</h1>
+      <div id="projects" className="flex flex-wrap ">
         {/* TODO: integrate socials for each artist, just under title
             TODO: add descriptions for each artist, under socials */}
         <SamDenton i={0} {...{ expanded, HandleActiveArtist }} />
