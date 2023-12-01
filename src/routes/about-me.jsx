@@ -1,4 +1,5 @@
 const AboutMe = () => {
+  // todo: add more pictures of myself!
   return (
     <div id="about-me" className="md:pt-16m min-h-screen">
       <h2 className="p-5 flex justify-center text-4xl">about me</h2>
