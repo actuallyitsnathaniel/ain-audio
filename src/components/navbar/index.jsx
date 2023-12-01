@@ -18,7 +18,7 @@ const NavList = ({ setExpanded }) => {
 
 const DesktopNav = () => {
   return (
-    <nav className="transition-transform duration-100 fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow lowercase">
+    <nav className="transition-transform duration-100 fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow lowercase pb-12 bg-gradient-to-b from-black to-transparent">
       <ul className="flex transition-transform duration-100 text-center flex-wrap flex-col md:flex-row py-4 w-screen justify-evenly">
         <NavList />
       </ul>
