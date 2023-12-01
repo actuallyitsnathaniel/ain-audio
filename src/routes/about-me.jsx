@@ -1,6 +1,6 @@
 const AboutMe = () => {
   return (
-    <div id="about-me" className="md:pt-16">
+    <div id="about-me" className="md:pt-16m min-h-screen">
       <h2 className="p-5 flex justify-center text-4xl">about me</h2>
       <p className="text-justify text-lg mx-6 md:px-24 lowercase">
         I&apos;m a music producer, sound designer, composer, arranger,
