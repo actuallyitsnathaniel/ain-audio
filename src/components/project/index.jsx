@@ -10,7 +10,7 @@ export const ProfilePic = ({
   return (
     <button
       onClick={() => HandleActiveArtist(i, expanded)}
-      className="group appearance-none flex flex-col text-3xl mx-auto p-8 duration-100 md:hover:scale-105 border-none"
+      className="group appearance-none flex flex-col text-3xl mx-auto p-8 transition-transform duration-100 md:hover:scale-105 border-none"
     >
       <img
         src={image}
