@@ -1,4 +1,4 @@
-import YouTubeSVG from "../../../assets/images/icons/music-platforms/youtube.svg";
+import YouTubeSVG from "/src/assets/images/icons/music-platforms/youtube.svg";
 
 function YoutubeLink() {
   return (

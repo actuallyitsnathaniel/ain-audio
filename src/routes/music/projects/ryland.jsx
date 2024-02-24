@@ -1,23 +1,23 @@
 import { PropTypes } from "prop-types";
 
-import { Project, ProfilePic, Title } from "../../../components/project";
-import Discography from "../../../components/discography";
+import { Project, ProfilePic, Title } from "/src/components/project";
+import Discography from "/src/components/discography";
 
-import rylandPfp from "../../../assets/images/projects/ryland/ryland-bed.png";
+import rylandPfp from "/src/assets/images/projects/ryland/ryland-bed.png";
 
 // Albums
-import portrait from "../../../assets/images/projects/ryland/LPs/Portrait-LP_600x600bb.jpeg";
+import portrait from "/src/assets/images/projects/ryland/LPs/Portrait-LP_600x600bb.jpeg";
 
 // EPs
-import lashingOut from "../../../assets/images/projects/ryland/Singles_EPs/Lashing-Out-EP_600x600bb.jpeg";
-import itinerary from "../../../assets/images/projects/ryland/Singles_EPs/Itinerary-EP_600x600bb.jpeg";
-import youshouldknow from "../../../assets/images/projects/ryland/Singles_EPs/You-Should-Know-EP.jpeg";
+import lashingOut from "/src/assets/images/projects/ryland/Singles_EPs/Lashing-Out-EP_600x600bb.jpeg";
+import itinerary from "/src/assets/images/projects/ryland/Singles_EPs/Itinerary-EP_600x600bb.jpeg";
+import youshouldknow from "/src/assets/images/projects/ryland/Singles_EPs/You-Should-Know-EP.jpeg";
 
 // Singles
-import iblfawn from "../../../assets/images/projects/ryland/Singles_EPs/I'veBeenLooking-Single_600x600bb.jpeg";
-import karma from "../../../assets/images/projects/ryland/Singles_EPs/Karma-Single_600x600bb.jpeg";
-import stairwell from "../../../assets/images/projects/ryland/Singles_EPs/Stairwell-Single_600x600bb.jpeg";
-import talking from "../../../assets/images/projects/ryland/Singles_EPs/Talking-Single_600x600bb.jpeg";
+import iblfawn from "/src/assets/images/projects/ryland/Singles_EPs/I'veBeenLooking-Single_600x600bb.jpeg";
+import karma from "/src/assets/images/projects/ryland/Singles_EPs/Karma-Single_600x600bb.jpeg";
+import stairwell from "/src/assets/images/projects/ryland/Singles_EPs/Stairwell-Single_600x600bb.jpeg";
+import talking from "/src/assets/images/projects/ryland/Singles_EPs/Talking-Single_600x600bb.jpeg";
 
 export const Ryland = ({ i, expanded, HandleActiveArtist }) => {
   return (

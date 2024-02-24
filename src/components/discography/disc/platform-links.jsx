@@ -1,10 +1,10 @@
 import { PropTypes } from "prop-types";
 // Icons
-import appleMusic from "../../../assets/images/icons/music-platforms/apple-music.svg";
-import spotify from "../../../assets/images/icons/music-platforms/spotify.svg";
-import soundcloud from "../../../assets/images/icons/music-platforms/soundcloud.svg";
-import youtube from "../../../assets/images/icons/music-platforms/youtube.svg";
-import tidal from "../../../assets/images/icons/music-platforms/tidal.svg";
+import appleMusic from "/src/assets/images/icons/music-platforms/apple-music.svg";
+import spotify from "/src/assets/images/icons/music-platforms/spotify.svg";
+import soundcloud from "/src/assets/images/icons/music-platforms/soundcloud.svg";
+import youtube from "/src/assets/images/icons/music-platforms/youtube.svg";
+import tidal from "/src/assets/images/icons/music-platforms/tidal.svg";
 
 const Link = ({ href, image }) => {
   return (

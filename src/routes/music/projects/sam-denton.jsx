@@ -1,20 +1,20 @@
 import { PropTypes } from "prop-types";
 
-import { Project, ProfilePic, Title } from "../../../components/project";
-import Discography from "../../../components/discography";
+import { Project, ProfilePic, Title } from "/src/components/project";
+import Discography from "/src/components/discography";
 
-import samPfp from "../../../assets/images/projects/sam-denton/sam-denton-pfp.jpg";
+import samPfp from "/src/assets/images/projects/sam-denton/sam-denton-pfp.jpg";
 // albums
-import forNow from "../../../assets/images/projects/sam-denton/LPs/for_now_600x600bb.jpeg";
+import forNow from "/src/assets/images/projects/sam-denton/LPs/for_now_600x600bb.jpeg";
 // singles
-import backToYou from "../../../assets/images/projects/sam-denton/Singles_EPs/back_to_you_600x600bb.jpeg";
-import idkya from "../../../assets/images/projects/sam-denton/Singles_EPs/idkya_600x600bb.jpeg";
-import _209 from "../../../assets/images/projects/sam-denton/Singles_EPs/2_09_600x600bb.jpeg";
-import smokeInTheMirror from "../../../assets/images/projects/sam-denton/Singles_EPs/smoke_in_the_mirror_600x600bb.jpeg";
-import iJustMight from "../../../assets/images/projects/sam-denton/Singles_EPs/i_just_might_600x600bb.jpeg";
-import first from "../../../assets/images/projects/sam-denton/Singles_EPs/first_600x600bb.jpeg";
-import better from "../../../assets/images/projects/sam-denton/Singles_EPs/better_2021_single_600x600bb.jpeg";
-import dreams from "../../../assets/images/projects/sam-denton/Singles_EPs/dreams_600x600bb.jpeg";
+import backToYou from "/src/assets/images/projects/sam-denton/Singles_EPs/back_to_you_600x600bb.jpeg";
+import idkya from "/src/assets/images/projects/sam-denton/Singles_EPs/idkya_600x600bb.jpeg";
+import _209 from "/src/assets/images/projects/sam-denton/Singles_EPs/2_09_600x600bb.jpeg";
+import smokeInTheMirror from "/src/assets/images/projects/sam-denton/Singles_EPs/smoke_in_the_mirror_600x600bb.jpeg";
+import iJustMight from "/src/assets/images/projects/sam-denton/Singles_EPs/i_just_might_600x600bb.jpeg";
+import first from "/src/assets/images/projects/sam-denton/Singles_EPs/first_600x600bb.jpeg";
+import better from "/src/assets/images/projects/sam-denton/Singles_EPs/better_2021_single_600x600bb.jpeg";
+import dreams from "/src/assets/images/projects/sam-denton/Singles_EPs/dreams_600x600bb.jpeg";
 
 export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
   return (

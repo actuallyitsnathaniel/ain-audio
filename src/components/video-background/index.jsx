@@ -1,5 +1,5 @@
-import rileyBGMP4 from "../../assets/videos/riley-bg.mp4";
-import rileyBGWEBM from "../../assets/videos/riley-bg.webm";
+import rileyBGMP4 from "/src/assets/videos/riley-bg.mp4";
+import rileyBGWEBM from "/src/assets/videos/riley-bg.webm";
 
 const VideoBG = () => {
   // TODO: better video in ableton...

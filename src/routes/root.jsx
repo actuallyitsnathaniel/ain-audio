@@ -3,10 +3,10 @@ import AboutMe from "./about-me";
 import Music from "./music/music";
 import Press from "./press";
 
-import VideoBG from "../components/video-background";
-import Footer from "../components/footer";
-import { NavBar } from "../components/navbar";
-import ScrollToHashElement from "../utilities/ScrollToHashElement";
+// import VideoBG from "../components/video-background";
+import Footer from "/src/components/footer";
+import { NavBar } from "/src/components/navbar";
+import ScrollToHashElement from "/src/utilities/ScrollToHashElement";
 
 const Root = () => {
   /**

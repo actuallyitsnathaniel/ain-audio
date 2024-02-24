@@ -1,4 +1,4 @@
-import { PressLink } from "../components/press-link";
+import { PressLink } from "/src/components/press-link";
 
 const Press = () => {
   return (

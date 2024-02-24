@@ -1,8 +1,8 @@
-import profilePic from "../assets/images/ain-pfp.jpeg";
+import profilePic from "/src/assets/images/ain-pfp.jpeg";
 import TypeIt from "typeit-react";
 
-import { TextCursor } from "../components/text-cursor";
-import { SocialLinks } from "../components/social-links";
+import { TextCursor } from "/src/components/text-cursor";
+import { SocialLinks } from "/src/components/social-links";
 
 const Home = () => {
   /**

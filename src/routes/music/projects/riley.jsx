@@ -1,13 +1,13 @@
 import { PropTypes } from "prop-types";
 
-import { Project, ProfilePic, Title } from "../../../components/project";
-import Discography from "../../../components/discography";
+import { Project, ProfilePic, Title } from "/src/components/project";
+import Discography from "/src/components/discography";
 
-import rileyPfp from "../../../assets/images/projects/riley/riley.jpg";
-import losingHearts from "../../../assets/images/projects/riley/Singles_EPs/losing-hearts.jpg";
-import iWas9Remix from "../../../assets/images/projects/riley/Singles_EPs/i-was-9-remix.png";
-import better from "../../../assets/images/projects/riley/Singles_EPs/better.jpeg";
-import starsRemix from "../../../assets/images/projects/riley/Singles_EPs/stars-remix.jpeg";
+import rileyPfp from "/src/assets/images/projects/riley/riley.jpg";
+import losingHearts from "/src/assets/images/projects/riley/Singles_EPs/losing-hearts.jpg";
+import iWas9Remix from "/src/assets/images/projects/riley/Singles_EPs/i-was-9-remix.png";
+import better from "/src/assets/images/projects/riley/Singles_EPs/better.jpeg";
+import starsRemix from "/src/assets/images/projects/riley/Singles_EPs/stars-remix.jpeg";
 
 export const Riley = ({ i, expanded, HandleActiveArtist }) => {
   return (

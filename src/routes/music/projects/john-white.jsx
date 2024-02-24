@@ -1,16 +1,16 @@
 import { PropTypes } from "prop-types";
-import { ProfilePic, Project, Title } from "../../../components/project";
-import Discography from "../../../components/discography";
+import { ProfilePic, Project, Title } from "/src/components/project";
+import Discography from "/src/components/discography";
 
-import johnWhitePfp from "../../../assets/images/projects/john-white/johnWhitePfp.jpeg";
+import johnWhitePfp from "/src/assets/images/projects/john-white/johnWhitePfp.jpeg";
 
 // EPs
-import fakeSmilesEP from "../../../assets/images/projects/john-white/Singles_EPs/fake_smiles_ep600x600bb.jpeg";
-import starsRemix from "../../../assets/images/projects/john-white/Singles_EPs/stars_remix_600x600bb.jpeg";
+import fakeSmilesEP from "/src/assets/images/projects/john-white/Singles_EPs/fake_smiles_ep600x600bb.jpeg";
+import starsRemix from "/src/assets/images/projects/john-white/Singles_EPs/stars_remix_600x600bb.jpeg";
 
 // Singles
-import whoeverYouWantToBeSingle from "../../../assets/images/projects/john-white/Singles_EPs/whoever_you_want_to_be_single_600x600bb.jpeg";
-import better2021Single from "../../../assets/images/projects/john-white/Singles_EPs/better_2021_single_600x600bb.jpeg";
+import whoeverYouWantToBeSingle from "/src/assets/images/projects/john-white/Singles_EPs/whoever_you_want_to_be_single_600x600bb.jpeg";
+import better2021Single from "/src/assets/images/projects/john-white/Singles_EPs/better_2021_single_600x600bb.jpeg";
 
 export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
   return (
