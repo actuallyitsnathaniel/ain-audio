@@ -4,6 +4,7 @@ import { Ryland } from "./projects/ryland";
 import { Riley } from "./projects/riley";
 import { JohnWhite } from "./projects/john-white";
 import { BrandX } from "./projects/brand-x";
+import { KRPTK } from "./projects/krptk";
 
 const Music = () => {
   const HandleActiveArtist = (i, expanded) => {
@@ -29,6 +30,7 @@ const Music = () => {
         {/** Will need to add hyperpop EP soon */}
         <Riley i={3} {...{ expanded, HandleActiveArtist }} />
         <BrandX i={4} {...{ expanded, HandleActiveArtist }} />
+        <KRPTK i={5} {...{ expanded, HandleActiveArtist }} />
 
         {/* 
           TODO: literally the rest. go through projects PDF.
