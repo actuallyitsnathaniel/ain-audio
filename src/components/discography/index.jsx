@@ -8,7 +8,7 @@ const Discography = ({ children }) => {
   return (
     <div>
       <div
-        className={"flex flex-wrap w-full md:w-5/6 md:mx-auto justify-center"}
+        className={"flex flex-wrap w-full md:w-11/12 md:mx-auto justify-center"}
       >
         {React.Children.map(children, (child, i) => {
           return React.cloneElement(child, { expanded, setExpanded, i });

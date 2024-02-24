@@ -3,6 +3,7 @@ import { SamDenton } from "./projects/sam-denton";
 import { Ryland } from "./projects/ryland";
 import { Riley } from "./projects/riley";
 import { JohnWhite } from "./projects/john-white";
+import { BrandX } from "./projects/brand-x";
 
 const Music = () => {
   const HandleActiveArtist = (i, expanded) => {
@@ -24,10 +25,16 @@ const Music = () => {
             TODO: add descriptions for each artist, under socials */}
         <SamDenton i={0} {...{ expanded, HandleActiveArtist }} />
         <Ryland i={1} {...{ expanded, HandleActiveArtist }} />
-        <Riley i={2} {...{ expanded, HandleActiveArtist }} />
-        <JohnWhite i={3} {...{ expanded, HandleActiveArtist }} />
+        <JohnWhite i={2} {...{ expanded, HandleActiveArtist }} />
+        {/** Will need to add hyperpop EP soon */}
+        <Riley i={3} {...{ expanded, HandleActiveArtist }} />
+        <BrandX i={4} {...{ expanded, HandleActiveArtist }} />
+
         {/* 
           TODO: literally the rest. go through projects PDF.
+          - KRPTK
+          - AubitSound
+          - PlatinumRoses
         */}
       </div>
     </div>
