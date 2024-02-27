@@ -2,7 +2,7 @@ import { PropTypes } from "prop-types";
 import { ProfilePic, Project, Title } from "/src/components/project";
 import Discography from "/src/components/discography";
 
-import brandXLogo from "/src/assets/images/projects/brandx/brand-x-music.png";
+import brandXBlue from "/src/assets/images/projects/brandx/brand-x-blue.jpg";
 
 import spiraling from "/src/assets/images/projects/brandx/works/norml-spiraling_600x600bb.jpg";
 import popFestVol2 from "/src/assets/images/projects/brandx/works/popfest-vol2-600x600bb.jpg";
@@ -13,7 +13,7 @@ export const BrandX = ({ i, expanded, HandleActiveArtist }) => {
     <div id="brand-x">
       <ProfilePic
         i={i}
-        image={brandXLogo}
+        image={brandXBlue}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
           <Title artistName={"Brand X"} subtitle={"sync/label"} />
