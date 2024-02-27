@@ -9,7 +9,7 @@ const NavList = ({ setExpanded }) => {
     <>
       <NavItem text="Home" link={`#home`} setExpanded={setExpanded} />
       <NavItem text="About Me" link={`#about-me`} setExpanded={setExpanded} />
-      <NavItem text="Music" link={`#music`} setExpanded={setExpanded} />
+      <NavItem text="Projects" link={`#projects`} setExpanded={setExpanded} />
       {/* <NavItem text="Connect" link={`#connect`} setExpanded={setExpanded} /> */}
       <NavItem text="Press" link={`#press`} setExpanded={setExpanded} />
     </>

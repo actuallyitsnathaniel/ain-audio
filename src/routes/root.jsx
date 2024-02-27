@@ -1,6 +1,6 @@
 import Home from "./home";
 import AboutMe from "./about-me";
-import Music from "./music/music";
+import ProjectHighlights from "./music/projects";
 import Press from "./press";
 
 // import VideoBG from "../components/video-background";
@@ -24,7 +24,7 @@ const Root = () => {
       <ScrollToHashElement />
       <Home />
       <AboutMe />
-      <Music />
+      <ProjectHighlights />
       <Press />
       {/* <Connect /> */}
       <Footer />

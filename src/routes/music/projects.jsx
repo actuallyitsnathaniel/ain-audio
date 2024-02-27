@@ -5,8 +5,9 @@ import { Riley } from "./projects/riley";
 import { JohnWhite } from "./projects/john-white";
 import { BrandX } from "./projects/brand-x";
 import { KRPTK } from "./projects/krptk";
+import { PlatinumRoses } from "./projects/platinum-roses";
 
-const Music = () => {
+const ProjectHighlights = () => {
   const HandleActiveArtist = (i, expanded) => {
     // console.log({ i });
     // console.log({ expanded });
@@ -19,8 +20,8 @@ const Music = () => {
   const [expanded, setExpanded] = useState(-1);
 
   return (
-    <div id="music" className="md:pt-16">
-      <h1 className="p-5 flex justify-center text-4xl">music</h1>
+    <div id="projects" className="md:pt-16">
+      <h1 className="p-5 flex justify-center text-4xl">project highlights</h1>
       <div id="projects" className="flex flex-wrap justify-center">
         {/* TODO: integrate socials for each artist, just under title
             TODO: add descriptions for each artist, under socials */}
@@ -31,15 +32,17 @@ const Music = () => {
         <Riley i={3} {...{ expanded, HandleActiveArtist }} />
         <BrandX i={4} {...{ expanded, HandleActiveArtist }} />
         <KRPTK i={5} {...{ expanded, HandleActiveArtist }} />
+        <PlatinumRoses i={6} {...{ expanded, HandleActiveArtist }} />
 
         {/* 
           TODO: literally the rest. go through projects PDF.
           - AubitSound
           - PlatinumRoses
+          - ADIDAS!!! * ask jake about stuff here.
         */}
       </div>
     </div>
   );
 };
 
-export default Music;
+export default ProjectHighlights;
