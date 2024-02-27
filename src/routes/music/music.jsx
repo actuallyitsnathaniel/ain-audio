@@ -34,7 +34,6 @@ const Music = () => {
 
         {/* 
           TODO: literally the rest. go through projects PDF.
-          - KRPTK
           - AubitSound
           - PlatinumRoses
         */}

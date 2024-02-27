@@ -29,6 +29,7 @@ const Disc = ({
       onClick={() => {
         setActiveDisc(i);
       }}
+      onMouseLeave={() => setActiveDisc(-1)}
       className={`${className} transition-scale duration-100 text-8xl py-6 md:px-6 md:hover:scale-110 group`}
     >
       <div className={"h-[300px] w-[300px]"}>
