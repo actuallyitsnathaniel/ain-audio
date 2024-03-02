@@ -1,8 +1,10 @@
-const SpotifyLink = () => {
+import { PropTypes } from "prop-types";
+
+const SpotifyLink = ({ href }) => {
   return (
     <a
       className="transition-all duration-100 p-2 px-0 md:hover:-translate-y-2"
-      href=""
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
     >
@@ -35,6 +37,10 @@ const SpotifyLink = () => {
       </svg>
     </a>
   );
+};
+
+SpotifyLink.propTypes = {
+  href: PropTypes.string,
 };
 
 export default SpotifyLink;

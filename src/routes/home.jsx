@@ -18,6 +18,11 @@ const Home = () => {
           className={
             "group-hover:scale-100 md:scale-0 md:blur-xl group-hover:blur-0"
           }
+          spotifyLink={
+            "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY?si=1cf595b570c24bf0"
+          }
+          instagramLink={"https://instagram.com/actuallyitsnathaniel"}
+          gmailLink={"mailto:nathanielrbowman@gmail.com"}
         />
         <span className="flex-nowrap text-base md:text-2xl font-light flex mb-7 justify-center mx-auto">
           <TypeIt options={{ cursor: "", speed: 55 }}>

@@ -1,8 +1,10 @@
-const AppleMusicLink = () => {
+import { PropTypes } from "prop-types";
+
+const AppleMusicLink = ({ href }) => {
   return (
     <a
       className="transition-all duration-100 p-2 md:hover:-translate-y-2"
-      href=""
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
     >
@@ -18,6 +20,10 @@ const AppleMusicLink = () => {
       </svg>
     </a>
   );
+};
+
+AppleMusicLink.propTypes = {
+  href: PropTypes.string,
 };
 
 export default AppleMusicLink;

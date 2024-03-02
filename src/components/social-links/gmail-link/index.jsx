@@ -1,8 +1,10 @@
-const GmailLogo = () => {
+import { PropTypes } from "prop-types";
+
+const GmailLink = ({ href }) => {
   return (
     <a
       className="transition-all duration-100 p-2 md:hover:-translate-y-2 group"
-      href="mailto:nathanielrbowman@gmail.com"
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
     >
@@ -41,4 +43,8 @@ const GmailLogo = () => {
   );
 };
 
-export default GmailLogo;
+GmailLink.propTypes = {
+  href: PropTypes.string,
+};
+
+export default GmailLink;

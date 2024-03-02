@@ -1,20 +1,26 @@
 import { PropTypes } from "prop-types";
 
-import InstagramLogo from "./instagram-link";
-import GmailLogo from "./gmail-link";
+import InstagramLink from "./instagram-link";
+import GmailLink from "./gmail-link";
 import SpotifyLink from "./spotify-link";
 import AppleMusic from "./apple-music-link";
 
-export const SocialLinks = ({ className }) => {
+export const SocialLinks = ({
+  className,
+  spotifyLink,
+  appleMusicLink,
+  instagramLink,
+  gmailLink,
+}) => {
   return (
     <div
       className={`mb-2.5 transition-all duration-150 hover:delay-150 flex justify-center sm:h-full md:h-auto ${className}`}
     >
       <div className={`flex justify-center`}>
-        <SpotifyLink />
-        <AppleMusic />
-        <InstagramLogo />
-        <GmailLogo />
+        {spotifyLink && <SpotifyLink {...{ spotifyLink }} />}
+        {appleMusicLink && <AppleMusic {...{ appleMusicLink }} />}
+        {instagramLink && <InstagramLink {...{ instagramLink }} />}
+        {gmailLink && <GmailLink {...{ gmailLink }} />}
       </div>
     </div>
   );
@@ -22,4 +28,8 @@ export const SocialLinks = ({ className }) => {
 
 SocialLinks.propTypes = {
   className: PropTypes.string,
+  spotifyLink: PropTypes.string,
+  appleMusicLink: PropTypes.string,
+  instagramLink: PropTypes.string,
+  gmailLink: PropTypes.string,
 };
