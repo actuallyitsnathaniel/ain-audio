@@ -17,10 +17,10 @@ export const SocialLinks = ({
       className={`mb-2.5 transition-all duration-150 hover:delay-150 flex justify-center sm:h-full md:h-auto ${className}`}
     >
       <div className={`flex justify-center`}>
-        {spotifyLink && <SpotifyLink {...{ spotifyLink }} />}
-        {appleMusicLink && <AppleMusic {...{ appleMusicLink }} />}
-        {instagramLink && <InstagramLink {...{ instagramLink }} />}
-        {gmailLink && <GmailLink {...{ gmailLink }} />}
+        {spotifyLink && <SpotifyLink href={spotifyLink} />}
+        {appleMusicLink && <AppleMusic href={appleMusicLink} />}
+        {instagramLink && <InstagramLink href={instagramLink} />}
+        {gmailLink && <GmailLink href={gmailLink} />}
       </div>
     </div>
   );
