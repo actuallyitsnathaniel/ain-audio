@@ -7,7 +7,6 @@ import oneThingIKnow from "/src/assets/images/projects/platinum-roses/discograph
 import whatdIDo from "/src/assets/images/projects/platinum-roses/discography/whatd-i-do-single.jpg";
 import contemplate from "/src/assets/images/projects/platinum-roses/discography/contemplate-single.jpg";
 
-// eslint-disable-next-line no-unused-vars
 export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="platinum-roses">
