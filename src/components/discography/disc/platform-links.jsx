@@ -35,8 +35,8 @@ const MusicPlatformLinks = ({
 }) => {
   return (
     <div
-      className={`fixed grid grid-cols-2 gap-2
-      ${className} h-[305px] w-[305px] justify-items-center items-center -translate-x-1 -translate-y-1 p-4
+      className={`absolute grid grid-cols-2 gap-2
+      ${className} h-[300px] w-[300px] justify-items-center items-center p-4
       `}
     >
       {spotifyLink && <Link href={spotifyLink} image={spotify} />}

@@ -29,10 +29,13 @@ const Disc = ({
       onClick={() => {
         setActiveDisc(i);
       }}
-      onMouseLeave={() => setActiveDisc(-1)}
+      onMouseLeave={() => {
+        setActiveDisc(-1);
+      }}
+      onMouseEnter={() => setActiveDisc(i)}
       className={`${className} transition-scale duration-100 text-8xl py-6 md:px-6 md:hover:scale-110 group`}
     >
-      <div className={"h-[300px] w-[300px]"}>
+      <div className={"relative h-[300px] w-[300px]"}>
         <MusicPlatformLinks
           className={`transition-all origin-content bg-black
           ${
