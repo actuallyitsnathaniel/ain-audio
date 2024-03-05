@@ -6,6 +6,7 @@ import { JohnWhite } from "./projects/john-white";
 import { BrandX } from "./projects/brand-x";
 import { KRPTK } from "./projects/krptk";
 import { PlatinumRoses } from "./projects/platinum-roses";
+import { AubitSound } from "./projects/aubit";
 
 const ProjectHighlights = () => {
   const HandleActiveArtist = (i, expanded) => {
@@ -33,11 +34,13 @@ const ProjectHighlights = () => {
         <BrandX i={4} {...{ expanded, HandleActiveArtist }} />
         <KRPTK i={5} {...{ expanded, HandleActiveArtist }} />
         <PlatinumRoses i={6} {...{ expanded, HandleActiveArtist }} />
-
+        <AubitSound i={7} {...{ expanded, HandleActiveArtist }} />
         {/* 
           TODO: literally the rest. go through projects PDF.
           - AubitSound
+            - Get art from all projects.
           - PlatinumRoses
+            - LINKS!!!
           - ADIDAS!!! * ask jake about stuff here.
         */}
       </div>
