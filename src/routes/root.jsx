@@ -1,9 +1,8 @@
 import Home from "./home";
-import AboutMe from "./about-me";
 import ProjectHighlights from "./music/projects";
 import Press from "./press";
 
-// import VideoBG from "../components/video-background";
+import VideoBG from "/src/components/video-background";
 import Footer from "/src/components/footer";
 import { NavBar } from "/src/components/navbar";
 import ScrollToHashElement from "/src/utilities/ScrollToHashElement";
@@ -20,10 +19,10 @@ const Root = () => {
       id="root"
       className="flex flex-wrap justify-center text-center flex-col font-light [&>*]:text-white"
     >
-      {/* <VideoBG /> */}
+      <VideoBG />
       <ScrollToHashElement />
       <Home />
-      <AboutMe />
+
       <ProjectHighlights />
       <Press />
       {/* <Connect /> */}

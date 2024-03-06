@@ -3,11 +3,12 @@ import TypeIt from "typeit-react";
 
 import { TextCursor } from "/src/components/text-cursor";
 import { SocialLinks } from "/src/components/social-links";
+import AboutMe from "./about-me";
 
 const Home = () => {
   return (
     <div id="home" className="flex h-screen flex-wrap flex-col justify-center">
-      <h1 className="group w-min mx-auto duration-100 hover:scale-110 hover:text-white">
+      <h1 className="pt-20 group w-min mx-auto duration-100 hover:scale-110 hover:text-white">
         <SocialLinks
           className={
             "group-hover:scale-100 md:scale-0 md:blur-xl group-hover:blur-0"
@@ -32,6 +33,7 @@ const Home = () => {
       <div className="flex h-1/3 justify-center">
         <img src={profilePic} className="rounded-full" alt="profilePic" />
       </div>
+      <AboutMe />
     </div>
   );
 };
