@@ -31,7 +31,7 @@ export const Ryland = ({ i, expanded, HandleActiveArtist }) => {
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={<Title artistName="Ryland" subtitle="band" />}
-        discography={
+        works={
           <Discography>
             <Discography.Disc
               artwork={youshouldknow}

@@ -41,7 +41,7 @@ export const Project = ({
   i,
   expanded,
   HandleActiveArtist,
-  discography,
+  works,
   description,
   titleComponent,
 }) => {
@@ -77,7 +77,7 @@ export const Project = ({
           </span>
         )}
 
-        {discography}
+        {works}
       </div>
     </div>
   );
@@ -136,7 +136,7 @@ Project.propTypes = {
   i: PropTypes.number,
   HandleActiveArtist: PropTypes.func,
   expanded: PropTypes.number,
-  discography: PropTypes.object,
+  works: PropTypes.object,
   description: PropTypes.object,
   titleComponent: PropTypes.object,
 };

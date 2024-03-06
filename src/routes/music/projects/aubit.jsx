@@ -48,9 +48,9 @@ export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
         description={
           <>
             From late 2018 to late 2019, I put together a prolific number of
-            &apos;producer-packs&apos; for this company that consist of presets,
-            loops, and one-shots. Nearly every pack I created became a number
-            one best-seller for over two weeks across multiple marketing
+            &apos;producer-packs&apos; for this company that consists of
+            presets, loops, and one-shots. Nearly every pack I created became a
+            number one best-seller for over two weeks across multiple marketing
             platforms, the largest being&nbsp;
             <a
               rel="noopener noreferrer"
@@ -111,7 +111,7 @@ export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
             .
           </>
         }
-        discography={
+        works={
           <Discography>
             <Discography.Disc
               artwork={odessaVol3}

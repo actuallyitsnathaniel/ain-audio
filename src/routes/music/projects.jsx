@@ -7,6 +7,7 @@ import { BrandX } from "./projects/brand-x";
 import { KRPTK } from "./projects/krptk";
 import { PlatinumRoses } from "./projects/platinum-roses";
 import { AubitSound } from "./projects/aubit";
+import { AdidasMessi } from "./projects/adidas-messi";
 
 const ProjectHighlights = () => {
   const HandleActiveArtist = (i, expanded) => {
@@ -22,21 +23,18 @@ const ProjectHighlights = () => {
 
   const children = [
     <SamDenton key="sam-denton" />,
+    <AdidasMessi key="adidas-messi" />,
     <Ryland key="ryland" />,
     <AubitSound key="aubit-sound" />,
     <JohnWhite key="john-white" />,
-    <Riley key="riley" />,
     <BrandX key="brand-x" />,
+    <Riley key="riley" />,
     <KRPTK key="krptk" />,
     <PlatinumRoses key="platinum-roses" />,
   ];
 
   /* 
     TODO: literally the rest. go through projects PDF.
-    - AubitSound
-      - apply links to rest of projects
-    - PlatinumRoses
-      - LINKS!!!
     - ADIDAS!!! * ask jake about stuff here.
   */
 
@@ -46,8 +44,6 @@ const ProjectHighlights = () => {
         project highlights
       </h1>
       <div id="projects" className="flex flex-wrap justify-center">
-        {/* TODO: integrate socials for each artist, just under title
-            TODO: add descriptions for each artist, under socials */}
         {React.Children.map(children, (child, i) => {
           return React.cloneElement(child, {
             expanded,

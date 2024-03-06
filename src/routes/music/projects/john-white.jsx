@@ -34,7 +34,7 @@ export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
             subtitle={"singer/songwriter/producer"}
           />
         }
-        discography={
+        works={
           <Discography>
             <Discography.Disc
               artwork={fakeSmilesEP}

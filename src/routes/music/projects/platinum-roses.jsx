@@ -29,7 +29,7 @@ export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
             subtitle={"songwriter/producer duo"}
           />
         }
-        discography={
+        works={
           <Discography>
             <Discography.Disc
               title="Contemplate - single"
