@@ -65,15 +65,21 @@ export const Project = ({
             truncateText && "line-clamp-2 text-ellipsis overflow-hidden"
           }`}
         >
-          {description}
+          {description ? (
+            description
+          ) : (
+            <p className="text-center italic">
+              still getting my words together for this project. be patient!
+            </p>
+          )}
         </p>
 
         {description && (
           <span
-            className="underline cursor-pointer p-4"
+            className="underline underline-offset-2 cursor-pointer p-4 italic"
             onClick={() => setTruncateText(!truncateText)}
           >
-            {truncateText ? "click for more" : "click to hide"}
+            {truncateText ? "more" : "less"}
           </span>
         )}
 
