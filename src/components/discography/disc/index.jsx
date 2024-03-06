@@ -12,6 +12,7 @@ const Disc = ({
   soundcloudLink,
   tidalLink,
   youtubeLink,
+  webLink,
   album,
   artwork,
   title,
@@ -49,6 +50,7 @@ const Disc = ({
             soundcloudLink,
             tidalLink,
             youtubeLink,
+            webLink,
             album,
           }}
         />
@@ -71,6 +73,7 @@ Disc.propTypes = {
   soundcloudLink: PropTypes.string,
   tidalLink: PropTypes.string,
   youtubeLink: PropTypes.string,
+  webLink: PropTypes.string,
   album: PropTypes.string,
   artwork: PropTypes.string,
   title: PropTypes.string,
