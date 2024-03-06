@@ -70,7 +70,7 @@ export const NavBar = () => {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-  const isMobile = windowDimension <= 640;
+  const isMobile = windowDimension <= 768;
 
   return isMobile ? (
     <div className="">
