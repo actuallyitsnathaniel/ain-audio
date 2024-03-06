@@ -5,7 +5,7 @@ import spotify from "/src/assets/images/icons/music-platforms/spotify.svg";
 import soundcloud from "/src/assets/images/icons/music-platforms/soundcloud.svg";
 import youtube from "/src/assets/images/icons/music-platforms/youtube.svg";
 import tidal from "/src/assets/images/icons/music-platforms/tidal.svg";
-import hyperlinkIcon from "/src/assets/images/icons/hyperlink-icon.svg";
+import hyperlinkIcon from "/src/assets/images/icons/shop-icon.svg";
 
 const Link = ({ href, image }) => {
   return (
@@ -16,7 +16,7 @@ const Link = ({ href, image }) => {
       target="_blank"
     >
       <img
-        className={"transition-all duration-75 md:hover:scale-110 "}
+        className={"transition-all duration-75 md:hover:scale-110"}
         height={"75px"}
         width={"75px"}
         alt="music-link"
