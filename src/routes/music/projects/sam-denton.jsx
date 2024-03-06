@@ -32,6 +32,7 @@ export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
         titleComponent={
           <Title artistName="Sam Denton" subtitle="singer/songwriter" />
         }
+        // TODO: description, socials
         works={
           <Discography>
             <Discography.Disc

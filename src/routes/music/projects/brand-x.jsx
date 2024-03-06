@@ -24,6 +24,7 @@ export const BrandX = ({ i, expanded, HandleActiveArtist }) => {
         titleComponent={
           <Title artistName={"Brand X"} subtitle={"sync/label"} />
         }
+        // TODO: description, socials
         works={
           <Discography>
             <Discography.Disc

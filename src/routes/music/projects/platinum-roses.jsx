@@ -29,6 +29,7 @@ export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
             subtitle={"songwriter/producer duo"}
           />
         }
+        // TODO: description, socials
         works={
           <Discography>
             <Discography.Disc

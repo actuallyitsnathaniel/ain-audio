@@ -34,6 +34,7 @@ export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
             subtitle={"singer/songwriter/producer"}
           />
         }
+        // TODO: description, socials
         works={
           <Discography>
             <Discography.Disc

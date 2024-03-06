@@ -33,11 +33,6 @@ const ProjectHighlights = () => {
     <PlatinumRoses key="platinum-roses" />,
   ];
 
-  /* 
-    TODO: literally the rest. go through projects PDF.
-    - ADIDAS!!! * ask jake about stuff here.
-  */
-
   return (
     <div id="projects" className="md:pt-16">
       <h1 className="p-5 flex px-16 md:px-auto flex-wrap justify-center text-4xl">

@@ -26,6 +26,7 @@ export const KRPTK = ({ i, expanded, HandleActiveArtist }) => {
         titleComponent={
           <Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
         }
+        // TODO: description, socials
         works={
           <Discography>
             <Discography.Disc
