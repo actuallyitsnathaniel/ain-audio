@@ -22,7 +22,6 @@ import the1975 from "/src/assets/images/projects/aubit-sound/discography/1975-fo
 // gray 1
 // ultrallenium
 
-// eslint-disable-next-line no-unused-vars
 export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="aubit-sound">
