@@ -15,6 +15,9 @@ const Home = () => {
           spotifyLink={
             "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY?si=1cf595b570c24bf0"
           }
+          youtubeLink={
+            "https://www.youtube.com/channel/UCwMRYZXdTLBMTBq00ao3mVQ"
+          }
           instagramLink={"https://instagram.com/actuallyitsnathaniel"}
           gmailLink={"mailto:nathanielrbowman@gmail.com"}
         />

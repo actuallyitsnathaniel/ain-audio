@@ -4,6 +4,7 @@ import InstagramLink from "./instagram-link";
 import GmailLink from "./gmail-link";
 import SpotifyLink from "./spotify-link";
 import AppleMusic from "./apple-music-link";
+import YoutubeLink from "./youtube-link";
 
 export const SocialLinks = ({
   className,
@@ -11,6 +12,7 @@ export const SocialLinks = ({
   appleMusicLink,
   instagramLink,
   gmailLink,
+  youtubeLink,
 }) => {
   return (
     <div
@@ -18,6 +20,7 @@ export const SocialLinks = ({
     >
       <div className={`flex justify-center`}>
         {spotifyLink && <SpotifyLink href={spotifyLink} />}
+        {youtubeLink && <YoutubeLink href={youtubeLink} />}
         {appleMusicLink && <AppleMusic href={appleMusicLink} />}
         {instagramLink && <InstagramLink href={instagramLink} />}
         {gmailLink && <GmailLink href={gmailLink} />}
@@ -32,4 +35,5 @@ SocialLinks.propTypes = {
   appleMusicLink: PropTypes.string,
   instagramLink: PropTypes.string,
   gmailLink: PropTypes.string,
+  youtubeLink: PropTypes.string,
 };
