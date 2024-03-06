@@ -1,4 +1,5 @@
 import { PropTypes } from "prop-types";
+import { useState } from "react";
 
 export const ProfilePic = ({
   i,
@@ -44,6 +45,7 @@ export const Project = ({
   description,
   titleComponent,
 }) => {
+  const [truncateText, setTruncateText] = useState(true);
   return (
     <div
       id="project"
@@ -56,8 +58,25 @@ export const Project = ({
         id="projects-wrapper"
         className="pt-10 h-full overflow-y-scroll overscroll-contain"
       >
-        {<h2 className="text-4xl">{titleComponent}</h2>}
-        {description}
+        {<h2 className="text-4xl py-6">{titleComponent}</h2>}
+        <p
+          onClick={() => setTruncateText(!truncateText)}
+          className={`max-w-5xl mx-auto px-10 text-justify ${
+            truncateText && "line-clamp-2 text-ellipsis overflow-hidden"
+          }`}
+        >
+          {description}
+        </p>
+
+        {description && (
+          <span
+            className="underline cursor-pointer p-4"
+            onClick={() => setTruncateText(!truncateText)}
+          >
+            {truncateText ? "click for more" : "click to hide"}
+          </span>
+        )}
+
         {discography}
       </div>
     </div>

@@ -1,5 +1,4 @@
 import { PropTypes } from "prop-types";
-import { useState } from "react";
 
 import { ProfilePic, Project, Title } from "/src/components/project";
 import Discography from "/src/components/discography";
@@ -25,7 +24,6 @@ import petitVoxChopsVol1 from "/src/assets/images/projects/aubit-sound/discograp
 import snakesForSerumVol1 from "/src/assets/images/projects/aubit-sound/discography/snakes-for-serum-vol-1.jpg";
 
 export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
-  const [truncateText, setTruncateText] = useState(false);
   return (
     <div id="aubit-sound">
       <ProfilePic
@@ -48,12 +46,7 @@ export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
           />
         }
         description={
-          <p
-            onClick={() => setTruncateText(!truncateText)}
-            className={`max-w-4xl mx-auto px-10 text-justify ${
-              truncateText && "line-clamp-3 text-ellipsis overflow-hidden"
-            }`}
-          >
+          <>
             From late 2018 to late 2019, I put together a prolific number of
             &apos;producer-packs&apos; for this company that consist of presets,
             loops, and one-shots. Nearly every pack I created became a number
@@ -116,7 +109,7 @@ export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
               here
             </a>
             .
-          </p>
+          </>
         }
         discography={
           <Discography>
