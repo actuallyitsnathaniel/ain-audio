@@ -1,9 +1,12 @@
 import { PropTypes } from "prop-types";
+import { useState } from "react";
+
 import { ProfilePic, Project, Title } from "/src/components/project";
 import Discography from "/src/components/discography";
 
 import aubitLogo from "/src/assets/images/projects/aubit-sound/aubit-logo.jpg";
 
+// discography
 import odessaVol3 from "/src/assets/images/projects/aubit-sound/discography/odessa-vol-3.jpg";
 import awake from "/src/assets/images/projects/aubit-sound/discography/awake-vol-1.jpg";
 import garryx from "/src/assets/images/projects/aubit-sound/discography/garryx-for-serum-vol-1.jpg";
@@ -22,6 +25,7 @@ import petitVoxChopsVol1 from "/src/assets/images/projects/aubit-sound/discograp
 import snakesForSerumVol1 from "/src/assets/images/projects/aubit-sound/discography/snakes-for-serum-vol-1.jpg";
 
 export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
+  const [truncateText, setTruncateText] = useState(false);
   return (
     <div id="aubit-sound">
       <ProfilePic
@@ -42,6 +46,77 @@ export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
             artistName={"Aubit Sound"}
             subtitle="sample/sound library company"
           />
+        }
+        description={
+          <p
+            onClick={() => setTruncateText(!truncateText)}
+            className={`max-w-4xl mx-auto px-10 text-justify ${
+              truncateText && "line-clamp-3 text-ellipsis overflow-hidden"
+            }`}
+          >
+            From late 2018 to late 2019, I put together a prolific number of
+            &apos;producer-packs&apos; for this company that consist of presets,
+            loops, and one-shots. Nearly every pack I created became a number
+            one best-seller for over two weeks across multiple marketing
+            platforms, the largest being&nbsp;
+            <a
+              rel="noopener noreferrer"
+              target="_blank"
+              className="text-cyan-500"
+              href="https://www.adsrsounds.com/vendor/aubit-sound/"
+            >
+              ADSRSounds.com
+            </a>
+            . I created a few demos to showcase some of them, but not very many.
+            These packs have been used by a large number of successful artists
+            including:&nbsp;
+            {
+              <a
+                rel="noopener noreferrer"
+                target="_blank"
+                className="text-cyan-500"
+                href="https://g.co/kgs/X5MFGzh"
+              >
+                Cheat Codes
+              </a>
+            }
+            ,&nbsp;
+            {
+              <a
+                rel="noopener noreferrer"
+                target="_blank"
+                className="text-cyan-500"
+                href="https://g.co/kgs/vyvKs9c"
+              >
+                U2
+              </a>
+            }
+            ,&nbsp;
+            {
+              <a
+                rel="noopener noreferrer"
+                target="_blank"
+                className="text-cyan-500"
+                href="https://g.co/kgs/BZHpVZF"
+              >
+                Virginia to Vegas
+              </a>
+            }
+            , and countless others. You can access the store page and support
+            that company via the pics below. I also recorded a large number of
+            layman&apos;s tutorials involving these packs, teaching concepts
+            such as basic theory, sound design, and music production techniques.
+            You can find those&nbsp;
+            <a
+              rel="noopener noreferrer"
+              target="_blank"
+              className="text-cyan-500"
+              href="https://www.youtube.com/watch?v=mNc0PhQsJvc&list=PLhrkYXXSZxDXJ5WzwQXLdivnkSH8JF78n"
+            >
+              here
+            </a>
+            .
+          </p>
         }
         discography={
           <Discography>

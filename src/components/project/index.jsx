@@ -41,6 +41,7 @@ export const Project = ({
   expanded,
   HandleActiveArtist,
   discography,
+  description,
   titleComponent,
 }) => {
   return (
@@ -55,7 +56,8 @@ export const Project = ({
         id="projects-wrapper"
         className="pt-10 h-full overflow-y-scroll overscroll-contain"
       >
-        {titleComponent}
+        {<h2 className="text-4xl">{titleComponent}</h2>}
+        {description}
         {discography}
       </div>
     </div>
@@ -116,6 +118,7 @@ Project.propTypes = {
   HandleActiveArtist: PropTypes.func,
   expanded: PropTypes.number,
   discography: PropTypes.object,
+  description: PropTypes.object,
   titleComponent: PropTypes.object,
 };
 
