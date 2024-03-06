@@ -7,7 +7,7 @@ import AboutMe from "./about-me";
 
 const Home = () => {
   return (
-    <div id="home" className="flex h-screen flex-wrap flex-col justify-center">
+    <div id="home" className="flex min-h-screen flex-col justify-center">
       <h1 className="pt-20 group w-min mx-auto duration-100 hover:scale-110 hover:text-white">
         <SocialLinks
           className={
@@ -30,8 +30,12 @@ const Home = () => {
           </TypeIt>
         </span>
       </h1>
-      <div className="flex h-1/3 justify-center">
-        <img src={profilePic} className="rounded-full" alt="profilePic" />
+      <div className="flex h-1/3 justify-center px-16">
+        <img
+          src={profilePic}
+          className="rounded-full object-scale-down max-h-[320px]"
+          alt="profilePic"
+        />
       </div>
       <AboutMe />
     </div>

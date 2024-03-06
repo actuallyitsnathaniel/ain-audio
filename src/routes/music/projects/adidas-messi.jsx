@@ -60,12 +60,12 @@ export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
             <iframe
               className="flex mx-auto p-3 w-fit aspect-[4/5] justify-center"
               src="https://player.vimeo.com/video/893859181?h=bbbd4b0aae"
-              allowFullscreen
+              allowFullScreen
             ></iframe>
             <iframe
               className="flex mx-auto p-3 w-fit md:w-1/2 aspect-[16/9.25] justify-center"
               src="https://player.vimeo.com/video/873468787?h=ebe0c2ae9f"
-              allowFullscreen
+              allowFullScreen
             ></iframe>
           </>
         }
