@@ -11,12 +11,12 @@ const Link = ({ href, image }) => {
   return (
     <a
       href={href}
-      className={`${!href && "hidden"}`}
+      className={`flex p-4 ${!href && "hidden"}`}
       rel="noopener noreferrer"
       target="_blank"
     >
       <img
-        className={"transition-all duration-75 md:hover:scale-110"}
+        className={"transition-all duration-75 md:hover:scale-110 "}
         height={"75px"}
         width={"75px"}
         alt="music-link"
@@ -37,8 +37,8 @@ const MusicPlatformLinks = ({
 }) => {
   return (
     <div
-      className={`absolute grid grid-cols-2 gap-2
-      ${className} h-[300px] w-[300px] justify-items-center items-center p-4
+      className={`absolute flex flex-wrap justify-around
+      ${className} h-[300px] w-[300px] items-center
       `}
     >
       {spotifyLink && <Link href={spotifyLink} image={spotify} />}
