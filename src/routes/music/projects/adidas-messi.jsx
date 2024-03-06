@@ -56,7 +56,11 @@ export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
           </>
         }
         works={
-          <div id="vimeo-embeds" className={`${!expanded && "hidden"}`}>
+          <div
+            id="vimeo-embeds"
+            className={`${i != expanded && "hidden pointer-events-none"}`}
+            // TODO: stop video on project close
+          >
             <iframe
               className="flex mx-auto p-3 w-fit aspect-[4/5] justify-center"
               src="https://player.vimeo.com/video/893859181?h=bbbd4b0aae"
