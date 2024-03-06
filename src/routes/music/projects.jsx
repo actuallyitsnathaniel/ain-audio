@@ -28,17 +28,18 @@ const ProjectHighlights = () => {
             TODO: add descriptions for each artist, under socials */}
         <SamDenton i={0} {...{ expanded, HandleActiveArtist }} />
         <Ryland i={1} {...{ expanded, HandleActiveArtist }} />
-        <JohnWhite i={2} {...{ expanded, HandleActiveArtist }} />
+        <AubitSound i={2} {...{ expanded, HandleActiveArtist }} />
+        <JohnWhite i={3} {...{ expanded, HandleActiveArtist }} />
         {/** Will need to add hyperpop EP soon */}
-        <Riley i={3} {...{ expanded, HandleActiveArtist }} />
-        <BrandX i={4} {...{ expanded, HandleActiveArtist }} />
-        <KRPTK i={5} {...{ expanded, HandleActiveArtist }} />
-        <PlatinumRoses i={6} {...{ expanded, HandleActiveArtist }} />
-        <AubitSound i={7} {...{ expanded, HandleActiveArtist }} />
+        <Riley i={4} {...{ expanded, HandleActiveArtist }} />
+        <BrandX i={5} {...{ expanded, HandleActiveArtist }} />
+        <KRPTK i={6} {...{ expanded, HandleActiveArtist }} />
+        <PlatinumRoses i={7} {...{ expanded, HandleActiveArtist }} />
+
         {/* 
           TODO: literally the rest. go through projects PDF.
           - AubitSound
-            - Get art from all projects.
+            - apply links to rest of projects
           - PlatinumRoses
             - LINKS!!!
           - ADIDAS!!! * ask jake about stuff here.
