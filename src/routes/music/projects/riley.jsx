@@ -22,6 +22,30 @@ export const Riley = ({ i, expanded, HandleActiveArtist }) => {
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={<Title artistName="riley" subtitle="artist" />}
         // TODO: description, socials
+        description={
+          <>
+            My personal passion project. Ranging in styles from heavy
+            bass-hitters like&nbsp;
+            <a
+              rel="noopener noreferrer"
+              target="_blank"
+              className="text-cyan-500"
+              href="https://g.co/kgs/5jXm9e3"
+            >
+              Virtual Riot
+            </a>
+            &nbsp;all the way to somber songwriters like&nbsp;
+            <a
+              rel="noopener noreferrer"
+              target="_blank"
+              className="text-cyan-500"
+              href="https://g.co/kgs/4UAgqwW"
+            >
+              Emmit Fenn
+            </a>
+            . Take a look around, stay a while!
+          </>
+        }
         works={
           <Discography>
             <Discography.Disc

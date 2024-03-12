@@ -30,6 +30,16 @@ export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
           />
         }
         // TODO: description, socials
+        description={
+          <>
+            I was a producer / co-songwriter in this duo, and it gained a decent
+            amount of traction before the collaborator and I split to focus on
+            our individual projects. You may recognize the voice in this
+            project. None other than John White himself! I&apos;m proud of the
+            work that&apos;s come out of this collaboration, it serves as a
+            testament to my standards for professional electronic music.
+          </>
+        }
         works={
           <Discography>
             <Discography.Disc

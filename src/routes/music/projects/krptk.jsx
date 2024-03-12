@@ -27,6 +27,20 @@ export const KRPTK = ({ i, expanded, HandleActiveArtist }) => {
           <Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
         }
         // TODO: description, socials
+        description={
+          <>
+            cryp·tic /ˈkriptik/ hip hop | rnb | everything in between. a
+            neurotic musician | visual artist. korean american | socal native
+            KRPTK is a Korean American R&B/Hip Hop musician and cinematic artist
+            from Southern California. His duality as a musician and visual
+            artist drives and inspires his art. In 2020, KRPTK set out on his
+            own journey as a music artist to create a haven for the mentally
+            afflicted and chase after something meaningful. His message is hope
+            and his standard is substance. He now utilizes his background and
+            experience as a Director, DP, Producer, and Editor to tell his
+            visual narrative and build his story from the ground up.
+          </>
+        }
         works={
           <Discography>
             <Discography.Disc

@@ -33,6 +33,14 @@ export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
           <Title artistName="Sam Denton" subtitle="singer/songwriter" />
         }
         // TODO: description, socials
+        description={
+          <>
+            A dear friend and talented singer/songwriter and designer. I&apos;ve
+            produced, mixed, and mastered every work you see on this page.
+            We&apos;re currently writing more, so be on the lookout for more
+            releases!
+          </>
+        }
         works={
           <Discography>
             <Discography.Disc

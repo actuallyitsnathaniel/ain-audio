@@ -75,12 +75,14 @@ export const Project = ({
         </p>
 
         {description && (
-          <span
-            className="underline underline-offset-2 cursor-pointer p-4 italic"
+          <div
+            className="p-6 items-center align-middle"
             onClick={() => setTruncateText(!truncateText)}
           >
-            {truncateText ? "more" : "less"}
-          </span>
+            <span className="border border-spacing-10 p-3 pt-2 rounded-md border-white underline underline-offset-2 cursor-pointer italic">
+              {truncateText ? "more" : "less"}
+            </span>
+          </div>
         )}
 
         {works}
