@@ -22,13 +22,13 @@ const ProjectHighlights = () => {
   const [expanded, setExpanded] = useState(-1);
 
   const children = [
-    <SamDenton key="sam-denton" />,
+    <Riley key="riley" />,
     <AdidasMessi key="adidas-messi" />,
+    <SamDenton key="sam-denton" />,
     <Ryland key="ryland" />,
     <AubitSound key="aubit-sound" />,
     <JohnWhite key="john-white" />,
     <BrandX key="brand-x" />,
-    <Riley key="riley" />,
     <KRPTK key="krptk" />,
     <PlatinumRoses key="platinum-roses" />,
   ];

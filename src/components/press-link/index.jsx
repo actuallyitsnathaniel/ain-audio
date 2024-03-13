@@ -8,7 +8,7 @@ export const PressLink = ({ href, title, subtitle }) => {
           &quot;{title}&quot;
         </a>
       </div>
-      <p className="text-lg">{subtitle}</p>
+      <p className="text-lg italic">{subtitle}</p>
     </div>
   );
 };
