@@ -33,7 +33,7 @@ const Home = () => {
       <div className="flex h-1/3 justify-center">
         <img
           src={profilePic}
-          className="rounded-full object-scale-down max-h-[320px]"
+          className="rounded-full object-scale-down max-h-80"
           alt="profilePic"
         />
       </div>
