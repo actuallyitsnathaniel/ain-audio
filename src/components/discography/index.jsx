@@ -6,7 +6,7 @@ import Disc from "./disc";
 const Discography = ({ children }) => {
   const [expanded, setExpanded] = useState(-1);
   return (
-    <div>
+    <div className="flex justify-center m-5 p-5 bg-gray-500 rounded-lg bg-opacity-25">
       <div
         className={"flex flex-wrap w-full md:w-11/12 md:mx-auto justify-center"}
       >

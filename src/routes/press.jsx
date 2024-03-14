@@ -4,19 +4,18 @@ const Press = () => {
   return (
     <div
       id="press"
-      className="p-5 flex flex-col justify-center min-h-screen md:pt-16"
+      className="p-5 flex flex-col justify-center h-full md:pt-16"
     >
-      <h1 className="text-4xl">press</h1>
-      <h3 className="text-center py-5 underline text-3xl font-semibold">
-        press highlights
-      </h3>
-      <PressLink
-        href={
-          "https://shoutoutla.com/meet-nathaniel-bowman-software-audio-engineer/"
-        }
-        title={"Meet Nathaniel Bowman | Software & Audio Engineer"}
-        subtitle={"write-up by Shoutout LA"}
-      />
+      <h1 className="text-5xl top-0 p-5 underline">press</h1>
+      <div className="flex justify-center my-auto">
+        <PressLink
+          href={
+            "https://shoutoutla.com/meet-nathaniel-bowman-software-audio-engineer/"
+          }
+          title={"Meet Nathaniel Bowman | Software & Audio Engineer"}
+          subtitle={"write-up by Shoutout LA"}
+        />
+      </div>
     </div>
   );
 };

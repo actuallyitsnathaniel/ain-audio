@@ -35,15 +35,18 @@ export const Ryland = ({ i, expanded, HandleActiveArtist }) => {
         description={
           <>
             Not to be confused with my riley project, ryland is my band! Just
-            five friends that make music. We&apos;ve been doing it since 2019,
-            and it&apos;s been amazing so far. There&apos;s some records
-            we&apos;ve made on our page here, and we&apos;d love if you listened
-            through any of them. And we don&apos;t just make music - we play
-            music too (didn&apos;t see that coming did ya). We&apos;re always
-            happy to meet anyone who listens to us so feel free to follow our
-            instagram and come out to the next gig!! Thanks for being a part of
-            this - it means the world to us. We genuinely hope that any of these
-            songs can be something special for you, just like they are for us.
+            five friends that make music. My role in this projects is synths,
+            samples, and backround vocals. Every once in a while I&apos;ll do
+            some kind of audio clean-up too, if requested. We&apos;ve been doing
+            it since 2019, and it&apos;s been amazing so far. There&apos;s some
+            records we&apos;ve made on our page here, and we&apos;d love if you
+            listened through any of them. And we don&apos;t just make music - we
+            play music too (didn&apos;t see that coming did ya). We&apos;re
+            always happy to meet anyone who listens to us so feel free to follow
+            our instagram and come out to the next gig!! Thanks for being a part
+            of this - it means the world to us. We genuinely hope that any of
+            these songs can be something special for you, just like they are for
+            us.
           </>
         }
         works={

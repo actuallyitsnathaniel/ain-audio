@@ -2,8 +2,8 @@ const AboutMe = () => {
   // todo: add more pictures of myself!
   return (
     <div id="about-me" className="md:pt-16 flex flex-col">
-      <h2 className="p-5 flex justify-center text-4xl">about me</h2>
-      <p className="text-justify text-lg mx-6 md:px-24 lowercase">
+      <h2 className="p-5 flex justify-center text-5xl underline">about me</h2>
+      <p className="w-4/5 md:w-2/3 mx-auto text-justify text-lg md:px-24 lowercase">
         I&apos;m a music producer, sound designer, composer, arranger,
         songwriter, and recording artist. I&apos;ve been messing around with
         beats and sounds for over 12 years, blending digital and analog stuff to

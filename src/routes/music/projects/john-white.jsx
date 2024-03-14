@@ -35,6 +35,13 @@ export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
           />
         }
         // TODO: description, socials
+        description={
+          <>
+            One of my longest collaborators and dearest friends. I&apos;ve
+            produced, mixed, remixed, and mastered a number of songs for him,
+            and continue to do so all the time.
+          </>
+        }
         works={
           <Discography>
             <Discography.Disc

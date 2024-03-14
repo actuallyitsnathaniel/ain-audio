@@ -29,6 +29,11 @@ export const KRPTK = ({ i, expanded, HandleActiveArtist }) => {
         // TODO: description, socials
         description={
           <>
+            I produced, mixed, and mastered all the songs you see here. KRPTK is
+            a family friend and incredibly skilled songwriter with an ear for
+            excellence.
+            <br />
+            <br />
             cryp·tic /ˈkriptik/ hip hop | rnb | everything in between. a
             neurotic musician | visual artist. korean american | socal native
             KRPTK is a Korean American R&B/Hip Hop musician and cinematic artist

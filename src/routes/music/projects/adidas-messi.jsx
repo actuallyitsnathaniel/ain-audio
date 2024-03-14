@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { PropTypes } from "prop-types";
 
 import { ProfilePic, Project, Title } from "/src/components/project";
@@ -7,12 +7,6 @@ import adidasMessi from "/src/assets/images/projects/adidas-messi/adidas-messi-s
 
 export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
   const adidasVideos = useRef([]);
-
-  const pauseVideo = (index) => {
-    if (adidasVideos.current[index]) {
-      adidasVideos.current[index].pause();
-    }
-  };
 
   return (
     <div id="adidas">
@@ -31,7 +25,7 @@ export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
         }
         description={
           <>
-            I had the honor of sharing my sounds with the talent of&nbsp;
+            I had the honor of doing some sound design with the talent of&nbsp;
             <a
               rel="noopener noreferrer"
               target="_blank"

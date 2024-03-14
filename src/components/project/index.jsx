@@ -29,8 +29,8 @@ export const ProfilePic = ({
 export const Title = ({ artistName, subtitle }) => {
   return (
     <div className="py-3 justify-center w-full">
-      <p className="flex justify-center">{artistName}</p>
-      <p id="desc" className="text-xl italic">
+      <p className="flex justify-center text-2xl">{artistName}</p>
+      <p id="desc" className="text-lg italic">
         {subtitle}
       </p>
     </div>

@@ -37,7 +37,8 @@ export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
             our individual projects. You may recognize the voice in this
             project. None other than John White himself! I&apos;m proud of the
             work that&apos;s come out of this collaboration, it serves as a
-            testament to my standards for professional electronic music.
+            testament to my standards for professional electronic music. All
+            produced, mixed and mastered by me.
           </>
         }
         works={
