@@ -11,7 +11,7 @@ const Root = () => {
   return (
     <div
       id="root"
-      className="flex flex-wrap justify-center text-center flex-col font-light [&>*]:text-white"
+      className="flex flex-wrap justify-center text-center flex-col font-light [&>*]:text-white content-between gap-10"
     >
       <VideoBG />
       <ScrollToHashElement />

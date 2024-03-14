@@ -35,10 +35,10 @@ const ProjectHighlights = () => {
 
   return (
     <div id="projects" className="md:pt-16">
-      <h1 className="p-5 flex px-16 md:px-auto flex-wrap justify-center text-5xl underline">
+      <h1 className="p-5 flex flex-wrap justify-center text-5xl underline">
         project highlights
       </h1>
-      <div id="projects" className="flex flex-wrap justify-center">
+      <div id="projects" className="flex flex-wrap justify-center px-10">
         {React.Children.map(children, (child, i) => {
           return React.cloneElement(child, {
             expanded,

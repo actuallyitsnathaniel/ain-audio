@@ -3,7 +3,7 @@ const AboutMe = () => {
   return (
     <div id="about-me" className="md:pt-16 flex flex-col">
       <h2 className="p-5 flex justify-center text-5xl underline">about me</h2>
-      <p className="w-4/5 md:w-2/3 mx-auto text-justify text-lg md:px-24 lowercase">
+      <p className="w-5/6 md:w-auto lg:w-3/4 mx-auto text-justify text-lg md:px-24 lowercase">
         I&apos;m a music producer, sound designer, composer, arranger,
         songwriter, and recording artist. I&apos;ve been messing around with
         beats and sounds for over 12 years, blending digital and analog stuff to

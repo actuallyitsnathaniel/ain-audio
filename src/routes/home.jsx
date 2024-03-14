@@ -30,7 +30,7 @@ const Home = () => {
           </TypeIt>
         </span>
       </h1>
-      <div className="flex h-1/3 justify-center px-16">
+      <div className="flex h-1/3 justify-center">
         <img
           src={profilePic}
           className="rounded-full object-scale-down max-h-[320px]"
