@@ -60,7 +60,7 @@ export const Riley = ({ i, expanded, HandleActiveArtist }) => {
           <>
             <div id="sound-xyz-releases">
               <h1 className="p-5">sound.xyz</h1>
-              <div className="flex justify-center mx-5 p-5 bg-gray-500 rounded-lg bg-opacity-25">
+              <div className="flex justify-center mx-5 p-5 bg-gray-500 rounded-lg bg-opacity-25 content-between gap-10">
                 <iframe
                   src="https://embed.sound.xyz/v1/release/324ade13-93db-4f39-8f38-bb99b6085e07?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
                   className="rounded-lg w-auto h-48"
