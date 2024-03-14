@@ -6,9 +6,11 @@ import Disc from "./disc";
 const Discography = ({ children }) => {
   const [expanded, setExpanded] = useState(-1);
   return (
-    <div className="flex justify-center m-5 p-5 bg-gray-500 rounded-lg bg-opacity-25">
+    <div className="flex px-10 md:px-28 pb-10">
       <div
-        className={"flex flex-wrap w-full md:w-11/12 md:mx-auto justify-center"}
+        className={
+          "flex flex-wrap justify-center w-fit py-10 content-between gap-6 bg-gray-500 rounded-lg bg-opacity-25"
+        }
       >
         {React.Children.map(children, (child, i) => {
           return React.cloneElement(child, { expanded, setExpanded, i });

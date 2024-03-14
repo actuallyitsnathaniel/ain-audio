@@ -38,7 +38,7 @@ const MusicPlatformLinks = ({
   return (
     <div
       className={`absolute flex flex-wrap justify-around
-      ${className} h-[300px] w-[300px] items-center
+      ${className} h-72 w-72 items-center
       `}
     >
       {spotifyLink && <Link href={spotifyLink} image={spotify} />}

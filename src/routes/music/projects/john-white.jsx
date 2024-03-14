@@ -43,62 +43,84 @@ export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
           </>
         }
         works={
-          <Discography>
-            <Discography.Disc
-              artwork={fakeSmilesEP}
-              title={"betchu wish u could take it back"}
-              spotifyLink={
-                "https://open.spotify.com/album/5xG9WKhRF1ve48GMnDdInB?si=7y49yfvlRNqACC7uECI88g"
-              }
-              appleMusicLink={
-                "https://embed.music.apple.com/us/album/fake-smiles-ep/1678254661"
-              }
-              soundcloudLink={
-                "https://soundcloud.com/johnwhitesmusic/fake-smiles-mixmaster-1"
-              }
-              youtubeLink={
-                "https://youtube.com/playlist?list=olak5uy_m2wbnwqklx4ez6u2smtzdiqnx5nsflqbi"
-              }
-            />
-            <Discography.Disc
-              artwork={starsRemix}
-              title={"stars (riley remix)"}
-              spotifyLink={
-                "https://open.spotify.com/track/29NlMvw2a5h7o5sCqgJ7K3?si=4c5c7aacc383407a"
-              }
-              appleMusicLink={
-                "https://music.apple.com/us/album/stars-riley-remix-single/1660688944"
-              }
-              soundcloudLink={""}
-              youtubeLink={"https://youtu.be/9z8t3nt7zma"}
-            />
-            <Discography.Disc
-              artwork={whoeverYouWantToBeSingle}
-              title={"whoever you want to be - single"}
-              spotifyLink={
-                "https://open.spotify.com/track/42W4JMlVCjf41SmqcimLhz?si=e40a72ca719e4625"
-              }
-              appleMusicLink={
-                "https://music.apple.com/us/album/whoever-you-want-to-be-single/1630867196"
-              }
-              soundcloudLink={
-                "https://soundcloud.com/johnwhitesmusic/johnwhite-whoeveryouwanttobe"
-              }
-              youtubeLink={"https://youtu.be/toxcnzk9xoo"}
-            />
-            <Discography.Disc
-              artwork={better2021Single}
-              title={"better (with sam denton & riley) - single (2021)"}
-              spotifyLink={
-                "https://open.spotify.com/track/52lu5hXrnYdWtPb90ImyA6?si=112307d4c45a4830"
-              }
-              appleMusicLink={
-                "https://music.apple.com/us/album/better-single/1556313448"
-              }
-              soundcloudLink={""}
-              youtubeLink={"https://youtu.be/yktwodhhm0o"}
-            />
-          </Discography>
+          <>
+            <div id="sound-xyz-releases">
+              <h1 className="p-5">sound.xyz</h1>
+              <div className="flex w-fit mx-auto p-5  bg-gray-500 rounded-lg bg-opacity-25 content-between gap-10">
+                <iframe
+                  id="xyz-did-u-forget-me"
+                  src="https://embed.sound.xyz/v1/release/f547e1ea-7570-48fd-b044-3fa516ba016d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                  className="rounded-lg w-auto h-48"
+                  allow="clipboard-write"
+                  sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                ></iframe>
+                <iframe
+                  id="xyz-wish-u-could-take-it-back"
+                  src="https://embed.sound.xyz/v1/release/0c5ac231-2ae7-4118-9531-2b36056b66a0?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                  className="rounded-lg w-auto h-48"
+                  allow="clipboard-write"
+                  sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                ></iframe>
+              </div>
+            </div>
+            <h1 className="p-5 m-5">general releases</h1>
+            <Discography>
+              <Discography.Disc
+                artwork={fakeSmilesEP}
+                title={"betchu wish u could take it back"}
+                spotifyLink={
+                  "https://open.spotify.com/album/5xG9WKhRF1ve48GMnDdInB?si=7y49yfvlRNqACC7uECI88g"
+                }
+                appleMusicLink={
+                  "https://embed.music.apple.com/us/album/fake-smiles-ep/1678254661"
+                }
+                soundcloudLink={
+                  "https://soundcloud.com/johnwhitesmusic/fake-smiles-mixmaster-1"
+                }
+                youtubeLink={
+                  "https://youtube.com/playlist?list=olak5uy_m2wbnwqklx4ez6u2smtzdiqnx5nsflqbi"
+                }
+              />
+              <Discography.Disc
+                artwork={starsRemix}
+                title={"stars (riley remix)"}
+                spotifyLink={
+                  "https://open.spotify.com/track/29NlMvw2a5h7o5sCqgJ7K3?si=4c5c7aacc383407a"
+                }
+                appleMusicLink={
+                  "https://music.apple.com/us/album/stars-riley-remix-single/1660688944"
+                }
+                soundcloudLink={""}
+                youtubeLink={"https://youtu.be/9z8t3nt7zma"}
+              />
+              <Discography.Disc
+                artwork={whoeverYouWantToBeSingle}
+                title={"whoever you want to be - single"}
+                spotifyLink={
+                  "https://open.spotify.com/track/42W4JMlVCjf41SmqcimLhz?si=e40a72ca719e4625"
+                }
+                appleMusicLink={
+                  "https://music.apple.com/us/album/whoever-you-want-to-be-single/1630867196"
+                }
+                soundcloudLink={
+                  "https://soundcloud.com/johnwhitesmusic/johnwhite-whoeveryouwanttobe"
+                }
+                youtubeLink={"https://youtu.be/toxcnzk9xoo"}
+              />
+              <Discography.Disc
+                artwork={better2021Single}
+                title={"better (with sam denton & riley) - single (2021)"}
+                spotifyLink={
+                  "https://open.spotify.com/track/52lu5hXrnYdWtPb90ImyA6?si=112307d4c45a4830"
+                }
+                appleMusicLink={
+                  "https://music.apple.com/us/album/better-single/1556313448"
+                }
+                soundcloudLink={""}
+                youtubeLink={"https://youtu.be/yktwodhhm0o"}
+              />
+            </Discography>
+          </>
         }
       />
     </div>
