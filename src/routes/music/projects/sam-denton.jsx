@@ -2,6 +2,7 @@ import { PropTypes } from "prop-types";
 
 import { Project, ProfilePic, Title } from "/src/components/project";
 import Discography from "/src/components/discography";
+import SoundXYZGallery from "/src/components/sound-xyz-gallery";
 
 import samPfp from "/src/assets/images/projects/sam-denton/sam-denton-pfp.jpg";
 // albums
@@ -43,18 +44,13 @@ export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
         }
         works={
           <>
-            <div id="sound-xyz-releases">
-              <h1 className="p-5">sound.xyz</h1>
-              <div className="flex w-fit mx-auto p-5 bg-gray-500 rounded-lg bg-opacity-25 content-between gap-10">
-                <iframe
-                  id="xyz-back-to-you"
-                  src="https://embed.sound.xyz/v1/release/6abc58a2-c0c3-4878-a76f-277721401ac5?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                  className="rounded-lg w-auto h-48"
-                  allow="clipboard-write"
-                  sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                ></iframe>
-              </div>
-            </div>
+            <SoundXYZGallery>
+              <SoundXYZGallery.Item
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/6abc58a2-c0c3-4878-a76f-277721401ac5?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+            </SoundXYZGallery>
             <h1 className="p-5 m-5">general releases</h1>
             <Discography>
               <Discography.Disc
