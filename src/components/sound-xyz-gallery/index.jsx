@@ -5,7 +5,7 @@ const Item = ({ soundURL }) => {
   return (
     <iframe
       src={soundURL}
-      className="rounded-lg w-auto h-48"
+      className="rounded-lg w-80 h-48"
       allow="clipboard-write"
       sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
     ></iframe>
@@ -14,7 +14,7 @@ const Item = ({ soundURL }) => {
 
 const SoundXYZGallery = ({ children }) => {
   return (
-    <div id="sound-xyz-releases">
+    <div id="sound-xyz-releases" className="p-5">
       <h1 className="p-5">digital collectibles</h1>
       <div
         className="flex flex-wrap justify-center mx-auto w-fit
