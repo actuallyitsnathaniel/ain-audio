@@ -1,6 +1,7 @@
 import { PropTypes } from "prop-types";
 import { ProfilePic, Project, Title } from "/src/components/project";
 import Discography from "/src/components/discography";
+import SoundXYZGallery from "/src/components/sound-xyz-gallery";
 
 import johnWhitePfp from "/src/assets/images/projects/john-white/johnWhitePfp.jpeg";
 
@@ -44,25 +45,18 @@ export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
         }
         works={
           <>
-            <div id="sound-xyz-releases">
-              <h1 className="p-5">sound.xyz</h1>
-              <div className="flex w-fit mx-auto p-5  bg-gray-500 rounded-lg bg-opacity-25 content-between gap-10">
-                <iframe
-                  id="xyz-did-u-forget-me"
-                  src="https://embed.sound.xyz/v1/release/f547e1ea-7570-48fd-b044-3fa516ba016d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                  className="rounded-lg w-auto h-48"
-                  allow="clipboard-write"
-                  sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                ></iframe>
-                <iframe
-                  id="xyz-wish-u-could-take-it-back"
-                  src="https://embed.sound.xyz/v1/release/0c5ac231-2ae7-4118-9531-2b36056b66a0?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                  className="rounded-lg w-auto h-48"
-                  allow="clipboard-write"
-                  sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                ></iframe>
-              </div>
-            </div>
+            <SoundXYZGallery>
+              <SoundXYZGallery.Item
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/f547e1ea-7570-48fd-b044-3fa516ba016d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/0c5ac231-2ae7-4118-9531-2b36056b66a0?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+            </SoundXYZGallery>
             <h1 className="p-5 m-5">general releases</h1>
             <Discography>
               <Discography.Disc
