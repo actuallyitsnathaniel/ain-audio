@@ -47,6 +47,16 @@ export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
             <SoundXYZGallery>
               <SoundXYZGallery.Item
                 soundURL={
+                  "https://embed.sound.xyz/v1/release/6d7a7864-9d64-4166-ac38-db481c322378?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/5c38d962-33d6-4df2-8c34-a9770534e76d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                soundURL={
                   "https://embed.sound.xyz/v1/release/6abc58a2-c0c3-4878-a76f-277721401ac5?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
                 }
               />
