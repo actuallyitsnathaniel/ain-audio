@@ -15,10 +15,10 @@ const Item = ({ soundURL, id }) => {
 
 const SoundXYZGallery = ({ children }) => {
   return (
-    <div id="sound-xyz-releases" className="p-5">
+    <div id="sound-xyz-releases" className="p-5 md:px-28">
       <h1 className="p-5">digital collectibles</h1>
       <div
-        className="flex flex-wrap justify-center mx-auto w-fit
+        className="flex flex-wrap justify-center mx-auto w-fit 
                p-5 bg-gray-500 rounded-lg bg-opacity-25 content-between gap-10"
       >
         {React.Children.map(children, (child, i) => {
