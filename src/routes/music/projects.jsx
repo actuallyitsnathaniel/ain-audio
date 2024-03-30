@@ -11,8 +11,6 @@ import { AdidasMessi } from "./projects/adidas-messi";
 
 const ProjectHighlights = () => {
   const HandleActiveArtist = (i, expanded) => {
-    // console.log({ i });
-    // console.log({ expanded });
     if (i == expanded) {
       setExpanded(-1);
     } else {
@@ -21,7 +19,7 @@ const ProjectHighlights = () => {
   };
   const [expanded, setExpanded] = React.useState(-1);
 
-  const children = [
+  const projectChildren = [
     <Riley key="riley" />,
     <AdidasMessi key="adidas-messi" />,
     <SamDenton key="sam-denton" />,
@@ -39,10 +37,10 @@ const ProjectHighlights = () => {
         project highlights
       </h1>
       <div
-        id="projects"
+        id="project-highlights"
         className="flex flex-wrap justify-center xl:w-4/5 mx-auto"
       >
-        {React.Children.map(children, (child, i) => {
+        {React.Children.map(projectChildren, (child, i) => {
           return React.cloneElement(child, {
             expanded,
             setExpanded,
