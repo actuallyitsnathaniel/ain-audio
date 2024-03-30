@@ -16,7 +16,9 @@ const Link = ({ href, image }) => {
       target="_blank"
     >
       <img
-        className={"transition-all duration-75 md:hover:scale-110"}
+        className={
+          "transition-all duration-75 md:hover:scale-110 object-scale-down"
+        }
         height={"75px"}
         width={"75px"}
         alt="music-link"
@@ -38,12 +40,14 @@ const MusicPlatformLinks = ({
   return (
     <div
       className={`absolute flex flex-wrap justify-around
-      ${className} h-72 w-72 items-center
+      ${className} h-72 w-72 items-center object-scale-down
       `}
     >
       {spotifyLink && <Link href={spotifyLink} image={spotify} />}
       {appleMusicLink && <Link href={appleMusicLink} image={appleMusic} />}
-      {soundcloudLink && <Link href={soundcloudLink} image={soundcloud} />}
+      {soundcloudLink && !youtubeLink && (
+        <Link href={soundcloudLink} image={soundcloud} />
+      )}
       {tidalLink && <Link href={tidalLink} image={tidal} />}
       {youtubeLink && <Link href={youtubeLink} image={youtube} />}
       {webLink && <Link href={webLink} image={hyperlinkIcon} />}
