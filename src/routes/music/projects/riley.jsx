@@ -99,7 +99,7 @@ export const Riley = ({ i, expanded, HandleActiveArtist }) => {
               />
               <Discography.Disc
                 artwork={losingHearts}
-                title="Losing Hearts (feat. John White)"
+                title="john white x riley - Losing Hearts"
                 appleMusicLink="https://music.apple.com/us/album/losing-hearts-feat-john-white/1509147409?i=1509147412"
                 spotifyLink="https://open.spotify.com/track/3lLtkLtBztQd8DiLCAORH5?si=f55f60cc305049c8"
                 youtubeLink="https://youtu.be/AloaubmwGEA?si=Mn_ZeImQwfpXb_z8"
