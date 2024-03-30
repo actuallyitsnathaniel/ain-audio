@@ -46,16 +46,43 @@ export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
           <>
             <SoundXYZGallery>
               <SoundXYZGallery.Item
+                id={"somebody-else"}
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/eec3e02d-2382-44ba-8db9-50e6ea76591c?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                id="fighting"
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/ab1079b9-bd21-4e9b-9a67-ba611515cde6?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                id="24-hours"
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/8be1f236-7a48-4363-91f4-0420ae3b16a3?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                id="smoke-in-the-mirror"
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/67cd627e-f87c-49d2-86c3-078cecf6e641?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                id="2_09"
                 soundURL={
                   "https://embed.sound.xyz/v1/release/6d7a7864-9d64-4166-ac38-db481c322378?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
                 }
               />
               <SoundXYZGallery.Item
+                id="idkya"
                 soundURL={
                   "https://embed.sound.xyz/v1/release/5c38d962-33d6-4df2-8c34-a9770534e76d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
                 }
               />
               <SoundXYZGallery.Item
+                id="back-to-you"
                 soundURL={
                   "https://embed.sound.xyz/v1/release/6abc58a2-c0c3-4878-a76f-277721401ac5?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
                 }

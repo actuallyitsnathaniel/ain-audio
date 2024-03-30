@@ -1,10 +1,11 @@
 import React from "react";
 import { PropTypes } from "prop-types";
 
-const Item = ({ soundURL }) => {
+const Item = ({ soundURL, id }) => {
   return (
     <iframe
       src={soundURL}
+      id={id}
       className="rounded-lg w-80 h-48"
       allow="clipboard-write"
       sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
@@ -30,6 +31,7 @@ const SoundXYZGallery = ({ children }) => {
 
 Item.propTypes = {
   soundURL: PropTypes.string,
+  id: PropTypes.string,
 };
 
 SoundXYZGallery.propTypes = {
