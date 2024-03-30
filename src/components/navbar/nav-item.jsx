@@ -19,14 +19,6 @@ HandleURL.propTypes = {
 };
 
 export const NavItem = ({ link, setExpanded, text }) => {
-  /**
-   * TODO:
-   * DESKTOP:
-   *   - current page title should always be FOCUSED on navbar.
-   *   - effect:
-   *       - onClick, set as active page, similar to hover, but maybe bolded and underlined.
-   */
-
   return (
     <li className="transition-all duration-100 hover:scale-105">
       <Link

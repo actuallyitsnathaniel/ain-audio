@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { SamDenton } from "./projects/sam-denton";
 import { Ryland } from "./projects/ryland";
 import { Riley } from "./projects/riley";
@@ -19,7 +19,7 @@ const ProjectHighlights = () => {
       setExpanded(parseInt(i));
     }
   };
-  const [expanded, setExpanded] = useState(-1);
+  const [expanded, setExpanded] = React.useState(-1);
 
   const children = [
     <Riley key="riley" />,

@@ -46,6 +46,7 @@ export const Project = ({
   titleComponent,
 }) => {
   const [truncateText, setTruncateText] = useState(true);
+
   return (
     <div
       id="project"
