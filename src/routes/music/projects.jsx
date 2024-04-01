@@ -41,11 +41,13 @@ const ProjectHighlights = () => {
         className="flex flex-wrap justify-center xl:w-4/5 mx-auto"
       >
         {React.Children.map(projectChildren, (child, i) => {
+          const key = child.key;
           return React.cloneElement(child, {
             expanded,
             setExpanded,
             HandleActiveArtist,
             i,
+            key,
           });
         })}
       </div>

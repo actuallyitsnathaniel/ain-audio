@@ -1,6 +1,6 @@
 import { PropTypes } from "prop-types";
 
-import { Project, ProfilePic, Title } from "/src/components/project";
+import { Project } from "/src/components/project";
 import Discography from "/src/components/discography";
 import SoundXYZGallery from "/src/components/sound-xyz-gallery";
 

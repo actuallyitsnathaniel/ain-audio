@@ -1,7 +1,7 @@
 import { PropTypes } from "prop-types";
 import { useState } from "react";
 
-export const ProfilePic = ({
+const ProfilePic = ({
   i,
   expanded,
   HandleActiveArtist,
@@ -26,7 +26,7 @@ export const ProfilePic = ({
   );
 };
 
-export const Title = ({ artistName, subtitle }) => {
+const Title = ({ artistName, subtitle }) => {
   return (
     <div className="py-3 justify-center w-full">
       <p className="flex justify-center text-2xl">{artistName}</p>

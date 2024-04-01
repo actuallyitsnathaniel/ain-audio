@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { PropTypes } from "prop-types";
 
-import { ProfilePic, Project, Title } from "/src/components/project";
+import { Project } from "/src/components/project";
 
 import adidasMessi from "/src/assets/images/projects/adidas-messi/adidas-messi-sq.jpeg";
 
