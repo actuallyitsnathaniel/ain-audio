@@ -128,6 +128,9 @@ const ProjectsToggleButton = ({ i, expanded, HandleActiveArtist }) => {
   );
 };
 
+Project.Title = Title;
+Project.ProfilePic = ProfilePic;
+
 Title.propTypes = {
   artistName: PropTypes.string,
   subtitle: PropTypes.string,

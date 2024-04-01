@@ -10,12 +10,12 @@ import contemplate from "/src/assets/images/projects/platinum-roses/discography/
 export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="platinum-roses">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={platinumRoses}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
-          <Title
+          <Project.Title
             artistName={"Platinum Roses"}
             subtitle={"songwriter/producer duo"}
           />
@@ -24,7 +24,7 @@ export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
-          <Title
+          <Project.Title
             artistName={"Platinum Roses"}
             subtitle={"songwriter/producer duo"}
           />

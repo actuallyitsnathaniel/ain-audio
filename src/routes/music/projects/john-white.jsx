@@ -16,12 +16,12 @@ import better2021Single from "/src/assets/images/projects/john-white/Singles_EPs
 export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="john-white">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={johnWhitePfp}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
-          <Title
+          <Project.Title
             artistName={"John White"}
             subtitle={"singer/songwriter/producer"}
           />
@@ -30,7 +30,7 @@ export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
-          <Title
+          <Project.Title
             artistName={"John White"}
             subtitle={"singer/songwriter/producer"}
           />

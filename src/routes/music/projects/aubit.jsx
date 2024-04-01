@@ -1,6 +1,6 @@
 import { PropTypes } from "prop-types";
 
-import { ProfilePic, Project, Title } from "/src/components/project";
+import { Project } from "/src/components/project";
 import Discography from "/src/components/discography";
 
 import aubitLogo from "/src/assets/images/projects/aubit-sound/aubit-logo.jpg";
@@ -26,12 +26,12 @@ import snakesForSerumVol1 from "/src/assets/images/projects/aubit-sound/discogra
 export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="aubit-sound">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={aubitLogo}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
-          <Title
+          <Project.Title
             artistName={"Aubit Sound"}
             subtitle="sample/sound library company"
           />
@@ -40,7 +40,7 @@ export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
-          <Title
+          <Project.Title
             artistName={"Aubit Sound"}
             subtitle="sample/sound library company"
           />

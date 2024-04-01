@@ -13,18 +13,18 @@ import kintsugi from "/src/assets/images/projects/krptk/discography/kintsugi_sin
 export const KRPTK = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="krptk">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={krptkPfp}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
+          <Project.Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
         }
       />
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
+          <Project.Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
         }
         // TODO: description, socials
         description={

@@ -13,15 +13,17 @@ import starsRemix from "/src/assets/images/projects/riley/Singles_EPs/stars-remi
 export const Riley = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="riley">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={rileyPfp}
         {...{ expanded, HandleActiveArtist }}
-        titleComponent={<Title artistName={"riley"} subtitle={"artist"} />}
+        titleComponent={
+          <Project.Title artistName={"riley"} subtitle={"artist"} />
+        }
       />
       <Project
         {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={<Title artistName="riley" subtitle="artist" />}
+        titleComponent={<Project.Title artistName="riley" subtitle="artist" />}
         // TODO: description, socials
         description={
           <>

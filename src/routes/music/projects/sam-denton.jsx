@@ -20,18 +20,18 @@ import dreams from "/src/assets/images/projects/sam-denton/Singles_EPs/dreams_60
 export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="sam-denton">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={samPfp}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName="Sam Denton" subtitle="singer/songwriter" />
+          <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
         }
       />
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName="Sam Denton" subtitle="singer/songwriter" />
+          <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
         }
         // TODO: description, socials
         description={

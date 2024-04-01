@@ -11,18 +11,18 @@ import tomsDinerCover from "/src/assets/images/projects/brandx/works/toms-diner-
 export const BrandX = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="brand-x">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={brandXBlue}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName={"Brand X"} subtitle={"sync/label"} />
+          <Project.Title artistName={"Brand X"} subtitle={"sync/label"} />
         }
       />
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName={"Brand X"} subtitle={"sync/label"} />
+          <Project.Title artistName={"Brand X"} subtitle={"sync/label"} />
         }
         // TODO: description, socials
         description={

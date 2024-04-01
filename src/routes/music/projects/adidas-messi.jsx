@@ -10,18 +10,24 @@ export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
 
   return (
     <div id="adidas">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={adidasMessi}
         {...{ expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName={"Adidas x Messi"} subtitle="marketing campaign" />
+          <Project.Title
+            artistName={"Adidas x Messi"}
+            subtitle="marketing campaign"
+          />
         }
       />
       <Project
         {...{ i, expanded, HandleActiveArtist }}
         titleComponent={
-          <Title artistName={"Adidas x Messi"} subtitle="Marketing Campaign" />
+          <Project.Title
+            artistName={"Adidas x Messi"}
+            subtitle="Marketing Campaign"
+          />
         }
         description={
           <>

@@ -22,15 +22,15 @@ import talking from "/src/assets/images/projects/ryland/Singles_EPs/Talking-Sing
 export const Ryland = ({ i, expanded, HandleActiveArtist }) => {
   return (
     <div id="ryland">
-      <ProfilePic
+      <Project.ProfilePic
         i={i}
         image={rylandPfp}
         {...{ expanded, HandleActiveArtist }}
-        titleComponent={<Title artistName={"Ryland"} subtitle="band" />}
+        titleComponent={<Project.Title artistName={"Ryland"} subtitle="band" />}
       />
       <Project
         {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={<Title artistName="Ryland" subtitle="band" />}
+        titleComponent={<Project.Title artistName="Ryland" subtitle="band" />}
         // TODO: description, socials
         description={
           <>
