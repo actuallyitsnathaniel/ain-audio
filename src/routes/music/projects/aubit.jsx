@@ -23,28 +23,23 @@ import masaVoxChopsVol1 from "/src/assets/images/projects/aubit-sound/discograph
 import petitVoxChopsVol1 from "/src/assets/images/projects/aubit-sound/discography/petit-vox-chops-vol-1.jpg";
 import snakesForSerumVol1 from "/src/assets/images/projects/aubit-sound/discography/snakes-for-serum-vol-1.jpg";
 
-export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
+export const AubitSound = ({ id }) => {
+  const Title = (
+    <Project.Title
+      artistName={"Aubit Sound"}
+      subtitle="sample/sound library company"
+    />
+  );
   return (
-    <div id="aubit-sound">
+    <div {...{ id }}>
       <Project.ProfilePic
-        i={i}
+        {...{ id }}
         image={aubitLogo}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"Aubit Sound"}
-            subtitle="sample/sound library company"
-          />
-        }
+        titleComponent={Title}
       />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"Aubit Sound"}
-            subtitle="sample/sound library company"
-          />
-        }
+        {...{ id }}
+        titleComponent={Title}
         description={
           <>
             From late 2018 to late 2019, I put together a prolific number of
@@ -241,7 +236,5 @@ export const AubitSound = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 AubitSound.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };

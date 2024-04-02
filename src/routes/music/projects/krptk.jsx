@@ -10,22 +10,16 @@ import knotionzVol1 from "/src/assets/images/projects/krptk/discography/knotionz
 import over from "/src/assets/images/projects/krptk/discography/over_single-600x600bb.jpg";
 import kintsugi from "/src/assets/images/projects/krptk/discography/kintsugi_single-600x600bb.jpg";
 
-export const KRPTK = ({ i, expanded, HandleActiveArtist }) => {
+export const KRPTK = ({ id }) => {
+  const Title = (
+    <Project.Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
+  );
   return (
     <div id="krptk">
-      <Project.ProfilePic
-        i={i}
-        image={krptkPfp}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
-        }
-      />
+      <Project.ProfilePic {...{ id }} image={krptkPfp} titleComponent={Title} />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
-        }
+        {...{ id }}
+        titleComponent={Title}
         // TODO: description, socials
         description={
           <>
@@ -93,7 +87,5 @@ export const KRPTK = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 KRPTK.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };

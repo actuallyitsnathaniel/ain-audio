@@ -13,28 +13,23 @@ import starsRemix from "/src/assets/images/projects/john-white/Singles_EPs/stars
 import whoeverYouWantToBeSingle from "/src/assets/images/projects/john-white/Singles_EPs/whoever_you_want_to_be_single_600x600bb.jpeg";
 import better2021Single from "/src/assets/images/projects/john-white/Singles_EPs/better_2021_single_600x600bb.jpeg";
 
-export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
+export const JohnWhite = ({ id }) => {
+  const Title = (
+    <Project.Title
+      artistName={"John White"}
+      subtitle={"singer/songwriter/producer"}
+    />
+  );
   return (
-    <div id="john-white">
+    <div {...{ id }}>
       <Project.ProfilePic
-        i={i}
+        {...{ id }}
         image={johnWhitePfp}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"John White"}
-            subtitle={"singer/songwriter/producer"}
-          />
-        }
+        titleComponent={Title}
       />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"John White"}
-            subtitle={"singer/songwriter/producer"}
-          />
-        }
+        {...{ id }}
+        titleComponent={Title}
         // TODO: description, socials
         description={
           <>
@@ -122,7 +117,5 @@ export const JohnWhite = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 JohnWhite.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };

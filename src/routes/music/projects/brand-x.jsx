@@ -8,22 +8,20 @@ import spiraling from "/src/assets/images/projects/brandx/works/norml-spiraling_
 import popFestVol2 from "/src/assets/images/projects/brandx/works/popfest-vol2-600x600bb.jpg";
 import tomsDinerCover from "/src/assets/images/projects/brandx/works/toms-diner-cover.png";
 
-export const BrandX = ({ i, expanded, HandleActiveArtist }) => {
+export const BrandX = ({ id }) => {
+  const Title = (
+    <Project.Title artistName={"Brand X"} subtitle={"sync/label"} />
+  );
   return (
-    <div id="brand-x">
+    <div {...{ id }}>
       <Project.ProfilePic
-        i={i}
+        {...{ id }}
         image={brandXBlue}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title artistName={"Brand X"} subtitle={"sync/label"} />
-        }
+        titleComponent={Title}
       />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title artistName={"Brand X"} subtitle={"sync/label"} />
-        }
+        {...{ id }}
+        titleComponent={Title}
         // TODO: description, socials
         description={
           <>
@@ -69,7 +67,5 @@ export const BrandX = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 BrandX.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };

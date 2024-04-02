@@ -19,18 +19,18 @@ import karma from "/src/assets/images/projects/ryland/Singles_EPs/Karma-Single_6
 import stairwell from "/src/assets/images/projects/ryland/Singles_EPs/Stairwell-Single_600x600bb.jpeg";
 import talking from "/src/assets/images/projects/ryland/Singles_EPs/Talking-Single_600x600bb.jpeg";
 
-export const Ryland = ({ i, expanded, HandleActiveArtist }) => {
+export const Ryland = ({ id }) => {
+  const Title = <Project.Title artistName={"Ryland"} subtitle="band" />;
   return (
-    <div id="ryland">
+    <div {...{ id }}>
       <Project.ProfilePic
-        i={i}
+        {...{ id }}
         image={rylandPfp}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={<Project.Title artistName={"Ryland"} subtitle="band" />}
+        titleComponent={Title}
       />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={<Project.Title artistName="Ryland" subtitle="band" />}
+        {...{ id }}
+        titleComponent={Title}
         // TODO: description, socials
         description={
           <>
@@ -167,7 +167,5 @@ export const Ryland = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 Ryland.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };

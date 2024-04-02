@@ -6,9 +6,6 @@ import Secret from "/src/routes/secret.jsx";
 import ErrorPage from "/src/error-page.jsx";
 import "/src/index.css";
 
-// TODO: refactor project modals so that they're integrated with the router
-// https://blog.logrocket.com/building-react-modal-module-with-react-router/
-
 const router = createBrowserRouter([
   {
     path: "/",
@@ -22,7 +19,7 @@ const router = createBrowserRouter([
         path: "#about-me",
       },
       {
-        path: "#projects",
+        path: "/#projects",
         children: [
           { path: "riley" },
           { path: "adidas-messi" },

@@ -10,20 +10,16 @@ import iWas9Remix from "/src/assets/images/projects/riley/Singles_EPs/i-was-9-re
 import better from "/src/assets/images/projects/riley/Singles_EPs/better.jpeg";
 import starsRemix from "/src/assets/images/projects/riley/Singles_EPs/stars-remix.jpeg";
 
-export const Riley = ({ i, expanded, HandleActiveArtist }) => {
+export const Riley = ({ id }) => {
+  const Title = (
+    <Project.Title artistName="riley" subtitle="artist" {...{ id }} />
+  );
   return (
-    <div id="riley">
-      <Project.ProfilePic
-        i={i}
-        image={rileyPfp}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title artistName={"riley"} subtitle={"artist"} />
-        }
-      />
+    <div {...{ id }}>
+      <Project.ProfilePic {...{ id }} image={rileyPfp} titleComponent={Title} />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={<Project.Title artistName="riley" subtitle="artist" />}
+        {...{ id }}
+        titleComponent={Title}
         // TODO: description, socials
         description={
           <>
@@ -110,13 +106,9 @@ export const Riley = ({ i, expanded, HandleActiveArtist }) => {
             </Discography>
           </>
         }
-      />
+      ></Project>
     </div>
   );
 };
 
-Riley.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
-};
+Riley.propTypes = { id: PropTypes.string };

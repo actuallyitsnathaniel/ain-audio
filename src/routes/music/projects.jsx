@@ -1,34 +1,27 @@
 import React from "react";
-import { SamDenton } from "./projects/sam-denton";
-import { Ryland } from "./projects/ryland";
-import { Riley } from "./projects/riley";
-import { JohnWhite } from "./projects/john-white";
+import { Outlet } from "react-router-dom";
+
+import { AdidasMessi } from "./projects/adidas-messi";
+import { AubitSound } from "./projects/aubit";
 import { BrandX } from "./projects/brand-x";
+import { JohnWhite } from "./projects/john-white";
 import { KRPTK } from "./projects/krptk";
 import { PlatinumRoses } from "./projects/platinum-roses";
-import { AubitSound } from "./projects/aubit";
-import { AdidasMessi } from "./projects/adidas-messi";
+import { Riley } from "./projects/riley";
+import { Ryland } from "./projects/ryland";
+import { SamDenton } from "./projects/sam-denton";
 
 const ProjectHighlights = () => {
-  const HandleActiveArtist = (i, expanded) => {
-    if (i == expanded) {
-      setExpanded(-1);
-    } else {
-      setExpanded(parseInt(i));
-    }
-  };
-  const [expanded, setExpanded] = React.useState(-1);
-
   const projectChildren = [
-    <Riley key="riley" />,
-    <AdidasMessi key="adidas-messi" />,
-    <SamDenton key="sam-denton" />,
-    <Ryland key="ryland" />,
-    <AubitSound key="aubit-sound" />,
-    <JohnWhite key="john-white" />,
-    <BrandX key="brand-x" />,
-    <KRPTK key="krptk" />,
-    <PlatinumRoses key="platinum-roses" />,
+    <Riley key={1} id="riley" />,
+    <AdidasMessi key={2} id="adidas-messi" />,
+    <SamDenton key={3} id="sam-denton" />,
+    <Ryland key={4} id="ryland" />,
+    <AubitSound key={5} id="aubit-sound" />,
+    <JohnWhite key={6} id="john-white" />,
+    <BrandX key={7} id="brand-x" />,
+    <KRPTK key={8} id="krptk" />,
+    <PlatinumRoses key={9} id="platinum-roses" />,
   ];
 
   return (
@@ -41,15 +34,11 @@ const ProjectHighlights = () => {
         className="flex flex-wrap justify-center xl:w-4/5 mx-auto"
       >
         {React.Children.map(projectChildren, (child, i) => {
-          const key = child.key;
           return React.cloneElement(child, {
-            expanded,
-            setExpanded,
-            HandleActiveArtist,
             i,
-            key,
           });
         })}
+        <Outlet />
       </div>
     </div>
   );

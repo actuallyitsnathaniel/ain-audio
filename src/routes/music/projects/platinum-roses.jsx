@@ -7,28 +7,23 @@ import oneThingIKnow from "/src/assets/images/projects/platinum-roses/discograph
 import whatdIDo from "/src/assets/images/projects/platinum-roses/discography/whatd-i-do-single.jpg";
 import contemplate from "/src/assets/images/projects/platinum-roses/discography/contemplate-single.jpg";
 
-export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
+export const PlatinumRoses = ({ id }) => {
+  const Title = (
+    <Project.Title
+      artistName={"Platinum Roses"}
+      subtitle={"songwriter/producer duo"}
+    />
+  );
   return (
-    <div id="platinum-roses">
+    <div {...{ id }}>
       <Project.ProfilePic
-        i={i}
+        {...{ id }}
         image={platinumRoses}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"Platinum Roses"}
-            subtitle={"songwriter/producer duo"}
-          />
-        }
+        titleComponent={Title}
       />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"Platinum Roses"}
-            subtitle={"songwriter/producer duo"}
-          />
-        }
+        {...{ id }}
+        titleComponent={Title}
         // TODO: description, socials
         description={
           <>
@@ -75,7 +70,5 @@ export const PlatinumRoses = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 PlatinumRoses.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };

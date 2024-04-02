@@ -16,11 +16,8 @@ const Root = () => {
       <VideoBG />
       <ScrollToHashElement />
       <Home />
-
       <ProjectHighlights />
       <Press />
-
-      {/* <Connect /> */}
       <Footer />
       <NavBar />
     </div>

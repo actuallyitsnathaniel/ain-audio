@@ -17,22 +17,16 @@ import first from "/src/assets/images/projects/sam-denton/Singles_EPs/first_600x
 import better from "/src/assets/images/projects/sam-denton/Singles_EPs/better_2021_single_600x600bb.jpeg";
 import dreams from "/src/assets/images/projects/sam-denton/Singles_EPs/dreams_600x600bb.jpeg";
 
-export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
+export const SamDenton = ({ id }) => {
+  const Title = (
+    <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
+  );
   return (
-    <div id="sam-denton">
-      <Project.ProfilePic
-        i={i}
-        image={samPfp}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
-        }
-      />
+    <div {...{ id }}>
+      <Project.ProfilePic {...{ id }} image={samPfp} titleComponent={Title} />
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
-        }
+        {...{ id }}
+        titleComponent={Title}
         // TODO: description, socials
         description={
           <>
@@ -194,7 +188,5 @@ export const SamDenton = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 SamDenton.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };

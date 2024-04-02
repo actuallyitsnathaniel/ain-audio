@@ -1,34 +1,32 @@
 import { useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { PropTypes } from "prop-types";
 
 import { Project } from "/src/components/project";
 
 import adidasMessi from "/src/assets/images/projects/adidas-messi/adidas-messi-sq.jpeg";
 
-export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
+export const AdidasMessi = ({ id }) => {
   const adidasVideos = useRef([]);
+  const Title = (
+    <Project.Title
+      artistName={"Adidas x Messi"}
+      subtitle="marketing campaign"
+    />
+  );
+  const isFocused = useLocation().hash == "#projects/adidas-messi";
 
   return (
-    <div id="adidas">
+    <div {...{ id }}>
       <Project.ProfilePic
-        i={i}
+        {...{ id }}
         image={adidasMessi}
-        {...{ expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"Adidas x Messi"}
-            subtitle="marketing campaign"
-          />
-        }
+        titleComponent={Title}
       />
+
       <Project
-        {...{ i, expanded, HandleActiveArtist }}
-        titleComponent={
-          <Project.Title
-            artistName={"Adidas x Messi"}
-            subtitle="Marketing Campaign"
-          />
-        }
+        {...{ id }}
+        titleComponent={Title}
         description={
           <>
             I had the honor of doing some sound design with the talent of&nbsp;
@@ -67,7 +65,7 @@ export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
         works={
           <div
             id="vimeo-embeds"
-            className={`${i != expanded && "hidden pointer-events-none"}`}
+            className={`${!isFocused && "hidden pointer-events-none"}`}
             // TODO: stop video on project close
           >
             <iframe
@@ -92,7 +90,5 @@ export const AdidasMessi = ({ i, expanded, HandleActiveArtist }) => {
 };
 
 AdidasMessi.propTypes = {
-  i: PropTypes.number,
-  expanded: PropTypes.number,
-  HandleActiveArtist: PropTypes.func,
+  id: PropTypes.string,
 };
