@@ -6,8 +6,17 @@ const Press = () => {
       id="press"
       className="p-5 flex flex-col justify-center h-full md:pt-16"
     >
-      <h1 className="text-5xl top-0 p-5 underline">press</h1>
-      <div className="flex justify-center my-auto">
+      <h1 className="py-5 flex flex-wrap justify-center text-5xl underline">
+        press
+      </h1>
+      <div className="flex flex-wrap justify-center my-auto gap-y-10">
+        <PressLink
+          href={
+            "https://voyagela.com/interview/conversations-with-nate-bowman/"
+          }
+          title={"Conversations with Nate Bowman"}
+          subtitle={"Write-up by Voyage LA"}
+        />
         <PressLink
           href={
             "https://shoutoutla.com/meet-nathaniel-bowman-software-audio-engineer/"
