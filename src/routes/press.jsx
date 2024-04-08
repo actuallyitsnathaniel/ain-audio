@@ -4,12 +4,10 @@ const Press = () => {
   return (
     <div
       id="press"
-      className="p-5 flex flex-col justify-center h-full md:pt-16"
+      className="p-10 flex flex-col justify-center h-full md:pt-16"
     >
-      <h1 className="py-5 flex flex-wrap justify-center text-5xl underline">
-        press
-      </h1>
-      <div className="flex flex-wrap justify-center my-auto gap-y-10">
+      <h1 className="py-5 flex justify-center text-5xl underline">press</h1>
+      <div className="flex flex-wrap justify-center my-auto gap-10">
         <PressLink
           href={
             "https://voyagela.com/interview/conversations-with-nate-bowman/"

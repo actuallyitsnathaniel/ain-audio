@@ -40,6 +40,30 @@ export const SamDenton = ({ id }) => {
           <>
             <SoundXYZGallery>
               <SoundXYZGallery.Item
+                id={"first"}
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/2fdd0f42-2ae6-4905-a32c-4e947f356262?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                id={"i-just-might"}
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/42fd31cd-b92d-473f-84a6-d2f140cd19dc?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                id={"ulterior-motives"}
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/4f0957c2-8b67-4756-9dab-a637960c75a1?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                id={"peace"}
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/c1b97a54-ab14-4ed8-a87d-6cdd599abe63?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
                 id={"somebody-else"}
                 soundURL={
                   "https://embed.sound.xyz/v1/release/eec3e02d-2382-44ba-8db9-50e6ea76591c?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
