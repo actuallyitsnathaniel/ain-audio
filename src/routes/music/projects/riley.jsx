@@ -60,6 +60,11 @@ export const Riley = ({ id }) => {
             <SoundXYZGallery>
               <SoundXYZGallery.Item
                 soundURL={
+                  "https://embed.sound.xyz/v1/release/93620f66-e9b6-4bd0-a83c-498eb2f191e9?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                soundURL={
                   "https://embed.sound.xyz/v1/release/921354c1-e2a0-4d2f-bba3-76915cc6c45f?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
                 }
               />
