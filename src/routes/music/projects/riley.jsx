@@ -1,8 +1,10 @@
+import React from "react";
 import { PropTypes } from "prop-types";
 
 import { Project } from "/src/components/project";
 import Discography from "/src/components/discography";
 import SoundXYZGallery from "../../../components/sound-xyz-gallery";
+import { soundXyzReleases } from "../../../api/getSoundXYZdata";
 
 import rileyPfp from "/src/assets/images/projects/riley/riley.jpg";
 import losingHearts from "/src/assets/images/projects/riley/Singles_EPs/losing-hearts.jpg";
@@ -14,6 +16,14 @@ export const Riley = ({ id }) => {
   const Title = (
     <Project.Title artistName="riley" subtitle="artist" {...{ id }} />
   );
+
+  let rileyReleases = [];
+
+  soundXyzReleases.map((release) => {
+    if (release.node.artist.name === "riley" || release.node.title === "better")
+      rileyReleases.push(release.node.id);
+  });
+
   return (
     <div {...{ id }}>
       <Project.ProfilePic {...{ id }} image={rileyPfp} titleComponent={Title} />
@@ -58,21 +68,13 @@ export const Riley = ({ id }) => {
         works={
           <>
             <SoundXYZGallery>
-              <SoundXYZGallery.Item
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/93620f66-e9b6-4bd0-a83c-498eb2f191e9?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/921354c1-e2a0-4d2f-bba3-76915cc6c45f?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/324ade13-93db-4f39-8f38-bb99b6085e07?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
+              {React.Children.map(rileyReleases, (release) => {
+                return (
+                  <SoundXYZGallery.Item
+                    soundURL={`https://embed.sound.xyz/v1/release/${release}?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound`}
+                  />
+                );
+              })}
             </SoundXYZGallery>
             <h1 className="p-10 pb-5">general releases</h1>
             <Discography>

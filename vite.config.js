@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import svgr from "vite-plugin-svgr";
 import { ViteImageOptimizer } from "vite-plugin-image-optimizer";
 import preload from "vite-plugin-preload";
+import graphqlLoader from "vite-plugin-graphql-loader";
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -71,6 +72,7 @@ export default defineConfig({
       },
     }),
     preload(),
+    graphqlLoader(),
   ],
   build: {
     commonjsOptions: {

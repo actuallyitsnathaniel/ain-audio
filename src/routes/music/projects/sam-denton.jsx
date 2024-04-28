@@ -1,8 +1,11 @@
+import React from "react";
 import { PropTypes } from "prop-types";
 
 import { Project } from "/src/components/project";
 import Discography from "/src/components/discography";
 import SoundXYZGallery from "/src/components/sound-xyz-gallery";
+
+import { soundXyzReleases } from "../../../api/getSoundXYZdata";
 
 import samPfp from "/src/assets/images/projects/sam-denton/sam-denton-pfp.jpg";
 // albums
@@ -21,6 +24,13 @@ export const SamDenton = ({ id }) => {
   const Title = (
     <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
   );
+
+  let samDentonReleases = [];
+
+  soundXyzReleases.map((release) => {
+    if (release.node.artist.name === "Sam Denton")
+      samDentonReleases.push(release.node.id);
+  });
   return (
     <div {...{ id }}>
       <Project.ProfilePic {...{ id }} image={samPfp} titleComponent={Title} />
@@ -39,72 +49,13 @@ export const SamDenton = ({ id }) => {
         works={
           <>
             <SoundXYZGallery>
-              <SoundXYZGallery.Item
-                id={"first"}
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/2fdd0f42-2ae6-4905-a32c-4e947f356262?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id={"i-just-might"}
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/42fd31cd-b92d-473f-84a6-d2f140cd19dc?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id={"ulterior-motives"}
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/4f0957c2-8b67-4756-9dab-a637960c75a1?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id={"peace"}
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/c1b97a54-ab14-4ed8-a87d-6cdd599abe63?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id={"somebody-else"}
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/eec3e02d-2382-44ba-8db9-50e6ea76591c?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id="fighting"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/ab1079b9-bd21-4e9b-9a67-ba611515cde6?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id="24-hours"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/8be1f236-7a48-4363-91f4-0420ae3b16a3?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id="smoke-in-the-mirror"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/67cd627e-f87c-49d2-86c3-078cecf6e641?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id="2_09"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/6d7a7864-9d64-4166-ac38-db481c322378?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id="idkya"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/5c38d962-33d6-4df2-8c34-a9770534e76d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                id="back-to-you"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/6abc58a2-c0c3-4878-a76f-277721401ac5?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
+              {React.Children.map(samDentonReleases, (release) => {
+                return (
+                  <SoundXYZGallery.Item
+                    soundURL={`https://embed.sound.xyz/v1/release/${release}?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound`}
+                  />
+                );
+              })}
             </SoundXYZGallery>
             <h1 className="p-5 m-5">general releases</h1>
             <Discography>

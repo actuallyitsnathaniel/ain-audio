@@ -42,6 +42,12 @@ export const JohnWhite = ({ id }) => {
           <>
             <SoundXYZGallery>
               <SoundXYZGallery.Item
+                id="better"
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/6df2b4c4-6aeb-47a5-bb6c-a34b117a2ab3?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
                 soundURL={
                   "https://embed.sound.xyz/v1/release/f547e1ea-7570-48fd-b044-3fa516ba016d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
                 }
