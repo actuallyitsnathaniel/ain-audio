@@ -52,7 +52,7 @@ export const Riley = ({ id }) => {
             >
               Emmit Fenn
             </a>
-            . You&nbsp;ll notice there are general releases, and then special
+            . You&apos;ll notice there are general releases, and then special
             releases through an exclusive digital audio platform,&nbsp;
             <a
               rel="noopener noreferrer"
