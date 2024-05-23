@@ -7,7 +7,10 @@ import AboutMe from "./about-me";
 
 const Home = () => {
   return (
-    <div id="home" className="flex min-h-screen flex-col justify-center">
+    <div
+      id="home"
+      className="animate-appear flex min-h-screen flex-col justify-center"
+    >
       <h1 className="pt-20 group mx-auto duration-100 hover:scale-110 hover:text-white">
         <SocialLinks
           className={

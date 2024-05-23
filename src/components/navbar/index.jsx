@@ -71,14 +71,14 @@ export const NavBar = () => {
   const isMobile = windowDimension <= 768;
 
   return isMobile ? (
-    <div className="">
+    <>
       <div
-        className={`fixed transition-all duration-100 h-screen brightness-80 bg-gradient-to-tr from-transparent via-transparent to-emerald-950 ${
+        className={`animate-appear fixed h-screen brightness-80 bg-gradient-to-tr from-transparent via-transparent to-emerald-950 ${
           !expanded && "hidden"
         }`}
       />
       <MobileNav {...{ expanded, setExpanded }} />
-    </div>
+    </>
   ) : (
     <DesktopNav />
   );

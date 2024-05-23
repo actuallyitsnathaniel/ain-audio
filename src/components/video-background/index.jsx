@@ -13,7 +13,7 @@ const VideoBG = () => {
       muted
       playsInline
       disablePictureInPicture
-      className="min-w-full top-0 w-full h-full object-cover scale-110 fixed z-[-1] overflow-clip flex saturate-[10%] brightness-[0.15] blur-sm bg-gray-700"
+      className="min-w-full top-0 w-full h-full object-cover scale-110 fixed z-[-1] overflow-clip flex saturate-[10%] brightness-[0.15] blur-sm bg-gray-900"
     >
       <source src={rileyBGMP4} type="video/MP4" />
       {/* <source src={rileyBGWEBM} type="video/webm" /> */}
