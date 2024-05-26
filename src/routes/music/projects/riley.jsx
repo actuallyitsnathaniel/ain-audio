@@ -19,10 +19,15 @@ export const Riley = ({ id }) => {
 
   let rileyReleases = [];
 
-  soundXyzReleases.map((release) => {
-    if (release.node.artist.name === "riley" || release.node.title === "better")
-      rileyReleases.push(release.node.id);
-  });
+  import.meta.env.MODE === "development"
+    ? ""
+    : soundXyzReleases.map((release) => {
+        if (
+          release.node.artist.name === "riley" ||
+          release.node.title === "better"
+        )
+          rileyReleases.push(release.node.id);
+      });
 
   return (
     <div {...{ id }}>

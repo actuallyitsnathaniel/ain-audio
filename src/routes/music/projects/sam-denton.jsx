@@ -27,10 +27,12 @@ export const SamDenton = ({ id }) => {
 
   let samDentonReleases = [];
 
-  soundXyzReleases.map((release) => {
-    if (release.node.artist.name === "Sam Denton")
-      samDentonReleases.push(release.node.id);
-  });
+  import.meta.env.MODE === "development"
+    ? ""
+    : soundXyzReleases.map((release) => {
+        if (release.node.artist.name === "Sam Denton")
+          samDentonReleases.push(release.node.id);
+      });
   return (
     <div {...{ id }}>
       <Project.ProfilePic {...{ id }} image={samPfp} titleComponent={Title} />
