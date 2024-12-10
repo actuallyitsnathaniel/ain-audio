@@ -18,7 +18,8 @@ const Discography = ({ children }: { children: JSX.Element[] }) => {
     <div className="flex flex-col md:px-28">
       <div>
         {React.Children.toArray(children).some(
-          (child) =>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (child: any) =>
             child.props.releaseType === "single" ||
             child.props.releaseType === "ep"
         ) ? (
@@ -44,6 +45,7 @@ const Discography = ({ children }: { children: JSX.Element[] }) => {
       </div>
       <div>
         {React.Children.toArray(children).some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (child: any) => child.props.releaseType === "album"
         ) ? (
           <>
@@ -65,6 +67,7 @@ const Discography = ({ children }: { children: JSX.Element[] }) => {
       </div>
       <div>
         {React.Children.toArray(children).some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (child: any) => child.props.releaseType === "general"
         ) ? (
           <>
