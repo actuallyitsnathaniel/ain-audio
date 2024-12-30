@@ -49,8 +49,6 @@ export const Riley = ({ id }: { id: string }) => {
     <Project.Title artistName="riley" subtitle="artist" {...{ id }} />
   );
 
-  let rileyReleases = [];
-
   console.log("XYZ: ", soundXyzReleases);
   // soundXyzReleases.map((release) => {
   //   if (release.node.artist.name === "riley" || release.node.title === "better")
