@@ -39,25 +39,6 @@ export const JohnWhite = ({ id }: { id: string }) => {
         }
         works={
           <>
-            <SoundXYZGallery>
-              <SoundXYZGallery.Item
-                id="better"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/6df2b4c4-6aeb-47a5-bb6c-a34b117a2ab3?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/f547e1ea-7570-48fd-b044-3fa516ba016d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/0c5ac231-2ae7-4118-9531-2b36056b66a0?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-            </SoundXYZGallery>
-            <h1 className="p-5 m-5">general releases</h1>
             <Discography>
               <Discography.Disc
                 releaseType="single"
@@ -118,6 +99,24 @@ export const JohnWhite = ({ id }: { id: string }) => {
                 youtubeLink={"https://youtu.be/yktwodhhm0o"}
               />
             </Discography>
+            <SoundXYZGallery>
+              <SoundXYZGallery.Item
+                id="better"
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/6df2b4c4-6aeb-47a5-bb6c-a34b117a2ab3?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/f547e1ea-7570-48fd-b044-3fa516ba016d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+              <SoundXYZGallery.Item
+                soundURL={
+                  "https://embed.sound.xyz/v1/release/0c5ac231-2ae7-4118-9531-2b36056b66a0?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
+                }
+              />
+            </SoundXYZGallery>
           </>
         }
       />

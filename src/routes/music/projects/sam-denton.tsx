@@ -42,7 +42,7 @@ export const SamDenton = ({ id }: { id: string }) => {
       try {
         const releases: Release[] = await soundXyzReleases;
         const filteredReleases = releases
-          .filter((release) => release.node.artist.name === "sam denton")
+          .filter((release) => release.node.artist.name === "Sam Denton")
           .map((release) => release.node.id);
         setSamDentonReleases(filteredReleases);
       } catch (error) {
@@ -69,15 +69,6 @@ export const SamDenton = ({ id }: { id: string }) => {
         }
         works={
           <>
-            <SoundXYZGallery>
-              {samDentonReleases.map((releaseId: string) => (
-                <SoundXYZGallery.Item
-                  key={releaseId}
-                  soundURL={`https://embed.sound.xyz/v1/release/${releaseId}?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound`}
-                />
-              ))}
-            </SoundXYZGallery>
-            <h1 className="p-5 m-5">general releases</h1>
             <Discography>
               <Discography.Disc
                 releaseType="ep"
@@ -183,6 +174,14 @@ export const SamDenton = ({ id }: { id: string }) => {
                 youtubeLink={"https://www.youtube.com/watch?v=5Cqq5n7153A"}
               />
             </Discography>
+            <SoundXYZGallery>
+              {samDentonReleases.map((releaseId: string) => (
+                <SoundXYZGallery.Item
+                  key={releaseId}
+                  soundURL={`https://embed.sound.xyz/v1/release/${releaseId}?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound`}
+                />
+              ))}
+            </SoundXYZGallery>
           </>
         }
       />

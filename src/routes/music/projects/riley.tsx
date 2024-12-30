@@ -97,15 +97,6 @@ export const Riley = ({ id }: { id: string }) => {
         }
         works={
           <>
-            <SoundXYZGallery>
-              {rileyReleases.map((release) => (
-                <SoundXYZGallery.Item
-                  key={release}
-                  soundURL={`https://embed.sound.xyz/v1/release/${release}?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound`}
-                />
-              ))}
-            </SoundXYZGallery>
-            <h1 className="p-10 pb-5">general releases</h1>
             <Discography>
               <Discography.Disc
                 artwork={starsRemix}
@@ -144,6 +135,14 @@ export const Riley = ({ id }: { id: string }) => {
                 soundcloudLink="https://on.soundcloud.com/qEY7u"
               />
             </Discography>
+            <SoundXYZGallery>
+              {rileyReleases.map((release) => (
+                <SoundXYZGallery.Item
+                  key={release}
+                  soundURL={`https://embed.sound.xyz/v1/release/${release}?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound`}
+                />
+              ))}
+            </SoundXYZGallery>
           </>
         }
       ></Project>
