@@ -12,7 +12,7 @@ import itinerary from "/src/assets/images/projects/ryland/Singles_EPs/Itinerary-
 import youshouldknow from "/src/assets/images/projects/ryland/Singles_EPs/You-Should-Know-EP.jpeg";
 
 // Singles
-import iblfawn from "/src/assets/images/projects/ryland/Singles_EPs/I'veBeenLooking-Single_600x600bb.jpeg";
+import iblfawn from "/src/assets/images/projects/ryland/Singles_EPs/IveBeenLooking-Single_600x600bb.jpeg";
 import karma from "/src/assets/images/projects/ryland/Singles_EPs/Karma-Single_600x600bb.jpeg";
 import stairwell from "/src/assets/images/projects/ryland/Singles_EPs/Stairwell-Single_600x600bb.jpeg";
 import talking from "/src/assets/images/projects/ryland/Singles_EPs/Talking-Single_600x600bb.jpeg";
