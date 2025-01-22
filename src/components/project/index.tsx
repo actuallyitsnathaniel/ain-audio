@@ -19,7 +19,7 @@ const ProfilePic = ({
       <img
         src={image}
         alt="profile-pic-alt"
-        className="transition-scale max-h-72 min-h-60 object-contain rounded-xl"
+        className="transition-scale max-h-64 object-contain rounded-xl"
       />
       <div className="flex transition-translate duration-75 md:group-hover:translate-y-0.5 mx-auto">
         {titleComponent}
