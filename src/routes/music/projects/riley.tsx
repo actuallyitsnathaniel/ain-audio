@@ -33,7 +33,7 @@ export const Riley = ({ id }: { id: string }) => {
           .filter(
             (release) =>
               release.node.artist.name === "riley" ||
-              release.node.title === "better"
+              release.node.artist.name === "Sam Denton"
           )
           .map((release) => release.node.id);
         setRileyReleases(filteredReleases);
@@ -49,7 +49,7 @@ export const Riley = ({ id }: { id: string }) => {
     <Project.Title artistName="riley" subtitle="artist" {...{ id }} />
   );
 
-  console.log("XYZ: ", soundXyzReleases);
+  console.log("XYZ: ", rileyReleases);
   // soundXyzReleases.map((release) => {
   //   if (release.node.artist.name === "riley" || release.node.title === "better")
   //     rileyReleases.push(release.node.id);
