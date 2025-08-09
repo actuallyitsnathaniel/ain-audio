@@ -6,6 +6,11 @@ import Secret from "../src/routes/secret";
 import ErrorPage from "../src/error-page";
 import "/src/index.css";
 
+// Mobile debugging - log device and browser info
+console.log('User Agent:', navigator.userAgent);
+console.log('Screen:', { width: screen.width, height: screen.height });
+console.log('Viewport:', { width: window.innerWidth, height: window.innerHeight });
+
 const router = createBrowserRouter([
   {
     path: "/",
