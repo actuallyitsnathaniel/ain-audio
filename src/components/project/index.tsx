@@ -47,7 +47,7 @@ const Title = memo(({
   );
 });
 
-export const Project = memo(({
+const ProjectComponent = memo(({
   id,
   works,
   description,
@@ -106,6 +106,11 @@ export const Project = memo(({
     </div>
   );
 });
+
+export const Project = ProjectComponent as typeof ProjectComponent & {
+  Title: typeof Title;
+  ProfilePic: typeof ProfilePic;
+};
 
 const ProjectsToggleButton = () => {
   const isFocused = location.hash !== "/";

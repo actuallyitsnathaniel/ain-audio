@@ -10,6 +10,7 @@ import portrait from "/src/assets/images/projects/ryland/LPs/Portrait-LP_600x600
 import lashingOut from "/src/assets/images/projects/ryland/Singles_EPs/Lashing-Out-EP_600x600bb.jpeg";
 import itinerary from "/src/assets/images/projects/ryland/Singles_EPs/Itinerary-EP_600x600bb.jpeg";
 import youshouldknow from "/src/assets/images/projects/ryland/Singles_EPs/You-Should-Know-EP.jpeg";
+import gonnaBeFine from "/src/assets/images/projects/ryland/Singles_EPs/gonna-be-fine-1000x1000bb.jpeg";
 
 // Singles
 import iblfawn from "/src/assets/images/projects/ryland/Singles_EPs/IveBeenLooking-Single_600x600bb.jpeg";
@@ -49,6 +50,21 @@ export const Ryland = ({ id }: { id: string }) => {
         }
         works={
           <Discography>
+            <Discography.Disc
+              releaseType="ep"
+              artwork={gonnaBeFine}
+              title="I'm Gonna Be Fine - EP"
+              appleMusicLink={
+                "https://music.apple.com/us/album/im-gonna-be-fine-ep/1776148719"
+              }
+              spotifyLink={
+                "https://open.spotify.com/album/5Wsxv4b0DcdJwxWQhJoslz"
+              }
+              tidalLink={"https://tidal.com/browse/album/395421548"}
+              youtubeLink={
+                "https://www.youtube.com/playlist?list=OLAK5uy_lSjvjAEPkMEwrKBp3QPZcf_2BkJ1RPbLI"
+              }
+            />
             <Discography.Disc
               releaseType="ep"
               artwork={youshouldknow}

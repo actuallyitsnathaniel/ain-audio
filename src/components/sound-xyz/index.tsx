@@ -55,7 +55,7 @@ const Item = memo(({ soundURL, id }: { soundURL: string; id?: string }) => {
 //   return <h2>⏲ Loading...</h2>;
 // };
 
-const SoundXYZGallery = ({ children }: { children: JSX.Element[] }) => {
+const SoundXYZGalleryComponent = ({ children }: { children: JSX.Element[] }) => {
   return (
     <div id="sound-xyz-releases" className="p-5 md:px-28">
       <h1 className="p-5">digital collectibles</h1>
@@ -69,6 +69,10 @@ const SoundXYZGallery = ({ children }: { children: JSX.Element[] }) => {
       </div>
     </div>
   );
+};
+
+const SoundXYZGallery = SoundXYZGalleryComponent as typeof SoundXYZGalleryComponent & {
+  Item: typeof Item;
 };
 
 SoundXYZGallery.Item = Item;
