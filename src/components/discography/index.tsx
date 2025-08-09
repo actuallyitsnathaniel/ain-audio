@@ -1,9 +1,9 @@
 import Disc from "./disc";
 
-import React, { useState } from "react";
+import React, { useState, memo } from "react";
 import { motion } from "framer-motion";
 
-const Discography = ({ children }: { children: JSX.Element[] }) => {
+const Discography = memo(({ children }: { children: JSX.Element[] }) => {
   const itemVariants = {
     visible: {
       opacity: 1,
@@ -86,7 +86,7 @@ const Discography = ({ children }: { children: JSX.Element[] }) => {
       </div>
     </div>
   );
-};
+});
 
 Discography.Disc = Disc;
 

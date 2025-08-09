@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import { Link, useLocation } from "react-router-dom";
 
-const ProfilePic = ({
+const ProfilePic = memo(({
   id,
   image,
   titleComponent,
@@ -26,9 +26,9 @@ const ProfilePic = ({
       </div>
     </Link>
   );
-};
+});
 
-const Title = ({
+const Title = memo(({
   artistName,
   id,
   subtitle,
@@ -45,9 +45,9 @@ const Title = ({
       </p>
     </div>
   );
-};
+});
 
-export const Project = ({
+export const Project = memo(({
   id,
   works,
   description,
@@ -105,7 +105,7 @@ export const Project = ({
       </div>
     </div>
   );
-};
+});
 
 const ProjectsToggleButton = () => {
   const isFocused = location.hash !== "/";
