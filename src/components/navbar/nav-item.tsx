@@ -13,7 +13,15 @@ const HandleURL = (link: string, location: string) => {
   }
 };
 
-export const NavItem = ({ link, text }: { link: string; text: string }) => {
+export const NavItem = ({ 
+  link, 
+  text, 
+  onItemClick 
+}: { 
+  link: string; 
+  text: string; 
+  onItemClick?: () => void;
+}) => {
   return (
     <li className="transition-all duration-100 hover:scale-105">
       <Link
@@ -21,6 +29,7 @@ export const NavItem = ({ link, text }: { link: string; text: string }) => {
         to={link}
         onClick={() => {
           HandleURL(link, location.hash);
+          onItemClick?.();
         }}
       >
         <span>
