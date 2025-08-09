@@ -1,8 +1,23 @@
-# React + Vite
+# actuallyitsnathaniel audio portfolio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+![Audio Portfolio Screenshot](./public/ain-screengrab.jpg)
 
-Currently, two official plugins are available:
+A modern audio portfolio website showcasing music and sound projects.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Tech Stack
+
+- **[React](https://react.dev/)** - Frontend framework
+- **[Vite](https://vite.dev/)** - Build tool and development server
+- **[TailwindCSS](https://tailwindcss.com/)** - Utility-first CSS framework
+- **[Vercel](https://vercel.com/)** - Deployment and hosting
+
+## Development
+
+```bash
+npm install
+npm run dev
+```
+
+## Deployment
+
+Automatically deployed to Vercel on push to main branch.
