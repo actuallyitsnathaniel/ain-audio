@@ -10,6 +10,7 @@ import losingHearts from "/src/assets/images/projects/riley/Singles_EPs/losing-h
 import iWas9Remix from "/src/assets/images/projects/riley/Singles_EPs/i-was-9-remix.png";
 import better from "/src/assets/images/projects/riley/Singles_EPs/better.jpeg";
 import starsRemix from "/src/assets/images/projects/riley/Singles_EPs/stars-remix.jpeg";
+import withTheRain from "/src/assets/images/projects/riley/Singles_EPs/with-the-rain.jpeg";
 
 // Define the type for a release
 interface Release {
@@ -98,6 +99,15 @@ export const Riley = ({ id }: { id: string }) => {
         works={
           <>
             <Discography>
+              <Discography.Disc
+                artwork={withTheRain}
+                releaseType="single"
+                title="With the Rain"
+                appleMusicLink="https://music.apple.com/us/album/with-the-rain-feat-riley-single/1790476408"
+                spotifyLink="https://open.spotify.com/track/2SaapkvKlKTbhrcQpROGAT?si=6728999cee3d4cc7"
+                tidalLink=""
+                youtubeLink="https://www.youtube.com/watch?v=s5ZICMn1k80"
+              />
               <Discography.Disc
                 artwork={starsRemix}
                 releaseType="single"
