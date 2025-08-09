@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo } from "react";
 
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
 import SoundXYZGallery from "../../../components/sound-xyz";
-import { soundXyzReleases } from "../../../api/getSoundXYZdata";
+import { getSoundXyzReleases } from "../../../api/getSoundXYZdata";
 
 import rileyPfp from "/src/assets/images/projects/riley/riley.jpg";
 import losingHearts from "/src/assets/images/projects/riley/Singles_EPs/losing-hearts.jpg";
@@ -23,13 +23,13 @@ interface Release {
   };
 }
 
-export const Riley = ({ id }: { id: string }) => {
+export const Riley = memo(({ id }: { id: string }) => {
   const [rileyReleases, setRileyReleases] = useState<string[]>([]);
 
   useEffect(() => {
     const fetchReleases = async () => {
       try {
-        const releases: Release[] = await soundXyzReleases;
+        const releases: Release[] = await getSoundXyzReleases();
         const filteredReleases = releases
           .filter(
             (release) =>
@@ -49,12 +49,6 @@ export const Riley = ({ id }: { id: string }) => {
   const Title = (
     <Project.Title artistName="riley" subtitle="artist" {...{ id }} />
   );
-
-  console.log("XYZ: ", rileyReleases);
-  // soundXyzReleases.map((release) => {
-  //   if (release.node.artist.name === "riley" || release.node.title === "better")
-  //     rileyReleases.push(release.node.id);
-  // });
 
   return (
     <div {...{ id }}>
@@ -158,4 +152,4 @@ export const Riley = ({ id }: { id: string }) => {
       ></Project>
     </div>
   );
-};
+});

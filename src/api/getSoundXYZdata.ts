@@ -75,11 +75,13 @@ query AllArtistReleases {
  * @property {PageInfo} data.artist.releases.pageInfo - Pagination information.
  */
 
+let cachedReleases: Promise<ReleaseEdge[]> | null = null;
+
 /**
- * Fetches sound.xyz songs.
+ * Fetches sound.xyz songs with caching.
  * @returns {Promise<ReleaseEdge[]>} A promise that resolves to an array of releases.
  */
-const getSoundXYZSongs = async () => {
+const getSoundXYZSongs = async (): Promise<ReleaseEdge[]> => {
   try {
     console.log("DOES THIS WORK: ", sound_xyz_url);
     const response = await fetch(sound_xyz_url, {
@@ -99,5 +101,16 @@ const getSoundXYZSongs = async () => {
   }
 };
 
-/** @type {Promise<ReleaseEdge[]>} */
-export const soundXyzReleases = getSoundXYZSongs();
+/**
+ * Gets cached sound.xyz releases or fetches them if not cached.
+ * @returns {Promise<ReleaseEdge[]>} A promise that resolves to an array of releases.
+ */
+export const getSoundXyzReleases = (): Promise<ReleaseEdge[]> => {
+  if (!cachedReleases) {
+    cachedReleases = getSoundXYZSongs();
+  }
+  return cachedReleases;
+};
+
+/** @deprecated Use getSoundXyzReleases() instead */
+export const soundXyzReleases = getSoundXyzReleases();
