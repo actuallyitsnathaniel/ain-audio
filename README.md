@@ -1,6 +1,6 @@
 # actuallyitsnathaniel audio portfolio
 
-![Audio Portfolio Screenshot](./public/ain-screengrab.jpg)
+![Audio Portfolio Demo](./public/ain-site.gif)
 
 A modern audio portfolio website showcasing music and sound projects.
 
