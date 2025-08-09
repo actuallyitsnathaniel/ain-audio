@@ -3,12 +3,12 @@ import { useState, useEffect, SetStateAction, Dispatch } from "react";
 import { NavItem } from "./nav-item";
 import { MobileNavButton } from "./mobile-nav-button";
 
-const NavList = () => {
+const NavList = ({ onItemClick }: { onItemClick?: () => void }) => {
   return (
     <>
-      <NavItem text="Home" link={`#home`} />
-      <NavItem text="Projects" link={`#projects`} />
-      <NavItem text="Press" link={`#press`} />
+      <NavItem text="Home" link={`#home`} onItemClick={onItemClick} />
+      <NavItem text="Projects" link={`#projects`} onItemClick={onItemClick} />
+      <NavItem text="Press" link={`#press`} onItemClick={onItemClick} />
     </>
   );
 };
@@ -34,13 +34,16 @@ const MobileNav = ({
     <nav
       className={`fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow `}
     >
+      {/* Always visible gradient background */}
+      <div className="fixed top-0 left-0 w-full h-24 bg-gradient-to-b from-black via-black/50 to-transparent pointer-events-none z-0" />
+      
       <div
-        className={`fixed origin-left transition-transform duration-200 flex flex-col backdrop-blur-lg bg-black/60 h-screen w-screen ${
+        className={`fixed origin-left transition-transform duration-200 flex flex-col backdrop-blur-lg bg-black/60 h-screen w-screen z-10 ${
           expanded ? "translate-x-[0%]" : "translate-x-[-100%]"
         }`}
       >
         <ul className="flex flex-col h-[90%] justify-evenly text-center">
-          <NavList />
+          <NavList onItemClick={() => setExpanded(false)} />
         </ul>
       </div>
       <MobileNavButton {...{ expanded, setExpanded }} />
