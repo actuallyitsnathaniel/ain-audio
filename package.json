@@ -18,15 +18,11 @@
     "framer-motion": "^11.13.5",
     "from": "^0.1.7",
     "nodemon": "^3.1.4",
-    "preload": "^0.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.18.0",
     "typeit-react": "2.6.4",
-    "vite-plugin-graphql-loader": "^3.0.1",
-    "vite-plugin-image-optimizer": "^1.1.7",
-    "vite-plugin-preload": "^0.3.1",
-    "vite-plugin-svgr": "^4.5.0"
+    "vite-plugin-image-optimizer": "^1.1.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

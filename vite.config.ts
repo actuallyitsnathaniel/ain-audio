@@ -1,8 +1,6 @@
 import { defineConfig, loadEnv, UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import svgr from "vite-plugin-svgr";
 import { ViteImageOptimizer } from "vite-plugin-image-optimizer";
-import preload from "vite-plugin-preload";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -14,7 +12,6 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
-      svgr(),
       ViteImageOptimizer({
         test: /\.(jpe?g|png|gif|tiff|webp|svg|avif)$/i,
         exclude: undefined,
@@ -70,7 +67,6 @@ export default defineConfig(({ mode }) => {
           lossless: true,
         },
       }),
-      preload(),
     ],
     build: {
       commonjsOptions: {
