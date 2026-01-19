@@ -22,7 +22,7 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-router-dom": "^7.12.0",
-    "typeit-react": "2.6.4",
+    "typeit-react": "2.7.8",
     "vite-plugin-image-optimizer": "^1.1.7"
   },
   "devDependencies": {
