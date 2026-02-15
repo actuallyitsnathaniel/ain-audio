@@ -1,5 +1,6 @@
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
+import SEO from "../../../components/seo";
 
 import platinumRoses from "/src/assets/images/projects/platinum-roses/platinum-roses.jpeg";
 import oneThingIKnow from "/src/assets/images/projects/platinum-roses/discography/one-thing-i-know-single.jpg";
@@ -15,6 +16,20 @@ export const PlatinumRoses = ({ id }: { id: string }) => {
   );
   return (
     <div {...{ id }}>
+      <SEO
+        title="Platinum Roses - Songwriter/Producer Duo"
+        description="Platinum Roses electronic music duo featuring John White. All tracks produced, mixed, and mastered by Nathaniel Bowman."
+        url="https://audio.actuallyitsnathaniel.com/#projects/platinum-roses"
+        type="music.album"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "MusicGroup",
+          "name": "Platinum Roses",
+          "description": "Electronic music songwriter/producer duo with production by actually-its-nathaniel.",
+          "genre": "Electronic",
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/platinum-roses"
+        }}
+      />
       <Project.ProfilePic
         {...{ id }}
         image={platinumRoses}

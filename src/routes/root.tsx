@@ -14,15 +14,16 @@ const Root = () => {
       <SEO
         title="actually-its-nathaniel - Music Producer & Audio Engineer"
         description="Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations."
-        url="https://actuallyitsnathaniel.com"
+        url="https://audio.actuallyitsnathaniel.com"
         type="profile"
         jsonLd={{
           "@context": "https://schema.org",
           "@type": "Person",
           "name": "Nathaniel Bowman",
           "alternateName": "actually-its-nathaniel",
-          "url": "https://actuallyitsnathaniel.com",
+          "url": "https://audio.actuallyitsnathaniel.com",
           "jobTitle": "Music Producer & Audio Engineer",
+          "knowsAbout": ["Music Production", "Audio Engineering", "Mixing", "Mastering", "Sound Design"],
           "sameAs": [
             "https://instagram.com/actuallyitsnathaniel",
             "https://www.youtube.com/@actuallyitsnathaniel",

@@ -1,39 +1,87 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://actuallyitsnathaniel.com</loc>
-    <lastmod>2025-11-01</lastmod>
+    <loc>https://audio.actuallyitsnathaniel.com</loc>
+    <lastmod>2026-02-15</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://actuallyitsnathaniel.com/#home</loc>
-    <lastmod>2025-11-01</lastmod>
+    <loc>https://audio.actuallyitsnathaniel.com/#home</loc>
+    <lastmod>2026-02-15</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://actuallyitsnathaniel.com/#about-me</loc>
-    <lastmod>2025-11-01</lastmod>
+    <loc>https://audio.actuallyitsnathaniel.com/#about-me</loc>
+    <lastmod>2026-02-15</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://actuallyitsnathaniel.com/#projects</loc>
-    <lastmod>2025-11-01</lastmod>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects</loc>
+    <lastmod>2026-02-15</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://actuallyitsnathaniel.com/#press</loc>
-    <lastmod>2025-11-01</lastmod>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/riley</loc>
+    <lastmod>2026-02-15</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
+    <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://actuallyitsnathaniel.com/secret</loc>
-    <lastmod>2025-11-01</lastmod>
-    <changefreq>yearly</changefreq>
-    <priority>0.3</priority>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/adidas-messi</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/sam-denton</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/ryland</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/aubit-sound</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/john-white</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/brand-x</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/krptk</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#projects/platinum-roses</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://audio.actuallyitsnathaniel.com/#press</loc>
+    <lastmod>2026-02-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
   </url>
 </urlset>

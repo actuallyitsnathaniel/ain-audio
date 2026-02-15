@@ -2,6 +2,7 @@ import { useRef, memo } from "react";
 import { useLocation } from "react-router-dom";
 
 import { Project } from "../../../components/project";
+import SEO from "../../../components/seo";
 
 import adidasMessi from "/src/assets/images/projects/adidas-messi/adidas-messi-sq.jpeg";
 
@@ -17,6 +18,23 @@ export const AdidasMessi = memo(({ id }: { id: string }) => {
 
   return (
     <div {...{ id }}>
+      <SEO
+        title="Adidas x Messi - Marketing Campaign"
+        description="Sound design work for the Adidas marketing campaign welcoming Lionel Messi to Inter Miami. Audio production by Nathaniel Bowman."
+        url="https://audio.actuallyitsnathaniel.com/#projects/adidas-messi"
+        type="website"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "CreativeWork",
+          "name": "Adidas x Messi Marketing Campaign",
+          "description": "Sound design for the Adidas marketing campaign welcoming Lionel Messi to Inter Miami.",
+          "creator": {
+            "@type": "Person",
+            "name": "Nathaniel Bowman"
+          },
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/adidas-messi"
+        }}
+      />
       <Project.ProfilePic
         {...{ id }}
         image={adidasMessi}

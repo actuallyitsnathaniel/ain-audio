@@ -1,6 +1,7 @@
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
 import SoundXYZGallery from "../../../components/sound-xyz";
+import SEO from "../../../components/seo";
 
 import johnWhitePfp from "/src/assets/images/projects/john-white/johnWhitePfp.jpeg";
 
@@ -21,6 +22,19 @@ export const JohnWhite = ({ id }: { id: string }) => {
   );
   return (
     <div {...{ id }}>
+      <SEO
+        title="John White - Singer/Songwriter/Producer"
+        description="John White collaboration with Nathaniel Bowman. Production, mixing, remixing, and mastering services for singer/songwriter/producer."
+        url="https://audio.actuallyitsnathaniel.com/#projects/john-white"
+        type="music.album"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "MusicGroup",
+          "name": "John White",
+          "description": "Singer/songwriter/producer collaboration with actually-its-nathaniel on production, mixing, and mastering.",
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/john-white"
+        }}
+      />
       <Project.ProfilePic
         {...{ id }}
         image={johnWhitePfp}

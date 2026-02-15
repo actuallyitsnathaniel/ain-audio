@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 
 import { Project } from "../../../components/project";
+import SEO from "../../../components/seo";
 import Discography from "../../../components/discography";
 import SoundXYZGallery from "../../../components/sound-xyz";
 
@@ -55,6 +56,19 @@ export const SamDenton = ({ id }: { id: string }) => {
 
   return (
     <div {...{ id }}>
+      <SEO
+        title="Sam Denton - Singer/Songwriter"
+        description="Sam Denton is a talented singer/songwriter. All works produced, mixed, and mastered by Nathaniel Bowman (actually-its-nathaniel)."
+        url="https://audio.actuallyitsnathaniel.com/#projects/sam-denton"
+        type="music.album"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "MusicGroup",
+          "name": "Sam Denton",
+          "description": "Singer/songwriter collaboration with actually-its-nathaniel on production, mixing, and mastering.",
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/sam-denton"
+        }}
+      />
       <Project.ProfilePic {...{ id }} image={samPfp} titleComponent={Title} />
       <Project
         {...{ id }}

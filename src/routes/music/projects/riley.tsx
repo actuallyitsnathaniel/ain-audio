@@ -1,6 +1,7 @@
 import { useEffect, useState, memo } from "react";
 
 import { Project } from "../../../components/project";
+import SEO from "../../../components/seo";
 import Discography from "../../../components/discography";
 import SoundXYZGallery from "../../../components/sound-xyz";
 import { getSoundXyzReleases } from "../../../api/getSoundXYZdata";
@@ -52,6 +53,19 @@ export const Riley = memo(({ id }: { id: string }) => {
 
   return (
     <div {...{ id }}>
+      <SEO
+        title="riley - Artist Project"
+        description="riley is Nathaniel Bowman's personal passion project. Produced, mixed, and mastered original music ranging from heavy bass to somber songwriting."
+        url="https://audio.actuallyitsnathaniel.com/#projects/riley"
+        type="music.album"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "MusicGroup",
+          "name": "riley",
+          "description": "Personal passion project by actually-its-nathaniel featuring original music production, mixing, and mastering.",
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/riley"
+        }}
+      />
       <Project.ProfilePic {...{ id }} image={rileyPfp} titleComponent={Title} />
       <Project
         {...{ id }}

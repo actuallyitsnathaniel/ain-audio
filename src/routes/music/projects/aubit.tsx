@@ -1,5 +1,6 @@
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
+import SEO from "../../../components/seo";
 
 import aubitLogo from "/src/assets/images/projects/aubit-sound/aubit-logo.jpg";
 
@@ -30,6 +31,19 @@ export const AubitSound = ({ id }: { id: string }) => {
   );
   return (
     <div {...{ id }}>
+      <SEO
+        title="Aubit Sound - Sample Library"
+        description="Producer packs, presets, loops, and one-shots created by Nathaniel Bowman for Aubit Sound. Best-sellers used by Cheat Codes, U2, and more."
+        url="https://audio.actuallyitsnathaniel.com/#projects/aubit-sound"
+        type="website"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "Organization",
+          "name": "Aubit Sound",
+          "description": "Sample and sound library company featuring producer packs created by actually-its-nathaniel.",
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/aubit-sound"
+        }}
+      />
       <Project.ProfilePic
         {...{ id }}
         image={aubitLogo}

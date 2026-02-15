@@ -1,5 +1,6 @@
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
+import SEO from "../../../components/seo";
 
 import brandXBlue from "/src/assets/images/projects/brandx/brand-x-blue.jpg";
 
@@ -13,6 +14,19 @@ export const BrandX = ({ id }: { id: string }) => {
   );
   return (
     <div {...{ id }}>
+      <SEO
+        title="Brand X Music - Sync/Label"
+        description="Songs and demos produced for Brand X Music catalogue. Music for film scores, commercials, and video games."
+        url="https://audio.actuallyitsnathaniel.com/#projects/brand-x"
+        type="website"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "Organization",
+          "name": "Brand X Music",
+          "description": "Sync licensing and music library featuring production work by actually-its-nathaniel.",
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/brand-x"
+        }}
+      />
       <Project.ProfilePic
         {...{ id }}
         image={brandXBlue}

@@ -1,5 +1,6 @@
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
+import SEO from "../../../components/seo";
 
 // import krptkLogo from "/src/assets/images/projects/krptk/krptk_logo.jpg";
 import krptkPfp from "/src/assets/images/projects/krptk/krptk_pfp.jpg";
@@ -15,6 +16,20 @@ export const KRPTK = ({ id }: { id: string }) => {
   );
   return (
     <div id="krptk">
+      <SEO
+        title="KRPTK - Singer/Songwriter"
+        description="KRPTK is a Korean American R&B/Hip Hop musician and visual artist. All songs produced, mixed, and mastered by Nathaniel Bowman."
+        url="https://audio.actuallyitsnathaniel.com/#projects/krptk"
+        type="music.album"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "MusicGroup",
+          "name": "KRPTK",
+          "description": "Korean American R&B/Hip Hop musician with production by actually-its-nathaniel.",
+          "genre": ["R&B", "Hip Hop"],
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/krptk"
+        }}
+      />
       <Project.ProfilePic {...{ id }} image={krptkPfp} titleComponent={Title} />
       <Project
         {...{ id }}

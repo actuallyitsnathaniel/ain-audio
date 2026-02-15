@@ -1,5 +1,6 @@
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
+import SEO from "../../../components/seo";
 
 import rylandPfp from "/src/assets/images/projects/ryland/ryland-bed.png";
 
@@ -22,6 +23,19 @@ export const Ryland = ({ id }: { id: string }) => {
   const Title = <Project.Title artistName={"Ryland"} subtitle="band" />;
   return (
     <div {...{ id }}>
+      <SEO
+        title="Ryland - Band"
+        description="Ryland is a five-piece band making music since 2019. Nathaniel contributes synths, samples, and background vocals."
+        url="https://audio.actuallyitsnathaniel.com/#projects/ryland"
+        type="music.album"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "MusicGroup",
+          "name": "Ryland",
+          "description": "Five-piece band featuring synths, samples, and background vocals by actually-its-nathaniel.",
+          "url": "https://audio.actuallyitsnathaniel.com/#projects/ryland"
+        }}
+      />
       <Project.ProfilePic
         {...{ id }}
         image={rylandPfp}

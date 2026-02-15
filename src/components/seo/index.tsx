@@ -12,8 +12,8 @@ interface SEOProps {
 const SEO = ({
   title = "actually-its-nathaniel - Music Producer & Audio Engineer",
   description = "Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations.",
-  image = "https://actuallyitsnathaniel.com/og-image.png",
-  url = "https://actuallyitsnathaniel.com",
+  image = "https://audio.actuallyitsnathaniel.com/og-image.png",
+  url = "https://audio.actuallyitsnathaniel.com",
   type = "website",
   jsonLd,
 }: SEOProps) => {
