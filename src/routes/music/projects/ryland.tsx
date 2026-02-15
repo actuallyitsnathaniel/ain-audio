@@ -19,14 +19,14 @@ import karma from "/src/assets/images/projects/ryland/Singles_EPs/Karma-Single_6
 import stairwell from "/src/assets/images/projects/ryland/Singles_EPs/Stairwell-Single_600x600bb.jpeg";
 import talking from "/src/assets/images/projects/ryland/Singles_EPs/Talking-Single_600x600bb.jpeg";
 
-export const Ryland = ({ id }: { id: string }) => {
+export const Ryland = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const Title = <Project.Title artistName={"Ryland"} subtitle="band" />;
   return (
     <div {...{ id }}>
       <SEO
         title="Ryland - Band"
         description="Ryland is a five-piece band making music since 2019. Nathaniel contributes synths, samples, and background vocals."
-        url="https://audio.actuallyitsnathaniel.com/#projects/ryland"
+        url="https://audio.actuallyitsnathaniel.com/projects/ryland"
         type="music.album"
         jsonLd={{
           "@context": "https://schema.org",
@@ -40,10 +40,12 @@ export const Ryland = ({ id }: { id: string }) => {
         {...{ id }}
         image={rylandPfp}
         titleComponent={Title}
+        isStandalone={isStandalone}
       />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         // TODO: description, socials
         description={
           <>

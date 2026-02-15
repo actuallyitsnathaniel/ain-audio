@@ -13,7 +13,7 @@ import starsRemix from "/src/assets/images/projects/john-white/Singles_EPs/stars
 import whoeverYouWantToBeSingle from "/src/assets/images/projects/john-white/Singles_EPs/whoever_you_want_to_be_single_600x600bb.jpeg";
 import better2021Single from "/src/assets/images/projects/john-white/Singles_EPs/better_2021_single_600x600bb.jpeg";
 
-export const JohnWhite = ({ id }: { id: string }) => {
+export const JohnWhite = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const Title = (
     <Project.Title
       artistName={"John White"}
@@ -25,7 +25,7 @@ export const JohnWhite = ({ id }: { id: string }) => {
       <SEO
         title="John White - Singer/Songwriter/Producer"
         description="John White collaboration with Nathaniel Bowman. Production, mixing, remixing, and mastering services for singer/songwriter/producer."
-        url="https://audio.actuallyitsnathaniel.com/#projects/john-white"
+        url="https://audio.actuallyitsnathaniel.com/projects/john-white"
         type="music.album"
         jsonLd={{
           "@context": "https://schema.org",
@@ -39,10 +39,12 @@ export const JohnWhite = ({ id }: { id: string }) => {
         {...{ id }}
         image={johnWhitePfp}
         titleComponent={Title}
+        isStandalone={isStandalone}
       />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         // TODO: description, socials
         description={
           <>

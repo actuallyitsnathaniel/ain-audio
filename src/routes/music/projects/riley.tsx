@@ -24,7 +24,7 @@ interface Release {
   };
 }
 
-export const Riley = memo(({ id }: { id: string }) => {
+export const Riley = memo(({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const [rileyReleases, setRileyReleases] = useState<string[]>([]);
 
   useEffect(() => {
@@ -56,20 +56,21 @@ export const Riley = memo(({ id }: { id: string }) => {
       <SEO
         title="riley - Artist Project"
         description="riley is Nathaniel Bowman's personal passion project. Produced, mixed, and mastered original music ranging from heavy bass to somber songwriting."
-        url="https://audio.actuallyitsnathaniel.com/#projects/riley"
+        url="https://audio.actuallyitsnathaniel.com/projects/riley"
         type="music.album"
         jsonLd={{
           "@context": "https://schema.org",
           "@type": "MusicGroup",
           "name": "riley",
           "description": "Personal passion project by actually-its-nathaniel featuring original music production, mixing, and mastering.",
-          "url": "https://audio.actuallyitsnathaniel.com/#projects/riley"
+          "url": "https://audio.actuallyitsnathaniel.com/projects/riley"
         }}
       />
-      <Project.ProfilePic {...{ id }} image={rileyPfp} titleComponent={Title} />
+      <Project.ProfilePic {...{ id }} image={rileyPfp} titleComponent={Title} isStandalone={isStandalone} />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         description={
           <>
             My personal passion project. Produced, mixed, and mastered by me.

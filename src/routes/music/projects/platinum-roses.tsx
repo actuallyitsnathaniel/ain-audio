@@ -7,7 +7,7 @@ import oneThingIKnow from "/src/assets/images/projects/platinum-roses/discograph
 import whatdIDo from "/src/assets/images/projects/platinum-roses/discography/whatd-i-do-single.jpg";
 import contemplate from "/src/assets/images/projects/platinum-roses/discography/contemplate-single.jpg";
 
-export const PlatinumRoses = ({ id }: { id: string }) => {
+export const PlatinumRoses = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const Title = (
     <Project.Title
       artistName={"Platinum Roses"}
@@ -19,7 +19,7 @@ export const PlatinumRoses = ({ id }: { id: string }) => {
       <SEO
         title="Platinum Roses - Songwriter/Producer Duo"
         description="Platinum Roses electronic music duo featuring John White. All tracks produced, mixed, and mastered by Nathaniel Bowman."
-        url="https://audio.actuallyitsnathaniel.com/#projects/platinum-roses"
+        url="https://audio.actuallyitsnathaniel.com/projects/platinum-roses"
         type="music.album"
         jsonLd={{
           "@context": "https://schema.org",
@@ -34,10 +34,12 @@ export const PlatinumRoses = ({ id }: { id: string }) => {
         {...{ id }}
         image={platinumRoses}
         titleComponent={Title}
+        isStandalone={isStandalone}
       />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         // TODO: description, socials
         description={
           <>

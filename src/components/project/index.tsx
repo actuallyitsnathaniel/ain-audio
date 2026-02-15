@@ -5,15 +5,36 @@ const ProfilePic = memo(({
   id,
   image,
   titleComponent,
+  isStandalone = false,
 }: {
   id: string;
   image: string;
   titleComponent: JSX.Element;
+  isStandalone?: boolean;
 }) => {
+  // On standalone project pages, don't wrap in a link
+  if (isStandalone) {
+    return (
+      <div
+        id={`${id}-pfp`}
+        className="flex flex-col text-3xl mx-auto p-8"
+      >
+        <img
+          src={image}
+          alt="profile-pic-alt"
+          className="max-h-64 object-contain rounded-xl"
+        />
+        <div className="flex mx-auto">
+          {titleComponent}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Link
       id={`${id}-pfp`}
-      to={`#projects/${id}`}
+      to={`/projects/${id}`}
       className="group appearance-none flex flex-col text-3xl mx-auto p-8 transition-transform duration-100 md:hover:scale-105 border-none"
     >
       <img
@@ -52,16 +73,60 @@ const ProjectComponent = memo(({
   works,
   description,
   titleComponent,
+  isStandalone = false,
 }: {
   id: string;
   works: JSX.Element;
   description: JSX.Element;
   titleComponent: JSX.Element;
+  isStandalone?: boolean;
 }) => {
   const [truncateText, setTruncateText] = useState(true);
   const location = useLocation();
-  const isFocused = location.hash.includes(id);
+  const isFocused = isStandalone || location.hash.includes(id);
 
+  // Standalone mode: render inline without overlay
+  if (isStandalone) {
+    return (
+      <div
+        {...{ id }}
+        className="flex flex-col items-center text-white w-full"
+      >
+        <div className="w-full max-w-5xl mx-auto px-4">
+          <h2 className="text-4xl py-6">{titleComponent}</h2>
+          <p
+            onClick={() => setTruncateText(!truncateText)}
+            className={`mx-auto px-6 text-justify cursor-pointer ${
+              truncateText && "line-clamp-2 text-ellipsis overflow-hidden"
+            }`}
+          >
+            {description ? (
+              description
+            ) : (
+              <span className="text-center italic block">
+                still getting my words together for this project. be patient!
+              </span>
+            )}
+          </p>
+
+          {description && (
+            <div
+              className="p-6 items-center align-middle"
+              onClick={() => setTruncateText(!truncateText)}
+            >
+              <span className="border border-spacing-10 p-3 pt-2 rounded-md border-white underline underline-offset-2 cursor-pointer italic">
+                {truncateText ? "more" : "less"}
+              </span>
+            </div>
+          )}
+
+          {works}
+        </div>
+      </div>
+    );
+  }
+
+  // Hash-based overlay mode (legacy support for homepage)
   return (
     <div
       {...{ id }}

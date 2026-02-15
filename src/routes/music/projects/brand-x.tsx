@@ -8,7 +8,7 @@ import spiraling from "/src/assets/images/projects/brandx/works/norml-spiraling_
 import popFestVol2 from "/src/assets/images/projects/brandx/works/popfest-vol2-600x600bb.jpg";
 import tomsDinerCover from "/src/assets/images/projects/brandx/works/toms-diner-cover.png";
 
-export const BrandX = ({ id }: { id: string }) => {
+export const BrandX = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const Title = (
     <Project.Title artistName={"Brand X"} subtitle={"sync/label"} />
   );
@@ -17,7 +17,7 @@ export const BrandX = ({ id }: { id: string }) => {
       <SEO
         title="Brand X Music - Sync/Label"
         description="Songs and demos produced for Brand X Music catalogue. Music for film scores, commercials, and video games."
-        url="https://audio.actuallyitsnathaniel.com/#projects/brand-x"
+        url="https://audio.actuallyitsnathaniel.com/projects/brand-x"
         type="website"
         jsonLd={{
           "@context": "https://schema.org",
@@ -31,10 +31,12 @@ export const BrandX = ({ id }: { id: string }) => {
         {...{ id }}
         image={brandXBlue}
         titleComponent={Title}
+        isStandalone={isStandalone}
       />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         // TODO: description, socials
         description={
           <>

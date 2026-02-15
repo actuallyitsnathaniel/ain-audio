@@ -31,7 +31,7 @@ interface Release {
   };
 }
 
-export const SamDenton = ({ id }: { id: string }) => {
+export const SamDenton = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const [samDentonReleases, setSamDentonReleases] = useState<string[]>([]);
   const Title = (
     <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
@@ -59,7 +59,7 @@ export const SamDenton = ({ id }: { id: string }) => {
       <SEO
         title="Sam Denton - Singer/Songwriter"
         description="Sam Denton is a talented singer/songwriter. All works produced, mixed, and mastered by Nathaniel Bowman (actually-its-nathaniel)."
-        url="https://audio.actuallyitsnathaniel.com/#projects/sam-denton"
+        url="https://audio.actuallyitsnathaniel.com/projects/sam-denton"
         type="music.album"
         jsonLd={{
           "@context": "https://schema.org",
@@ -69,10 +69,11 @@ export const SamDenton = ({ id }: { id: string }) => {
           "url": "https://audio.actuallyitsnathaniel.com/#projects/sam-denton"
         }}
       />
-      <Project.ProfilePic {...{ id }} image={samPfp} titleComponent={Title} />
+      <Project.ProfilePic {...{ id }} image={samPfp} titleComponent={Title} isStandalone={isStandalone} />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         description={
           <>
             A dear friend and talented singer/songwriter and designer. Very

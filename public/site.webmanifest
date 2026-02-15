@@ -1,6 +1,7 @@
 {
-    "name": "@in",
-    "short_name": "@in",
+    "name": "actually-its-nathaniel - Music Producer",
+    "short_name": "nathaniel",
+    "description": "Professional music producer and audio engineer portfolio",
     "icons": [
         {
             "src": "/android-chrome-192x192.png",
@@ -15,5 +16,7 @@
     ],
     "theme_color": "#000",
     "background_color": "#000",
-    "display": "standalone"
+    "display": "standalone",
+    "start_url": "/",
+    "scope": "/"
 }

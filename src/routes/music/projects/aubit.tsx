@@ -22,7 +22,7 @@ import masaVoxChopsVol1 from "/src/assets/images/projects/aubit-sound/discograph
 import petitVoxChopsVol1 from "/src/assets/images/projects/aubit-sound/discography/petit-vox-chops-vol-1.jpg";
 import snakesForSerumVol1 from "/src/assets/images/projects/aubit-sound/discography/snakes-for-serum-vol-1.jpg";
 
-export const AubitSound = ({ id }: { id: string }) => {
+export const AubitSound = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const Title = (
     <Project.Title
       artistName={"Aubit Sound"}
@@ -34,7 +34,7 @@ export const AubitSound = ({ id }: { id: string }) => {
       <SEO
         title="Aubit Sound - Sample Library"
         description="Producer packs, presets, loops, and one-shots created by Nathaniel Bowman for Aubit Sound. Best-sellers used by Cheat Codes, U2, and more."
-        url="https://audio.actuallyitsnathaniel.com/#projects/aubit-sound"
+        url="https://audio.actuallyitsnathaniel.com/projects/aubit-sound"
         type="website"
         jsonLd={{
           "@context": "https://schema.org",
@@ -48,10 +48,12 @@ export const AubitSound = ({ id }: { id: string }) => {
         {...{ id }}
         image={aubitLogo}
         titleComponent={Title}
+        isStandalone={isStandalone}
       />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         description={
           <>
             From late 2018 to late 2019, I put together a prolific number of

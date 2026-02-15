@@ -10,7 +10,7 @@ import knotionzVol1 from "/src/assets/images/projects/krptk/discography/knotionz
 import over from "/src/assets/images/projects/krptk/discography/over_single-600x600bb.jpg";
 import kintsugi from "/src/assets/images/projects/krptk/discography/kintsugi_single-600x600bb.jpg";
 
-export const KRPTK = ({ id }: { id: string }) => {
+export const KRPTK = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const Title = (
     <Project.Title artistName={"KRPTK"} subtitle={"singer/songwriter"} />
   );
@@ -19,7 +19,7 @@ export const KRPTK = ({ id }: { id: string }) => {
       <SEO
         title="KRPTK - Singer/Songwriter"
         description="KRPTK is a Korean American R&B/Hip Hop musician and visual artist. All songs produced, mixed, and mastered by Nathaniel Bowman."
-        url="https://audio.actuallyitsnathaniel.com/#projects/krptk"
+        url="https://audio.actuallyitsnathaniel.com/projects/krptk"
         type="music.album"
         jsonLd={{
           "@context": "https://schema.org",
@@ -30,10 +30,11 @@ export const KRPTK = ({ id }: { id: string }) => {
           "url": "https://audio.actuallyitsnathaniel.com/#projects/krptk"
         }}
       />
-      <Project.ProfilePic {...{ id }} image={krptkPfp} titleComponent={Title} />
+      <Project.ProfilePic {...{ id }} image={krptkPfp} titleComponent={Title} isStandalone={isStandalone} />
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         // TODO: description, socials
         description={
           <>

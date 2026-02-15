@@ -1,4 +1,4 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { createHead, UnheadProvider } from "@unhead/react/client";
@@ -6,6 +6,8 @@ import Root from "../src/routes/root";
 import Secret from "../src/routes/secret";
 import ErrorPage from "../src/error-page";
 import "/src/index.css";
+
+const ProjectPage = lazy(() => import("../src/routes/music/project-page"));
 
 // Mobile debugging - log device and browser info
 console.log('User Agent:', navigator.userAgent);
@@ -17,34 +19,15 @@ const router = createBrowserRouter([
     path: "/",
     element: <Root />,
     errorElement: <ErrorPage />,
-    children: [
-      {
-        path: "#home",
-      },
-      {
-        path: "#about-me",
-      },
-      {
-        path: "/#projects",
-        children: [
-          { path: "riley" },
-          { path: "adidas-messi" },
-          { path: "sam-denton" },
-          { path: "ryland" },
-          { path: "aubit-sound" },
-          { path: "john-white" },
-          { path: "brand-x" },
-          { path: "krptk" },
-          { path: "platinum-roses" },
-        ],
-      },
-      {
-        path: "#connect",
-      },
-      {
-        path: "#press",
-      },
-    ],
+  },
+  {
+    path: "/projects/:projectId",
+    element: (
+      <Suspense fallback={<div className="flex items-center justify-center min-h-screen text-white">Loading...</div>}>
+        <ProjectPage />
+      </Suspense>
+    ),
+    errorElement: <ErrorPage />,
   },
   { path: "/secret", element: <Secret />, errorElement: <ErrorPage /> },
 ]);

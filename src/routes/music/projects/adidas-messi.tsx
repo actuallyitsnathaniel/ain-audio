@@ -6,7 +6,7 @@ import SEO from "../../../components/seo";
 
 import adidasMessi from "/src/assets/images/projects/adidas-messi/adidas-messi-sq.jpeg";
 
-export const AdidasMessi = memo(({ id }: { id: string }) => {
+export const AdidasMessi = memo(({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
   const adidasVideos = useRef([]);
   const Title = (
     <Project.Title
@@ -14,14 +14,15 @@ export const AdidasMessi = memo(({ id }: { id: string }) => {
       subtitle="marketing campaign"
     />
   );
-  const isFocused = useLocation().hash == "#projects/adidas-messi";
+  const location = useLocation();
+  const isFocused = isStandalone || location.hash === "#projects/adidas-messi";
 
   return (
     <div {...{ id }}>
       <SEO
         title="Adidas x Messi - Marketing Campaign"
         description="Sound design work for the Adidas marketing campaign welcoming Lionel Messi to Inter Miami. Audio production by Nathaniel Bowman."
-        url="https://audio.actuallyitsnathaniel.com/#projects/adidas-messi"
+        url="https://audio.actuallyitsnathaniel.com/projects/adidas-messi"
         type="website"
         jsonLd={{
           "@context": "https://schema.org",
@@ -39,11 +40,13 @@ export const AdidasMessi = memo(({ id }: { id: string }) => {
         {...{ id }}
         image={adidasMessi}
         titleComponent={Title}
+        isStandalone={isStandalone}
       />
 
       <Project
         {...{ id }}
         titleComponent={Title}
+        isStandalone={isStandalone}
         description={
           <>
             I had the honor of doing some sound design with the talent of&nbsp;
