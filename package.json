@@ -26,12 +26,14 @@
     "vite-plugin-image-optimizer": "^1.1.7"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.0",
     "@types/node": "^25.0.9",
     "@types/react": "^19.2.8",
     "@types/react-dom": "^19.2.3",
     "@typescript-eslint/eslint-plugin": "^8.53.1",
     "@vitejs/plugin-react": "^5.1.2",
     "autoprefixer": "^10.4.16",
+    "baseline-browser-mapping": "^2.10.0",
     "eslint": "^9.39.2",
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-react-hooks": "^7.0.1",
