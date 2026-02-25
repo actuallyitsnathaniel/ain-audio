@@ -3,9 +3,6 @@ import React, { useEffect, useState } from "react";
 import { Project } from "../../../components/project";
 import SEO from "../../../components/seo";
 import Discography from "../../../components/discography";
-import SoundXYZGallery from "../../../components/sound-xyz";
-
-import { soundXyzReleases } from "../../../api/getSoundXYZdata";
 
 import samPfp from "/src/assets/images/projects/sam-denton/sam-denton-pfp.jpg";
 // albums
@@ -31,28 +28,17 @@ interface Release {
   };
 }
 
-export const SamDenton = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
+export const SamDenton = ({
+  id,
+  isStandalone = false,
+}: {
+  id: string;
+  isStandalone?: boolean;
+}) => {
   const [samDentonReleases, setSamDentonReleases] = useState<string[]>([]);
   const Title = (
     <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
   );
-
-  // Filter SoundXYZ releases for Sam Denton
-  useEffect(() => {
-    const fetchReleases = async () => {
-      try {
-        const releases: Release[] = await soundXyzReleases;
-        const filteredReleases = releases
-          .filter((release) => release.node.artist.name === "Sam Denton")
-          .map((release) => release.node.id);
-        setSamDentonReleases(filteredReleases);
-      } catch (error) {
-        console.error("Error fetching sound.xyz releases:", error);
-      }
-    };
-
-    fetchReleases();
-  }, []);
 
   return (
     <div {...{ id }}>
@@ -64,12 +50,18 @@ export const SamDenton = ({ id, isStandalone = false }: { id: string; isStandalo
         jsonLd={{
           "@context": "https://schema.org",
           "@type": "MusicGroup",
-          "name": "Sam Denton",
-          "description": "Singer/songwriter collaboration with actually-its-nathaniel on production, mixing, and mastering.",
-          "url": "https://audio.actuallyitsnathaniel.com/#projects/sam-denton"
+          name: "Sam Denton",
+          description:
+            "Singer/songwriter collaboration with actually-its-nathaniel on production, mixing, and mastering.",
+          url: "https://audio.actuallyitsnathaniel.com/#projects/sam-denton",
         }}
       />
-      <Project.ProfilePic {...{ id }} image={samPfp} titleComponent={Title} isStandalone={isStandalone} />
+      <Project.ProfilePic
+        {...{ id }}
+        image={samPfp}
+        titleComponent={Title}
+        isStandalone={isStandalone}
+      />
       <Project
         {...{ id }}
         titleComponent={Title}
@@ -189,14 +181,6 @@ export const SamDenton = ({ id, isStandalone = false }: { id: string; isStandalo
                 youtubeLink={"https://www.youtube.com/watch?v=5Cqq5n7153A"}
               />
             </Discography>
-            <SoundXYZGallery>
-              {samDentonReleases.map((releaseId: string) => (
-                <SoundXYZGallery.Item
-                  key={releaseId}
-                  soundURL={`https://embed.sound.xyz/v1/release/${releaseId}?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound`}
-                />
-              ))}
-            </SoundXYZGallery>
           </>
         }
       />

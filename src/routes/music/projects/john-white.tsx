@@ -1,6 +1,5 @@
 import { Project } from "../../../components/project";
 import Discography from "../../../components/discography";
-import SoundXYZGallery from "../../../components/sound-xyz";
 import SEO from "../../../components/seo";
 
 import johnWhitePfp from "/src/assets/images/projects/john-white/johnWhitePfp.jpeg";
@@ -13,7 +12,13 @@ import starsRemix from "/src/assets/images/projects/john-white/Singles_EPs/stars
 import whoeverYouWantToBeSingle from "/src/assets/images/projects/john-white/Singles_EPs/whoever_you_want_to_be_single_600x600bb.jpeg";
 import better2021Single from "/src/assets/images/projects/john-white/Singles_EPs/better_2021_single_600x600bb.jpeg";
 
-export const JohnWhite = ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
+export const JohnWhite = ({
+  id,
+  isStandalone = false,
+}: {
+  id: string;
+  isStandalone?: boolean;
+}) => {
   const Title = (
     <Project.Title
       artistName={"John White"}
@@ -30,9 +35,10 @@ export const JohnWhite = ({ id, isStandalone = false }: { id: string; isStandalo
         jsonLd={{
           "@context": "https://schema.org",
           "@type": "MusicGroup",
-          "name": "John White",
-          "description": "Singer/songwriter/producer collaboration with actually-its-nathaniel on production, mixing, and mastering.",
-          "url": "https://audio.actuallyitsnathaniel.com/#projects/john-white"
+          name: "John White",
+          description:
+            "Singer/songwriter/producer collaboration with actually-its-nathaniel on production, mixing, and mastering.",
+          url: "https://audio.actuallyitsnathaniel.com/#projects/john-white",
         }}
       />
       <Project.ProfilePic
@@ -115,24 +121,6 @@ export const JohnWhite = ({ id, isStandalone = false }: { id: string; isStandalo
                 youtubeLink={"https://youtu.be/yktwodhhm0o"}
               />
             </Discography>
-            <SoundXYZGallery>
-              <SoundXYZGallery.Item
-                id="better"
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/6df2b4c4-6aeb-47a5-bb6c-a34b117a2ab3?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/f547e1ea-7570-48fd-b044-3fa516ba016d?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-              <SoundXYZGallery.Item
-                soundURL={
-                  "https://embed.sound.xyz/v1/release/0c5ac231-2ae7-4118-9531-2b36056b66a0?referral=0x35493e493e0d2001eda31bd7fb8859f961a227ce&referral_source=embed-sound"
-                }
-              />
-            </SoundXYZGallery>
           </>
         }
       />
