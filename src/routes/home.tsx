@@ -1,7 +1,6 @@
 import profilePic from "/src/assets/images/ain-pfp.jpeg";
 import TypeIt from "typeit-react";
 
-import { TextCursor } from "../components/text-cursor";
 import { SocialLinks } from "../components/social-links";
 import AboutMe from "./about-me";
 
