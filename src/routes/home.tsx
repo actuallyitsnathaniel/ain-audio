@@ -11,7 +11,7 @@ const Home = () => {
       <h1 className="pt-20 group mx-auto duration-100 hover:scale-110 hover:text-white">
         <SocialLinks
           className={
-            "group-hover:scale-100 md:scale-0 md:blur-xl group-hover:blur-0"
+            ""
           }
           spotifyLink={
             "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY?si=1cf595b570c24bf0"
