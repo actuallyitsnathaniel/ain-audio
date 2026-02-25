@@ -24,10 +24,9 @@
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-height: 100vh;
   background-color: #111111;
+  overflow-x: hidden;
 }
 
 h1 {
@@ -40,4 +39,20 @@ h1 {
     color: #213547;
     background-color: #ffffff;
   }
+}
+
+/* Mobile scroll-snap: highlight the centered project card */
+.is-centered {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  box-shadow: 0 0 24px rgba(255, 255, 255, 0.05);
+}
+
+/* Hide scrollbar on the mobile project strip */
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }

@@ -10,9 +10,7 @@ const Home = () => {
     <div id="home" className="flex min-h-screen flex-col justify-center">
       <h1 className="pt-20 mx-auto">
         <SocialLinks
-          className={
-            ""
-          }
+          className={""}
           spotifyLink={
             "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY?si=1cf595b570c24bf0"
           }
@@ -21,12 +19,10 @@ const Home = () => {
           gmailLink={"mailto:nathanielrbowman@gmail.com"}
         />
         <span className="flex-nowrap text-base md:text-2xl font-light flex mb-7 justify-center mx-auto">
-          <TypeIt options={{ cursor: undefined, speed: 55 }}>
-            <span className="font-light -translate-x-6 cursor-default">
+          <TypeIt options={{ cursor: undefined, speed: 55, cursorChar: "_" }}>
+            <span className="font-light -translate-x-6">
               @actuallyitsnathaniel
             </span>
-
-            <TextCursor />
           </TypeIt>
         </span>
       </h1>

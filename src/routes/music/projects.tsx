@@ -1,4 +1,4 @@
-import React, { lazy } from "react";
+import React, { lazy, useEffect, useRef } from "react";
 import { Outlet } from "react-router-dom";
 
 const AdidasMessi = lazy(() => import("./projects/adidas-messi").then(m => ({ default: m.AdidasMessi })));
@@ -12,6 +12,32 @@ const Ryland = lazy(() => import("./projects/ryland").then(m => ({ default: m.Ry
 const SamDenton = lazy(() => import("./projects/sam-denton").then(m => ({ default: m.SamDenton })));
 
 const ProjectHighlights = () => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const cards = document.querySelectorAll<HTMLElement>("[data-project-card]");
+    if (cards.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          entry.target.classList.toggle("is-centered", entry.isIntersecting);
+        });
+      },
+      { root: null, threshold: 0.6 },
+    );
+
+    // Cards are lazy-loaded, so wait briefly for them to mount
+    const timeout = setTimeout(() => {
+      document.querySelectorAll<HTMLElement>("[data-project-card]").forEach((card) => observer.observe(card));
+    }, 400);
+
+    return () => {
+      clearTimeout(timeout);
+      observer.disconnect();
+    };
+  }, []);
+
   const projects = [
     { Component: Riley, id: "riley" },
     { Component: AdidasMessi, id: "adidas-messi" },
@@ -30,6 +56,7 @@ const ProjectHighlights = () => {
         project highlights
       </h2>
       <div
+        ref={containerRef}
         id="project-highlights"
         className="flex flex-wrap justify-center xl:w-4/5 mx-auto"
       >

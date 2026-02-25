@@ -79,7 +79,7 @@ const ProjectPage = () => {
 
   return (
     <>
-      <div className="flex flex-wrap flex-col w-screen items-center justify-center text-center font-light [&>*]:text-white content-between gap-10 min-h-screen">
+      <div className="flex flex-col w-full text-center font-light [&>*]:text-white gap-10 min-h-screen">
         <VideoBG />
         <motion.div
           className="w-full"
