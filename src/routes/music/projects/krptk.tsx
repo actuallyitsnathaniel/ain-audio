@@ -35,6 +35,7 @@ export const KRPTK = ({ id, isStandalone = false }: { id: string; isStandalone?:
         {...{ id }}
         titleComponent={Title}
         isStandalone={isStandalone}
+        descriptionLength={574}
         // TODO: description, socials
         description={
           <>

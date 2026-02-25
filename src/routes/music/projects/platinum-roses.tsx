@@ -40,6 +40,7 @@ export const PlatinumRoses = ({ id, isStandalone = false }: { id: string; isStan
         {...{ id }}
         titleComponent={Title}
         isStandalone={isStandalone}
+        descriptionLength={408}
         // TODO: description, socials
         description={
           <>

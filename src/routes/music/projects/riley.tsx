@@ -1,4 +1,4 @@
-import { useEffect, useState, memo } from "react";
+import { memo } from "react";
 
 import { Project } from "../../../components/project";
 import SEO from "../../../components/seo";

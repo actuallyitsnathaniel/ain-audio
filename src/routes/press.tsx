@@ -6,7 +6,7 @@ const Press = () => {
       id="press"
       className="p-10 flex flex-col justify-center h-full md:pt-16"
     >
-      <h1 className="py-5 flex justify-center text-5xl underline">press</h1>
+      <h2 className="py-5 flex justify-center text-5xl underline">press</h2>
       <div className="flex flex-wrap justify-center my-auto gap-10">
         <PressLink
           href={

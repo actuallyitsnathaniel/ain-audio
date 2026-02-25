@@ -47,6 +47,7 @@ export const AdidasMessi = memo(({ id, isStandalone = false }: { id: string; isS
         {...{ id }}
         titleComponent={Title}
         isStandalone={isStandalone}
+        descriptionLength={383}
         description={
           <>
             I had the honor of doing some sound design with the talent of&nbsp;

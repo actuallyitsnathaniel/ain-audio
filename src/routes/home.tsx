@@ -8,7 +8,7 @@ import AboutMe from "./about-me";
 const Home = () => {
   return (
     <div id="home" className="flex min-h-screen flex-col justify-center">
-      <h1 className="pt-20 group mx-auto duration-100 hover:scale-110 hover:text-white">
+      <h1 className="pt-20 mx-auto">
         <SocialLinks
           className={
             ""
@@ -34,7 +34,7 @@ const Home = () => {
         <img
           src={profilePic}
           className="rounded-full max-h-80"
-          alt="profilePic"
+          alt="Nathaniel Bowman, music producer and audio engineer"
         />
       </div>
       <AboutMe />

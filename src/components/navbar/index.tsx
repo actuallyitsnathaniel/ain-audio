@@ -6,9 +6,9 @@ import { MobileNavButton } from "./mobile-nav-button";
 const NavList = ({ onItemClick }: { onItemClick?: () => void }) => {
   return (
     <>
-      <NavItem text="Home" link={`#home`} onItemClick={onItemClick} />
-      <NavItem text="Projects" link={`#projects`} onItemClick={onItemClick} />
-      <NavItem text="Press" link={`#press`} onItemClick={onItemClick} />
+      <NavItem text="Home" link={`/#home`} onItemClick={onItemClick} />
+      <NavItem text="Projects" link={`/#projects`} onItemClick={onItemClick} />
+      <NavItem text="Press" link={`/#press`} onItemClick={onItemClick} />
     </>
   );
 };

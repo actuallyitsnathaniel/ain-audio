@@ -5,6 +5,7 @@ const YoutubeLink = ({ href }: { href: string }) => {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
+      aria-label="YouTube"
     >
       <svg
         height="75px"

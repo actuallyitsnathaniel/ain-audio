@@ -5,6 +5,7 @@ const AppleMusicLink = ({ href }: { href: string }) => {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
+      aria-label="Apple Music"
     >
       <svg
         height="75px"

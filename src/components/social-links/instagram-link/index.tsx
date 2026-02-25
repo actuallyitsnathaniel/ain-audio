@@ -5,6 +5,7 @@ const InstagramLogo = ({ href }: { href: string }) => {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
+      aria-label="Instagram"
     >
       <svg
         className="transition ease-in-out duration-100 h-12 w-auto rounded-[15px] bg-white hover:fill-white hover:scale-110 hover:bg-gradient-to-tr from-[#feda75] via-[#d62976] to-[#962fbf]"

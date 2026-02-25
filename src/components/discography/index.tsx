@@ -4,18 +4,9 @@ import React, { useState, memo } from "react";
 import { motion } from "framer-motion";
 
 const DiscographyComponent = memo(({ children }: { children: JSX.Element[] }) => {
-  const itemVariants = {
-    visible: {
-      opacity: 1,
-      y: 0,
-      transition: { type: "spring", stiffness: 300, damping: 24 },
-    },
-    hidden: { opacity: 0, y: 20, transition: { duration: 0.2 } },
-  };
-
   const [expanded, setExpanded] = useState(-1);
   return (
-    <div className="flex flex-col md:px-28">
+    <div className="flex flex-col w-full md:px-28">
       <div>
         {React.Children.toArray(children).some(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -34,7 +25,11 @@ const DiscographyComponent = memo(({ children }: { children: JSX.Element[] }) =>
                   child.props.releaseType === "ep"
                 )
                   return (
-                    <motion.div variants={itemVariants}>
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 24, delay: i * 0.05 }}
+                    >
                       {React.cloneElement(child, { expanded, setExpanded, i })}
                     </motion.div>
                   );

@@ -46,6 +46,7 @@ export const Ryland = ({ id, isStandalone = false }: { id: string; isStandalone?
         {...{ id }}
         titleComponent={Title}
         isStandalone={isStandalone}
+        descriptionLength={697}
         // TODO: description, socials
         description={
           <>

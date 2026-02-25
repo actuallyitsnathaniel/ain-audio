@@ -54,6 +54,7 @@ export const AubitSound = ({ id, isStandalone = false }: { id: string; isStandal
         {...{ id }}
         titleComponent={Title}
         isStandalone={isStandalone}
+        descriptionLength={642}
         description={
           <>
             From late 2018 to late 2019, I put together a prolific number of

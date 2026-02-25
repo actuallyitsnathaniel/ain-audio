@@ -26,9 +26,9 @@ const ProjectHighlights = () => {
 
   return (
     <div id="projects" className="md:pt-16">
-      <h1 className="py-5 flex justify-center text-5xl underline">
+      <h2 className="py-5 flex justify-center text-5xl underline">
         project highlights
-      </h1>
+      </h2>
       <div
         id="project-highlights"
         className="flex flex-wrap justify-center xl:w-4/5 mx-auto"

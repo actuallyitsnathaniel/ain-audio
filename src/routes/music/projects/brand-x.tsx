@@ -37,6 +37,7 @@ export const BrandX = ({ id, isStandalone = false }: { id: string; isStandalone?
         {...{ id }}
         titleComponent={Title}
         isStandalone={isStandalone}
+        descriptionLength={449}
         // TODO: description, socials
         description={
           <>

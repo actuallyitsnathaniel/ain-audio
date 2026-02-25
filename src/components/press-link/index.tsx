@@ -8,9 +8,14 @@ export const PressLink = ({
   subtitle: string;
 }) => {
   return (
-    <div id="press-link">
+    <div>
       <div className="flex md:transition md:duration-75 md:ease-in-out md:hover:scale-110 max-w-sm">
-        <a className="font-semibold text-xl" href={href}>
+        <a
+          className="font-semibold text-xl focus:outline-none focus-visible:underline focus-visible:decoration-white focus-visible:underline-offset-4"
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           &quot;{title}&quot;
         </a>
       </div>

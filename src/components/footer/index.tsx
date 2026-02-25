@@ -6,7 +6,7 @@ const Footer = () => {
           <br />
           Built with&nbsp;
           <a
-            className="italic underline underline-offset-2 text-purple-500"
+            className="italic underline underline-offset-2 text-purple-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-white"
             href="https://vitejs.dev/"
             target="_blank"
             rel="noopener noreferrer"
@@ -15,7 +15,7 @@ const Footer = () => {
           </a>
           &nbsp;+&nbsp;
           <a
-            className="italic underline underline-offset-2 text-cyan-300"
+            className="italic underline underline-offset-2 text-cyan-300 focus:outline-none focus-visible:ring-1 focus-visible:ring-white"
             href="https://react.dev/"
             target="_blank"
             rel="noopener noreferrer"
@@ -24,7 +24,7 @@ const Footer = () => {
           </a>
           &nbsp; and&nbsp;
           <a
-            className="italic underline underline-offset-2 text-blue-500"
+            className="italic underline underline-offset-2 text-blue-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-white"
             href="https://tailwindcss.com/"
             target="_blank"
             rel="noopener noreferrer"
@@ -33,7 +33,7 @@ const Footer = () => {
           </a>
           . maintained by&nbsp;
           <a
-            className="italic underline underline-offset-2"
+            className="italic underline underline-offset-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-white"
             href="mailto:nathanielrbowman@gmail.com"
           >
             me
