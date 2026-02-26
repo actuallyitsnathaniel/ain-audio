@@ -7,8 +7,12 @@ const getTextLength = (node: ReactNode): number => {
   if (!node) return 0;
   if (typeof node === "string") return node.length;
   if (typeof node === "number") return String(node).length;
-  if (Array.isArray(node)) return node.reduce((sum, child) => sum + getTextLength(child), 0);
-  if (typeof node === "object" && "props" in (node as object)) return getTextLength((node as { props: { children?: ReactNode } }).props.children);
+  if (Array.isArray(node))
+    return node.reduce((sum, child) => sum + getTextLength(child), 0);
+  if (typeof node === "object" && "props" in (node as object))
+    return getTextLength(
+      (node as { props: { children?: ReactNode } }).props.children,
+    );
   return 0;
 };
 
@@ -118,26 +122,41 @@ const ProjectComponent = memo(
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] as const, delay: 0.05 }}
+              transition={{
+                duration: 0.4,
+                ease: [0.25, 0.1, 0.25, 1] as const,
+                delay: 0.05,
+              }}
               className="relative mx-auto px-6"
             >
               <motion.div
                 animate={{
-                  maxHeight: shouldTruncate && truncateText ? "4.5rem" : "100rem",
-                  "--mask-stop": shouldTruncate && truncateText ? "40%" : "100%",
-                } as object}
-                transition={{ duration: 0.5, ease: [0.25, 0.1, 0.25, 1] as const }}
+                  maxHeight:
+                    shouldTruncate && truncateText ? "4.5rem" : "100rem",
+                  "--mask-stop":
+                    shouldTruncate && truncateText ? "40%" : "100%",
+                }}
+                transition={{
+                  duration: 0.5,
+                  ease: [0.25, 0.1, 0.25, 1] as const,
+                }}
                 style={{
-                  WebkitMaskImage: shouldTruncate ? "linear-gradient(to bottom, black var(--mask-stop), transparent 100%)" : "none",
-                  maskImage: shouldTruncate ? "linear-gradient(to bottom, black var(--mask-stop), transparent 100%)" : "none",
-                  ["--mask-stop" as string]: shouldTruncate && truncateText ? "40%" : "100%",
+                  WebkitMaskImage: shouldTruncate
+                    ? "linear-gradient(to bottom, black var(--mask-stop), transparent 100%)"
+                    : "none",
+                  maskImage: shouldTruncate
+                    ? "linear-gradient(to bottom, black var(--mask-stop), transparent 100%)"
+                    : "none",
+                  ["--mask-stop" as string]:
+                    shouldTruncate && truncateText ? "40%" : "100%",
                 }}
                 className="overflow-hidden"
               >
                 <p className="text-justify">
                   {description ?? (
                     <span className="text-center italic block">
-                      still getting my words together for this project. be patient!
+                      still getting my words together for this project. be
+                      patient!
                     </span>
                   )}
                 </p>
@@ -148,7 +167,11 @@ const ProjectComponent = memo(
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] as const, delay: 0.1 }}
+                transition={{
+                  duration: 0.4,
+                  ease: [0.25, 0.1, 0.25, 1] as const,
+                  delay: 0.1,
+                }}
                 className="p-6 items-center align-middle"
               >
                 <button
@@ -163,7 +186,11 @@ const ProjectComponent = memo(
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] as const, delay: 0.18 }}
+              transition={{
+                duration: 0.4,
+                ease: [0.25, 0.1, 0.25, 1] as const,
+                delay: 0.18,
+              }}
             >
               {works}
             </motion.div>
@@ -188,7 +215,9 @@ const ProjectComponent = memo(
           {<h2 className="text-4xl py-6">{titleComponent}</h2>}
           <p
             className={`max-w-5xl mx-auto px-10 text-justify ${
-              shouldTruncate && truncateText && "line-clamp-3 text-ellipsis overflow-hidden"
+              shouldTruncate &&
+              truncateText &&
+              "line-clamp-3 text-ellipsis overflow-hidden"
             }`}
           >
             {description ? (

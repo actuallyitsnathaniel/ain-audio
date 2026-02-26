@@ -19,21 +19,27 @@ const Root = () => {
         jsonLd={{
           "@context": "https://schema.org",
           "@type": "Person",
-          "name": "Nathaniel Bowman",
-          "alternateName": "actually-its-nathaniel",
-          "url": "https://audio.actuallyitsnathaniel.com",
-          "jobTitle": "Music Producer & Audio Engineer",
-          "knowsAbout": ["Music Production", "Audio Engineering", "Mixing", "Mastering", "Sound Design"],
-          "sameAs": [
+          name: "Nathaniel Bowman",
+          alternateName: "actually-its-nathaniel",
+          url: "https://audio.actuallyitsnathaniel.com",
+          jobTitle: "Music Producer & Audio Engineer",
+          knowsAbout: [
+            "Music Production",
+            "Audio Engineering",
+            "Mixing",
+            "Mastering",
+            "Sound Design",
+          ],
+          sameAs: [
             "https://instagram.com/actuallyitsnathaniel",
             "https://www.youtube.com/@actuallyitsnathaniel",
-            "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY"
-          ]
+            "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY",
+          ],
         }}
       />
       <div
         id="root"
-        className="flex flex-col w-full text-center font-light [&>*]:text-white gap-10"
+        className="flex flex-col w-full text-center font-light *:text-white gap-10"
       >
         <VideoBG />
         <ScrollToHashElement />

@@ -41,20 +41,22 @@ h1 {
   }
 }
 
-/* Project cards: grayed out by default, full color when scrolled into view */
-[data-project-card] {
-  opacity: 0.35;
-  filter: grayscale(1);
-  scroll-snap-align: center;
-  transition: opacity 0.3s ease, filter 0.3s ease, transform 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
-}
+/* Project cards: mobile only — grayed out by default, full color when scrolled into view */
+@media (max-width: 767px) {
+  [data-project-card] {
+    opacity: 0.35;
+    filter: grayscale(1);
+    scroll-snap-align: center;
+    transition: opacity 0.3s ease, filter 0.3s ease, transform 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+  }
 
-[data-project-card].is-centered {
-  opacity: 1;
-  filter: grayscale(0);
-  background-color: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.2) !important;
-  box-shadow: 0 0 24px rgba(255, 255, 255, 0.05);
+  [data-project-card].is-centered {
+    opacity: 1;
+    filter: grayscale(0);
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    box-shadow: 0 0 24px rgba(255, 255, 255, 0.05);
+  }
 }
 
 /* Hide scrollbar on the mobile project strip */

@@ -24,11 +24,6 @@ export default defineConfig(({ mode }) => {
           plugins: [
             {
               name: "preset-default",
-              params: {
-                overrides: {
-                  removeViewBox: false, // https://github.com/svg/svgo/issues/1128
-                },
-              },
             },
             "sortAttrs",
             {
