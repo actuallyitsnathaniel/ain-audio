@@ -11,17 +11,6 @@ import better from "/src/assets/images/projects/riley/Singles_EPs/better.jpeg";
 import starsRemix from "/src/assets/images/projects/riley/Singles_EPs/stars-remix.jpeg";
 import withTheRain from "/src/assets/images/projects/riley/Singles_EPs/with-the-rain.jpeg";
 
-// Define the type for a release
-interface Release {
-  node: {
-    artist: {
-      name: string;
-    };
-    title: string;
-    id: string;
-  };
-}
-
 export const Riley = memo(
   ({ id, isStandalone = false }: { id: string; isStandalone?: boolean }) => {
     const Title = (

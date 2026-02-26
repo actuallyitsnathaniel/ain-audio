@@ -18,7 +18,7 @@ const Home = () => {
           gmailLink={"mailto:nathanielrbowman@gmail.com"}
         />
         <span className="flex-nowrap text-base md:text-2xl font-light flex mb-7 justify-center mx-auto">
-          <TypeIt options={{ cursor: undefined, speed: 55, cursorChar: "_" }}>
+          <TypeIt options={{ speed: 55, cursorChar: "_" }}>
             <span className="font-light -translate-x-6">
               @actuallyitsnathaniel
             </span>

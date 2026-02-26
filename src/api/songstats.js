@@ -1,4 +1,3 @@
-/* eslint-disable no-unused-vars */
 const current_stats = "/stats";
 
 // TODO: fetch these items

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 
 import { Project } from "../../../components/project";
 import SEO from "../../../components/seo";
@@ -17,17 +17,6 @@ import first from "/src/assets/images/projects/sam-denton/Singles_EPs/first_600x
 import better from "/src/assets/images/projects/sam-denton/Singles_EPs/better_2021_single_600x600bb.jpeg";
 import dreams from "/src/assets/images/projects/sam-denton/Singles_EPs/dreams_600x600bb.jpeg";
 
-// Define the type for a release
-interface Release {
-  node: {
-    artist: {
-      name: string;
-    };
-    title: string;
-    id: string;
-  };
-}
-
 export const SamDenton = ({
   id,
   isStandalone = false,
@@ -35,7 +24,6 @@ export const SamDenton = ({
   id: string;
   isStandalone?: boolean;
 }) => {
-  const [samDentonReleases, setSamDentonReleases] = useState<string[]>([]);
   const Title = (
     <Project.Title artistName="Sam Denton" subtitle="singer/songwriter" />
   );

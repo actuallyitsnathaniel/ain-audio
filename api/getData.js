@@ -1,4 +1,3 @@
-/* eslint-disable no-unused-vars */
 const handler = async (req, res) => {
   const songstats_artist_api_url = process.env.SONGSTATS_ARTIST_API_URL;
   const songstats_api_key = process.env.SONGSTATS_API_KEY;

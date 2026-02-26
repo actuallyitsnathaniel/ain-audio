@@ -15,7 +15,7 @@ const NavList = ({ onItemClick }: { onItemClick?: () => void }) => {
 
 const DesktopNav = () => {
   return (
-    <nav className="transition-transform duration-100 fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow lowercase mb-12 bg-gradient-to-b from-black to-transparent">
+    <nav className="transition-transform duration-100 fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow lowercase mb-12 bg-linear-to-b from-black to-transparent">
       <ul className="flex transition-transform duration-100 text-center flex-wrap flex-col md:flex-row py-4 w-screen justify-evenly">
         <NavList />
       </ul>
@@ -35,11 +35,11 @@ const MobileNav = ({
       className={`fixed top-0 left-0 flex whitespace-nowrap text-2xl animate-appear-slow `}
     >
       {/* Always visible gradient background */}
-      <div className="fixed top-0 left-0 w-full h-24 bg-gradient-to-b from-black via-black/50 to-transparent pointer-events-none z-0" />
-      
+      <div className="fixed top-0 left-0 w-full h-24 bg-linear-to-b from-black via-black/50 to-transparent pointer-events-none z-0" />
+
       <div
         className={`fixed origin-left transition-transform duration-200 flex flex-col backdrop-blur-lg bg-black/60 h-screen w-screen z-10 ${
-          expanded ? "translate-x-[0%]" : "translate-x-[-100%]"
+          expanded ? "translate-x-[0%]" : "-translate-x-full"
         }`}
       >
         <ul className="flex flex-col h-[90%] justify-evenly text-center">
@@ -56,10 +56,6 @@ export const NavBar = () => {
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    setWindowDimension(window.innerWidth);
-  }, []);
-
-  useEffect(() => {
     const handleResize = () => {
       setWindowDimension(window.innerWidth);
     };
@@ -72,7 +68,7 @@ export const NavBar = () => {
   return isMobile ? (
     <>
       <div
-        className={`animate-appear fixed h-screen brightness-80 bg-gradient-to-tr from-transparent via-transparent to-emerald-950 ${
+        className={`animate-appear fixed h-screen brightness-80 bg-linear-to-tr from-transparent via-transparent to-emerald-950 ${
           !expanded && "hidden"
         }`}
       />
