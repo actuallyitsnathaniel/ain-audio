@@ -11,7 +11,7 @@ const fadeUp = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.5, ease: [0.25, 0.1, 0.25, 1] },
+    transition: { duration: 0.5, ease: [0.25, 0.1, 0.25, 1] as const },
   },
 };
 
@@ -222,36 +222,12 @@ const HowItWorks = () => (
 
 const reviews = [
   {
-    name: "placeholder — replace me",
+    name: "Joshua & Hana Harbman",
     eventType: "wedding reception",
-    date: "Month Year",
-    platform: "Google",
+    date: "Feb 13, 2021",
+    platform: "Direct",
     quote:
-      "Paste your first review here. This is a placeholder — swap in the real review text once you have it ready.",
-  },
-  {
-    name: "placeholder — replace me",
-    eventType: "corporate event",
-    date: "Month Year",
-    platform: "The Knot",
-    quote:
-      "Paste your second review here. This is a placeholder — swap in the real review text once you have it ready.",
-  },
-  {
-    name: "placeholder — replace me",
-    eventType: "private party",
-    date: "Month Year",
-    platform: "Google",
-    quote:
-      "Paste your third review here. This is a placeholder — swap in the real review text once you have it ready.",
-  },
-  {
-    name: "placeholder — replace me",
-    eventType: "wedding ceremony + reception",
-    date: "Month Year",
-    platform: "WeddingWire",
-    quote:
-      "Paste your fourth review here. This is a placeholder — swap in the real review text once you have it ready.",
+      "Nate has been an extremely reliable audio support engineer across a wide range of events. I was initially exposed to his expertise as a problem solver running weekly audio for events at college for hundreds of students on an admittedly outdated and creaky system infrastructure. Never had any issues while I was on the event production team. He also ran audio at my wedding, where everything went off perfectly without a hitch. As is always the case at weddings, things inevitably go wrong, and the task of the support team is to make sure the issues never get to the bride and groom. Nate was the model of professionalism and calm, and the dance floor was popping all night!",
   },
 ];
 
@@ -503,7 +479,7 @@ const Events = () => {
         <Hero />
         <Services />
         <HowItWorks />
-        {/* <Reviews /> */}
+        <Reviews />
         <FAQ />
         <BookingCTA />
         <Footer />
