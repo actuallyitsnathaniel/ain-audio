@@ -34,7 +34,7 @@ const Hero = () => (
         className="text-sm uppercase tracking-widest text-cyan-500 font-light"
         variants={fadeUp}
       >
-        DJ · MC · Events
+        DJ · MC · Event Audio Professional
       </motion.p>
       <motion.h1
         className="text-5xl md:text-7xl font-light lowercase leading-tight"
