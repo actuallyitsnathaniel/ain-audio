@@ -5,6 +5,8 @@ import { NavBar } from "../components/navbar";
 import Footer from "../components/footer";
 import VideoBG from "../components/video-background";
 import SEO from "../components/seo";
+import heroPhoto from "../assets/images/event-photos/ryland-21.jpg";
+import actionPhoto from "../assets/images/event-photos/6-29-19-6.jpg";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 24 },
@@ -23,43 +25,57 @@ const stagger = {
 // ─── Hero ────────────────────────────────────────────────────────────────────
 
 const Hero = () => (
-  <section className="flex flex-col items-center justify-center min-h-screen text-center px-6 pt-24 pb-16">
+  <section className="flex items-center justify-center min-h-screen px-6 pt-24 pb-16">
     <motion.div
-      className="flex flex-col items-center gap-6 max-w-2xl"
+      className="flex flex-col md:flex-row items-center gap-12 max-w-5xl w-full"
       initial="hidden"
       animate="visible"
       variants={stagger}
     >
-      <motion.p
-        className="text-sm uppercase tracking-widest text-cyan-500 font-light"
+      {/* Text */}
+      <div className="flex flex-col items-center md:items-start gap-6 text-center md:text-left flex-1">
+        <motion.p
+          className="text-sm uppercase tracking-widest text-cyan-500 font-light"
+          variants={fadeUp}
+        >
+          DJ · MC · Event Audio Professional
+        </motion.p>
+        <motion.h1
+          className="text-5xl md:text-7xl font-light lowercase leading-tight"
+          variants={fadeUp}
+        >
+          your event,
+          <br />
+          perfectly scored.
+        </motion.h1>
+        <motion.p
+          className="text-lg md:text-xl text-white/70 font-light max-w-lg"
+          variants={fadeUp}
+        >
+          professional DJ and MC services for weddings, corporate events, and
+          private parties — los angeles & beyond.
+        </motion.p>
+        <motion.a
+          href="mailto:nathanielrbowman@gmail.com?subject=DJ%20%2F%20MC%20Booking%20Inquiry"
+          className="mt-4 px-8 py-3 border border-white/30 text-white text-lg font-light lowercase
+            hover:bg-white hover:text-black transition-colors duration-200
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          variants={fadeUp}
+        >
+          book nathaniel
+        </motion.a>
+      </div>
+      {/* Photo */}
+      <motion.div
+        className="flex-1 w-full max-w-sm md:max-w-none"
         variants={fadeUp}
       >
-        DJ · MC · Event Audio Professional
-      </motion.p>
-      <motion.h1
-        className="text-5xl md:text-7xl font-light lowercase leading-tight"
-        variants={fadeUp}
-      >
-        your event,
-        <br />
-        perfectly scored.
-      </motion.h1>
-      <motion.p
-        className="text-lg md:text-xl text-white/70 font-light max-w-lg"
-        variants={fadeUp}
-      >
-        professional DJ and MC services for weddings, corporate events, and
-        private parties — los angeles & beyond.
-      </motion.p>
-      <motion.a
-        href="mailto:nathanielrbowman@gmail.com?subject=DJ%20%2F%20MC%20Booking%20Inquiry"
-        className="mt-4 px-8 py-3 border border-white/30 text-white text-lg font-light lowercase
-          hover:bg-white hover:text-black transition-colors duration-200
-          focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
-        variants={fadeUp}
-      >
-        book nathaniel
-      </motion.a>
+        <img
+          src={heroPhoto}
+          alt="Nathaniel Bowman running audio at a live event"
+          className="w-full h-120 object-cover object-top grayscale-20"
+        />
+      </motion.div>
     </motion.div>
   </section>
 );
@@ -151,6 +167,29 @@ const Services = () => (
       </motion.div>
     </motion.div>
   </section>
+);
+
+// ─── Photo Divider ───────────────────────────────────────────────────────────
+
+const PhotoDivider = () => (
+  <motion.div
+    className="w-3/4 mx-auto h-72 md:h-96"
+    initial={{ opacity: 0 }}
+    whileInView={{ opacity: 1 }}
+    viewport={{ once: true, margin: "-80px" }}
+    transition={{ duration: 0.6 }}
+    style={{
+      maskImage:
+        "linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%)",
+    }}
+  >
+    <img
+      src={actionPhoto}
+      alt="Nathaniel Bowman mixing audio at a live event"
+      className="w-full h-full object-cover grayscale-20"
+      style={{ objectPosition: "center 75%" }}
+    />
+  </motion.div>
 );
 
 // ─── How It Works ────────────────────────────────────────────────────────────
@@ -478,6 +517,7 @@ const Events = () => {
         <VideoBG />
         <Hero />
         <Services />
+        <PhotoDivider />
         <HowItWorks />
         <Reviews />
         <FAQ />
