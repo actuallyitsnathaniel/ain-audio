@@ -9,6 +9,8 @@ import "/src/index.css";
 
 // eslint-disable-next-line react-refresh/only-export-components
 const ProjectPage = lazy(() => import("../src/routes/music/project-page"));
+// eslint-disable-next-line react-refresh/only-export-components
+const EventsPage = lazy(() => import("../src/routes/events"));
 
 // Mobile debugging - log device and browser info
 console.log("User Agent:", navigator.userAgent);
@@ -35,6 +37,21 @@ const router = createBrowserRouter([
         }
       >
         <ProjectPage />
+      </Suspense>
+    ),
+    errorElement: <ErrorPage />,
+  },
+  {
+    path: "/events",
+    element: (
+      <Suspense
+        fallback={
+          <div className="flex items-center justify-center min-h-screen text-white">
+            Loading...
+          </div>
+        }
+      >
+        <EventsPage />
       </Suspense>
     ),
     errorElement: <ErrorPage />,

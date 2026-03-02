@@ -9,6 +9,7 @@ const NavList = ({ onItemClick }: { onItemClick?: () => void }) => {
       <NavItem text="Home" link={`/#home`} onItemClick={onItemClick} />
       <NavItem text="Projects" link={`/#projects`} onItemClick={onItemClick} />
       <NavItem text="Press" link={`/#press`} onItemClick={onItemClick} />
+      <NavItem text="Events" link="/events" onItemClick={onItemClick} />
     </>
   );
 };
