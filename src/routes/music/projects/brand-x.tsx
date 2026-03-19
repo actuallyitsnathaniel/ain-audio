@@ -14,7 +14,7 @@ export const BrandX = ({ id, isStandalone = false }: { id: string; isStandalone?
   );
   return (
     <div {...{ id }}>
-      <SEO
+      {isStandalone && (<SEO
         title="Brand X Music - Sync/Label"
         description="Songs and demos produced for Brand X Music catalogue. Music for film scores, commercials, and video games."
         url="https://audio.actuallyitsnathaniel.com/projects/brand-x"
@@ -27,6 +27,7 @@ export const BrandX = ({ id, isStandalone = false }: { id: string; isStandalone?
           "url": "https://audio.actuallyitsnathaniel.com/#projects/brand-x"
         }}
       />
+      )}
       <Project.ProfilePic
         {...{ id }}
         image={brandXBlue}

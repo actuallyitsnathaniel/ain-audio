@@ -19,7 +19,7 @@ export const Riley = memo(
 
     return (
       <div {...{ id }}>
-        <SEO
+        {isStandalone && (<SEO
           title="riley - Artist Project"
           description="riley is Nathaniel Bowman's personal passion project. Produced, mixed, and mastered original music ranging from heavy bass to somber songwriting."
           url="https://audio.actuallyitsnathaniel.com/projects/riley"
@@ -33,6 +33,7 @@ export const Riley = memo(
             url: "https://audio.actuallyitsnathaniel.com/projects/riley",
           }}
         />
+      )}
         <Project.ProfilePic
           {...{ id }}
           image={rileyPfp}

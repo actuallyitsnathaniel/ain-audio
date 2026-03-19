@@ -23,7 +23,7 @@ export const Ryland = ({ id, isStandalone = false }: { id: string; isStandalone?
   const Title = <Project.Title artistName={"Ryland"} subtitle="band" />;
   return (
     <div {...{ id }}>
-      <SEO
+      {isStandalone && (<SEO
         title="Ryland - Band"
         description="Ryland is a five-piece band making music since 2019. Nathaniel contributes synths, samples, and background vocals."
         url="https://audio.actuallyitsnathaniel.com/projects/ryland"
@@ -36,6 +36,7 @@ export const Ryland = ({ id, isStandalone = false }: { id: string; isStandalone?
           "url": "https://audio.actuallyitsnathaniel.com/#projects/ryland"
         }}
       />
+      )}
       <Project.ProfilePic
         {...{ id }}
         image={rylandPfp}

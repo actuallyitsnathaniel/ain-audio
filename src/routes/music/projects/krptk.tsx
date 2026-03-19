@@ -16,7 +16,7 @@ export const KRPTK = ({ id, isStandalone = false }: { id: string; isStandalone?:
   );
   return (
     <div id="krptk">
-      <SEO
+      {isStandalone && (<SEO
         title="KRPTK - Singer/Songwriter"
         description="KRPTK is a Korean American R&B/Hip Hop musician and visual artist. All songs produced, mixed, and mastered by Nathaniel Bowman."
         url="https://audio.actuallyitsnathaniel.com/projects/krptk"
@@ -30,6 +30,7 @@ export const KRPTK = ({ id, isStandalone = false }: { id: string; isStandalone?:
           "url": "https://audio.actuallyitsnathaniel.com/#projects/krptk"
         }}
       />
+      )}
       <Project.ProfilePic {...{ id }} image={krptkPfp} titleComponent={Title} isStandalone={isStandalone} />
       <Project
         {...{ id }}

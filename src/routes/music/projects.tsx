@@ -1,5 +1,7 @@
 import React, { lazy, useEffect, useRef } from "react";
 import { Outlet } from "react-router-dom";
+import { motion } from "framer-motion";
+import { fadeUp, stagger } from "../../lib/animation";
 
 const AdidasMessi = lazy(() =>
   import("./projects/adidas-messi").then((m) => ({ default: m.AdidasMessi })),
@@ -81,14 +83,24 @@ const ProjectHighlights = () => {
   ];
 
   return (
-    <div id="projects" className="md:pt-16">
-      <h2 className="py-5 flex justify-center text-5xl underline">
+    <div id="projects" className="min-h-screen flex flex-col justify-center py-16">
+      <motion.h2
+        className="py-5 flex justify-center text-5xl underline"
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: false, margin: "-80px" }}
+        variants={fadeUp}
+      >
         project highlights
-      </h2>
-      <div
+      </motion.h2>
+      <motion.div
         ref={containerRef}
         id="project-highlights"
         className="flex flex-wrap justify-center xl:w-4/5 mx-auto gap-5"
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: false, margin: "-80px" }}
+        variants={stagger}
       >
         <React.Suspense fallback={<div>Loading projects...</div>}>
           {projects.map(({ Component, id }) => (
@@ -96,7 +108,7 @@ const ProjectHighlights = () => {
           ))}
         </React.Suspense>
         <Outlet />
-      </div>
+      </motion.div>
     </div>
   );
 };

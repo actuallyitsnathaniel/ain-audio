@@ -23,7 +23,7 @@ export const SocialLinks = ({
     <div
       className={`mb-2.5 transition-all duration-150 hover:delay-150 flex justify-center sm:h-full md:h-auto ${className}`}
     >
-      <div className={`flex justify-center`}>
+      <div className="flex justify-center">
         {spotifyLink && <SpotifyLink href={spotifyLink} />}
         {youtubeLink && <YoutubeLink href={youtubeLink} />}
         {appleMusicLink && <AppleMusic href={appleMusicLink} />}

@@ -19,7 +19,7 @@ export const AdidasMessi = memo(({ id, isStandalone = false }: { id: string; isS
 
   return (
     <div {...{ id }}>
-      <SEO
+      {isStandalone && (<SEO
         title="Adidas x Messi - Marketing Campaign"
         description="Sound design work for the Adidas marketing campaign welcoming Lionel Messi to Inter Miami. Audio production by Nathaniel Bowman."
         url="https://audio.actuallyitsnathaniel.com/projects/adidas-messi"
@@ -36,6 +36,7 @@ export const AdidasMessi = memo(({ id, isStandalone = false }: { id: string; isS
           "url": "https://audio.actuallyitsnathaniel.com/#projects/adidas-messi"
         }}
       />
+      )}
       <Project.ProfilePic
         {...{ id }}
         image={adidasMessi}

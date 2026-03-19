@@ -51,9 +51,13 @@ const DiscographyComponent = memo(({ children }: { children: JSX.Element[] }) =>
               {React.Children.map(children, (child, i) => {
                 if (child.props.releaseType === "album")
                   return (
-                    <div>
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 24, delay: i * 0.05 }}
+                    >
                       {React.cloneElement(child, { expanded, setExpanded, i })}
-                    </div>
+                    </motion.div>
                   );
               })}
             </div>
@@ -70,9 +74,13 @@ const DiscographyComponent = memo(({ children }: { children: JSX.Element[] }) =>
               {React.Children.map(children, (child, i) => {
                 if (child.props.releaseType === "general")
                   return (
-                    <div>
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 24, delay: i * 0.05 }}
+                    >
                       {React.cloneElement(child, { expanded, setExpanded, i })}
-                    </div>
+                    </motion.div>
                   );
               })}
             </div>

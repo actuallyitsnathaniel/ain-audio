@@ -31,7 +31,7 @@ export const AubitSound = ({ id, isStandalone = false }: { id: string; isStandal
   );
   return (
     <div {...{ id }}>
-      <SEO
+      {isStandalone && (<SEO
         title="Aubit Sound - Sample Library"
         description="Producer packs, presets, loops, and one-shots created by Nathaniel Bowman for Aubit Sound. Best-sellers used by Cheat Codes, U2, and more."
         url="https://audio.actuallyitsnathaniel.com/projects/aubit-sound"
@@ -44,6 +44,7 @@ export const AubitSound = ({ id, isStandalone = false }: { id: string; isStandal
           "url": "https://audio.actuallyitsnathaniel.com/#projects/aubit-sound"
         }}
       />
+      )}
       <Project.ProfilePic
         {...{ id }}
         image={aubitLogo}

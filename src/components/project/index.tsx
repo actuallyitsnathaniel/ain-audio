@@ -2,6 +2,7 @@ import { useState, memo, ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { JSX } from "react/jsx-runtime";
+import { slideUp } from "../../lib/animation";
 
 const getTextLength = (node: ReactNode): number => {
   if (!node) return 0;
@@ -50,21 +51,23 @@ const ProfilePic = memo(
     }
 
     return (
-      <Link
-        id={`${id}-pfp`}
-        to={`/projects/${id}`}
-        data-project-card
-        className="group appearance-none flex flex-col text-3xl mx-auto p-8 transition-all duration-200 md:hover:scale-[1.03] md:hover:bg-white/10 md:hover:border-white/20 md:hover:shadow-lg md:hover:shadow-white/5 border border-transparent cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black rounded-xl"
-      >
-        <img
-          src={image}
-          alt={imgAlt}
-          className="max-h-64 object-contain rounded-xl"
-        />
-        <div className="flex transition-transform duration-75 md:group-hover:translate-y-0.5 mx-auto">
-          {titleComponent}
-        </div>
-      </Link>
+      <motion.div variants={slideUp}>
+        <Link
+          id={`${id}-pfp`}
+          to={`/projects/${id}`}
+          data-project-card
+          className="group appearance-none flex flex-col text-3xl mx-auto p-8 transition-all duration-200 md:hover:scale-[1.03] md:hover:bg-white/10 md:hover:border-white/20 md:hover:shadow-lg md:hover:shadow-white/5 border border-transparent cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black rounded-xl"
+        >
+          <img
+            src={image}
+            alt={imgAlt}
+            className="max-h-64 object-contain rounded-xl"
+          />
+          <div className="flex transition-transform duration-75 md:group-hover:translate-y-0.5 mx-auto">
+            {titleComponent}
+          </div>
+        </Link>
+      </motion.div>
     );
   },
 );

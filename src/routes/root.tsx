@@ -1,4 +1,5 @@
 import Home from "./home";
+import AboutMe from "./about-me";
 import ProjectHighlights from "./music/projects";
 import Press from "./press";
 
@@ -12,7 +13,7 @@ const Root = () => {
   return (
     <>
       <SEO
-        title="actually-its-nathaniel - Music Producer & Audio Engineer"
+        title="Audio - AIN"
         description="Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations."
         url="https://audio.actuallyitsnathaniel.com"
         type="profile"
@@ -39,11 +40,12 @@ const Root = () => {
       />
       <div
         id="root"
-        className="flex flex-col w-full text-center font-light *:text-white gap-10"
+        className="flex flex-col w-full text-center font-light *:text-white"
       >
         <VideoBG />
         <ScrollToHashElement />
         <Home />
+        <AboutMe />
         <ProjectHighlights />
         <Press />
         <Footer />

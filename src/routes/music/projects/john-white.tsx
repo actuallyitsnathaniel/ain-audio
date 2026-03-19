@@ -27,7 +27,7 @@ export const JohnWhite = ({
   );
   return (
     <div {...{ id }}>
-      <SEO
+      {isStandalone && (<SEO
         title="John White - Singer/Songwriter/Producer"
         description="John White collaboration with Nathaniel Bowman. Production, mixing, remixing, and mastering services for singer/songwriter/producer."
         url="https://audio.actuallyitsnathaniel.com/projects/john-white"
@@ -41,6 +41,7 @@ export const JohnWhite = ({
           url: "https://audio.actuallyitsnathaniel.com/#projects/john-white",
         }}
       />
+      )}
       <Project.ProfilePic
         {...{ id }}
         image={johnWhitePfp}

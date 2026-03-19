@@ -16,7 +16,7 @@ export const PlatinumRoses = ({ id, isStandalone = false }: { id: string; isStan
   );
   return (
     <div {...{ id }}>
-      <SEO
+      {isStandalone && (<SEO
         title="Platinum Roses - Songwriter/Producer Duo"
         description="Platinum Roses electronic music duo featuring John White. All tracks produced, mixed, and mastered by Nathaniel Bowman."
         url="https://audio.actuallyitsnathaniel.com/projects/platinum-roses"
@@ -30,6 +30,7 @@ export const PlatinumRoses = ({ id, isStandalone = false }: { id: string; isStan
           "url": "https://audio.actuallyitsnathaniel.com/#projects/platinum-roses"
         }}
       />
+      )}
       <Project.ProfilePic
         {...{ id }}
         image={platinumRoses}

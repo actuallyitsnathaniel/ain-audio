@@ -33,22 +33,14 @@ const Disc = ({
       className={`${className} transition-scale duration-100 text-8xl md:hover:scale-110 group p-3`}
     >
       <div
-        className={"relative h-72 w-72 mx-auto"}
-        onMouseLeave={() => {
-          setFocused(false);
-        }}
+        className="relative h-72 w-72 mx-auto"
+        onMouseLeave={() => setFocused(false)}
         onMouseEnter={() => setFocused(true)}
-        onClick={() => {
-          setFocused(!focused);
-        }}
+        onClick={() => setFocused(!focused)}
       >
         <MusicPlatformLinks
-          className={`transition-all origin-content bg-black
-          ${
-            focused
-              ? "bg-opacity-50 backdrop-blur-md opacity-100 visible"
-              : "invisible opacity-0 bg-opacity-0 backdrop-blur-none"
-          }`}
+          className="bg-black bg-opacity-50 backdrop-blur-md"
+          focused={focused}
           {...{
             appleMusicLink,
             spotifyLink,
@@ -60,8 +52,8 @@ const Disc = ({
           }}
         />
         <img
-          height={"320px"}
-          width={"320px"}
+          height="320px"
+          width="320px"
           src={artwork}
           alt={title}
           loading="eager"

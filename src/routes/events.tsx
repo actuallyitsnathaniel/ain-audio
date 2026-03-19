@@ -7,20 +7,7 @@ import VideoBG from "../components/video-background";
 import SEO from "../components/seo";
 import heroPhoto from "../assets/images/event-photos/ryland-21.jpg";
 import actionPhoto from "../assets/images/event-photos/6-29-19-6.jpg";
-
-const fadeUp = {
-  hidden: { opacity: 0, y: 24 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.5, ease: [0.25, 0.1, 0.25, 1] as const },
-  },
-};
-
-const stagger = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.12 } },
-};
+import { fadeUp, stagger } from "../lib/animation";
 
 // ─── Hero ────────────────────────────────────────────────────────────────────
 
@@ -122,11 +109,11 @@ const services = [
 ];
 
 const Services = () => (
-  <section className="px-6 py-20 max-w-5xl mx-auto w-full">
+  <section className="min-h-screen flex flex-col justify-center px-6 py-20 max-w-5xl mx-auto w-full">
     <motion.div
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, margin: "-80px" }}
+      viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
       className="flex flex-col gap-12"
     >
@@ -173,10 +160,11 @@ const Services = () => (
 
 const PhotoDivider = () => (
   <motion.div
-    className="w-3/4 mx-auto h-72 md:h-96"
+    className="w-full mx-auto min-h-screen"
     initial={{ opacity: 0 }}
     whileInView={{ opacity: 1 }}
-    viewport={{ once: true, margin: "-80px" }}
+    exit={{ opacity: 0 }}
+    viewport={{ once: false, margin: "-80px" }}
     transition={{ duration: 0.6 }}
     style={{
       maskImage:
@@ -216,11 +204,11 @@ const steps = [
 ];
 
 const HowItWorks = () => (
-  <section className="px-6 py-20 w-full bg-white/2">
+  <section className="min-h-screen flex flex-col justify-center px-6 py-20 w-full bg-white/2">
     <motion.div
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, margin: "-80px" }}
+      viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
       className="flex flex-col gap-12 max-w-4xl mx-auto"
     >
@@ -280,11 +268,11 @@ const Stars = () => (
 );
 
 const Reviews = () => (
-  <section className="px-6 py-20 max-w-5xl mx-auto w-full">
+  <section className="min-h-screen flex flex-col justify-center px-6 py-20 max-w-5xl mx-auto w-full">
     <motion.div
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, margin: "-80px" }}
+      viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
       className="flex flex-col gap-12"
     >
@@ -395,11 +383,11 @@ const FAQItem = ({ q, a }: { q: string; a: string }) => {
 };
 
 const FAQ = () => (
-  <section className="px-6 py-20 w-full bg-white/2">
+  <section className="min-h-screen flex flex-col justify-center px-6 py-20 w-full bg-white/2">
     <motion.div
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, margin: "-80px" }}
+      viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
       className="flex flex-col gap-10 max-w-2xl mx-auto"
     >
@@ -421,11 +409,11 @@ const FAQ = () => (
 // ─── Booking CTA ─────────────────────────────────────────────────────────────
 
 const BookingCTA = () => (
-  <section className="px-6 py-24 flex flex-col items-center text-center gap-8">
+  <section className="min-h-screen flex flex-col items-center justify-center text-center px-6 py-24 gap-8">
     <motion.div
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, margin: "-80px" }}
+      viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
       className="flex flex-col items-center gap-6 max-w-xl"
     >

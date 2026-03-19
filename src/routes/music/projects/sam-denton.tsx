@@ -30,7 +30,7 @@ export const SamDenton = ({
 
   return (
     <div {...{ id }}>
-      <SEO
+      {isStandalone && (<SEO
         title="Sam Denton - Singer/Songwriter"
         description="Sam Denton is a talented singer/songwriter. All works produced, mixed, and mastered by Nathaniel Bowman (actually-its-nathaniel)."
         url="https://audio.actuallyitsnathaniel.com/projects/sam-denton"
@@ -44,6 +44,7 @@ export const SamDenton = ({
           url: "https://audio.actuallyitsnathaniel.com/#projects/sam-denton",
         }}
       />
+      )}
       <Project.ProfilePic
         {...{ id }}
         image={samPfp}
