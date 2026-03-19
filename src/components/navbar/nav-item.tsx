@@ -32,7 +32,7 @@ export const NavItem = ({
   return (
     <li className="transition-all duration-100 hover:scale-105">
       <Link
-        className={` hover:text-white p-5 font-light focus:outline-none focus-visible:underline focus-visible:decoration-white focus-visible:underline-offset-4`}
+        className={` hover:text-white p-5 tracking-widest font-light focus:outline-none focus-visible:underline focus-visible:decoration-white focus-visible:underline-offset-4`}
         to={resolvedLink}
         onClick={handleClick}
       >
