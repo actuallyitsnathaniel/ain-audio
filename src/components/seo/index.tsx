@@ -10,16 +10,16 @@ interface SEOProps {
 }
 
 const SEO = ({
-  title = "actually-its-nathaniel - Music Producer & Audio Engineer",
+  title = "actuallyitsnathaniel - Music Producer & Audio Engineer",
   description = "Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations.",
   image = "https://audio.actuallyitsnathaniel.com/og-image.png",
   url = "https://audio.actuallyitsnathaniel.com",
   type = "website",
   jsonLd,
 }: SEOProps) => {
-  const fullTitle = title.includes("actually-its-nathaniel")
+  const fullTitle = title.includes("actuallyitsnathaniel")
     ? title
-    : `${title} | actually-its-nathaniel`;
+    : `${title} | actuallyitsnathaniel`;
 
   useHead({
     title: fullTitle,
@@ -34,7 +34,7 @@ const SEO = ({
       { property: "og:title", content: fullTitle },
       { property: "og:description", content: description },
       { property: "og:image", content: image },
-      { property: "og:site_name", content: "actually-its-nathaniel" },
+      { property: "og:site_name", content: "actuallyitsnathaniel" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:url", content: url },
       { name: "twitter:title", content: fullTitle },
@@ -42,7 +42,9 @@ const SEO = ({
       { name: "twitter:image", content: image },
     ],
     link: [{ rel: "canonical", href: url }],
-    script: jsonLd ? [{ type: "application/ld+json", children: JSON.stringify(jsonLd) }] : [],
+    script: jsonLd
+      ? [{ type: "application/ld+json", children: JSON.stringify(jsonLd) }]
+      : [],
   });
 
   return null;

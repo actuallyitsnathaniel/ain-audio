@@ -14,7 +14,7 @@ const Root = () => {
           "@context": "https://schema.org",
           "@type": "Person",
           name: "Nathaniel Bowman",
-          alternateName: "actually-its-nathaniel",
+          alternateName: "actuallyitsnathaniel",
           url: "https://audio.actuallyitsnathaniel.com",
           jobTitle: "Music Producer & Audio Engineer",
           knowsAbout: [

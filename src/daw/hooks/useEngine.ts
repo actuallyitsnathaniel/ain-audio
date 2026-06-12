@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { engine } from "../engine";
 
-type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth";
+type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset";
 
 // Subscribe to engine events and force a re-render when they fire. Returns the
 // engine singleton so components can read its current state. Defaults to the
