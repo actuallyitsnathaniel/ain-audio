@@ -99,14 +99,17 @@ export function RollLab() {
       <PianoRoll />
       <div className="flex flex-col gap-[3px] font-mono text-[10.5px] leading-[1.55] tracking-[0.03em] text-faint">
         <span>
-          <span className="text-dim">edit</span> · click empty to draw · drag a note to move · drag its right edge to
-          resize · double-click / alt-click to delete · tap the keys on the left to hear them
+          <span className="text-dim">draw / select</span> · click empty to draw · click a note to select · shift+click
+          to add · drag empty for a marquee · double-click / right-click to delete · tap left keys to hear
+        </span>
+        <span>
+          <span className="text-dim">keys</span> · ←/→ nudge · ↑/↓ transpose · shift+↑/↓ octave · shift+←/→ resize ·
+          ⌘/ctrl+↑/↓ velocity · ⌥ free move · ⌥+drag or ⌘/ctrl+D duplicate · ⌘/ctrl+A all · ⌫ delete
         </span>
         <span>
           <span className="text-dim">move around</span> · scroll = pitch · shift+scroll = time · ⌘/ctrl+scroll = zoom ·
-          hold space (or middle-drag) to pan
+          space (or middle-drag) to pan · state shows top-right
         </span>
-        <span>this is the phrase i wrote with this sound — edit it, then hit play.</span>
       </div>
     </div>
   );

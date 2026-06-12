@@ -110,25 +110,36 @@ grid + notes (`pitchToY(p) = (HI_MIDI - p)*ROW_H - scrollY`) — no squashing, s
 always align. Drawn per-frame in `useRafLoop` (grid → notes/playhead clipped to the lane → key
 gutter on top). The working clip lives in a **ref** (mutated during drag for perf), pushed to
 `engine.setActiveClip` on change.
-- **Edit:** click empty → add (snap 1/16) · drag body → move · drag right edge → resize ·
-  double-click / alt-click / right-click → delete.
+A **selection model** (`sel: Set<note id>`) underlies the gesture set, which models Ableton Live's
+MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyboard editing works.
+- **Select:** click a note · shift+click add/remove · drag empty → marquee (shift adds) ·
+  shift+click a gutter key → toggle the whole pitch row · esc clears. Selected notes get a white
+  outline; the HUD (top-right) shows live `sel / note / vel / len`.
+- **Edit (mouse):** click empty → draw (snap 1/16) · drag a selected note → move the whole selection ·
+  drag right edge → resize the selection · **hold ⌘/ctrl/⌥ to bypass snap** · **⌥+drag → duplicate**
+  the selection (clone-in-place then move) · double-click / right-click → delete.
+- **Edit (keys, when focused):** ←/→ nudge · ⌥+←/→ nudge without snap · shift+←/→ resize · ↑/↓
+  transpose semitone · **shift+↑/↓ octave** · **⌘/ctrl+↑/↓ velocity ±10** · ⌘/ctrl+A select all ·
+  ⌘/ctrl+D duplicate (+1 beat) · delete/backspace · esc. A transpose/velocity change blips the
+  representative note so you hear the edit.
 - **Navigate:** wheel → scroll pitch · shift+wheel → scroll time · ⌘/ctrl+wheel → zoom time around
   cursor · hold Space (or middle-drag) → pan. Wheel is a **non-passive native listener** so it can
   `preventDefault` the page scroll.
 - **Gutter keyboard:** the left key column is tap-to-play — pointer-down auditions the pitch
   (`engine.noteOn`), sliding up/down retriggers, releasing/leaving the gutter stops. Held + sounding
   pitches glow (reads `engine.activeNotes()` each frame).
-- **Purity:** the clip ref is populated in the mount effect and only read inside handlers/rAF —
-  never during render (react-hooks v7 `refs` rule).
+- **Platform convention** (matching Live): ⌘(mac)/ctrl(win) is the "command"/snap-bypass key; ⌥ also
+  bypasses snap and triggers duplicate-drag. `cmd(e)` helper centralizes the mac/win check.
+- **Purity:** the clip + selection refs are populated in the mount effect / handlers and only read
+  inside handlers/rAF — never during render (react-hooks v7 `refs` rule).
 
 [components/piano-roll/RollLab.tsx](components/piano-roll/RollLab.tsx) wraps it with play/stop, a
 tempo `Knob`, loop + reset, and loads the selected preset's `defaultPhrase` on preset change (via a
 `pr-load` CustomEvent on the canvas).
 
-**Not yet implemented (Ableton parity, future):** marquee/rubber-band select, shift-click
-multi-select, shift-click a key to select a whole pitch row, arrow-key nudge/transpose
-(shift = octave / length), alt-drag for snap-bypass fine moves, ctrl/alt-drag to duplicate, a
-velocity lane, and note-stretch markers. See [[piano-roll-ableton-gestures]] for the full reference.
+**Not yet implemented (Ableton parity, future):** a dedicated velocity lane (drag markers / draw
+ramps) and alt-drag-vertical for velocity, plus note-stretch markers (scale a selection in time).
+See [[piano-roll-ableton-gestures]] for the full reference.
 
 ## Preset sampler
 

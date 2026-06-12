@@ -20,27 +20,34 @@ interface PLKey {
   whiteIdx: number;
 }
 
-function plBuildKeys() {
+// Build the key layout for a given octave offset. Positions are identical across
+// octaves; only the underlying MIDI numbers shift, so the lit keys + clicked
+// pitches follow the typing-keyboard's Z/X octave shift.
+function plBuildKeys(octave: number) {
   const keys: PLKey[] = [];
   let whiteIdx = 0;
+  const shift = octave * 12;
   for (let m = PL_START; m <= PL_END; m++) {
     const black = PL_BLACK.indexOf(m % 12) >= 0;
-    keys.push({ midi: m, black, whiteIdx: black ? whiteIdx - 1 : whiteIdx });
+    keys.push({ midi: m + shift, black, whiteIdx: black ? whiteIdx - 1 : whiteIdx });
     if (!black) whiteIdx++;
   }
   return { keys, whites: whiteIdx };
 }
-const PL_LAYOUT = plBuildKeys();
 
-function PresetKeyboard() {
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const midiLabel = (m: number) => NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
+
+function PresetKeyboard({ octave, vel }: { octave: number; vel: number }) {
   useEngine(["synth"]);
   const active = engine.activeNotes();
+  const layout = plBuildKeys(octave);
   const down = useRef<Record<number, boolean>>({});
 
   const on = (m: number) => {
     if (down.current[m]) return;
     down.current[m] = true;
-    engine.noteOn(m);
+    engine.noteOn(m, vel);
   };
   const off = (m: number) => {
     if (!down.current[m]) return;
@@ -61,22 +68,26 @@ function PresetKeyboard() {
     },
   });
 
-  const ww = 100 / PL_LAYOUT.whites;
+  const ww = 100 / layout.whites;
   return (
     <div className="relative flex h-[108px] touch-none overflow-hidden rounded-[3px] border border-line bg-inset select-none">
-      {PL_LAYOUT.keys
+      {layout.keys
         .filter((k) => !k.black)
         .map((k) => (
           <div
             key={k.midi}
             className={
-              "relative flex-1 cursor-pointer border-r border-[#1a1a20] transition-colors duration-[50ms] last:border-r-0 " +
+              "relative flex flex-1 cursor-pointer items-end justify-center border-r border-[#1a1a20] pb-[5px] transition-colors duration-[50ms] last:border-r-0 " +
               (active.indexOf(k.midi) >= 0 ? "bg-accent" : "bg-[#d4d4d8]")
             }
             {...keyProps(k.midi)}
-          />
+          >
+            {k.midi % 12 === 0 ? (
+              <span className="pointer-events-none font-mono text-[8px] tracking-[0.02em] text-[#6a6a72]">{midiLabel(k.midi)}</span>
+            ) : null}
+          </div>
         ))}
-      {PL_LAYOUT.keys
+      {layout.keys
         .filter((k) => k.black)
         .map((k) => (
           <div
@@ -96,26 +107,43 @@ function PresetKeyboard() {
 export function PresetLab() {
   const eng = useEngine(["synth", "preset"]);
   const [midiStatus, setMidiStatus] = useState("unavailable");
+  // computer-keyboard MIDI state (Ableton convention): Z/X octave, C/V velocity
+  const [octave, setOctave] = useState(0); // semitone offset = octave * 12
+  const [vel, setVel] = useState(0.85);
+  // refs so the keydown closure always reads the latest octave/velocity
+  const octaveRef = useRef(0);
+  const velRef = useRef(0.85);
+  octaveRef.current = octave;
+  velRef.current = vel;
 
   // computer keyboard
   useEffect(() => {
-    const held: Record<number, boolean> = {};
+    // map each held letter to the ABSOLUTE midi it triggered, so the right note
+    // releases even if the octave changed while the key was down.
+    const held: Record<string, number> = {};
     const dn = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
       const tag = (target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || target.isContentEditable) return;
-      const m = PL_KEYMAP[e.key.toLowerCase()];
-      if (m !== undefined && !held[m]) {
-        held[m] = true;
-        engine.noteOn(m);
+      const key = e.key.toLowerCase();
+      // Z/X shift octave (±2 range), C/V step velocity — Ableton's typing keyboard
+      if (key === "z") return setOctave((o) => Math.max(-3, o - 1));
+      if (key === "x") return setOctave((o) => Math.min(3, o + 1));
+      if (key === "c") return setVel((v) => Math.max(0.1, Math.round((v - 0.1) * 100) / 100));
+      if (key === "v") return setVel((v) => Math.min(1, Math.round((v + 0.1) * 100) / 100));
+      const base = PL_KEYMAP[key];
+      if (base !== undefined && held[key] === undefined) {
+        const m = base + octaveRef.current * 12;
+        held[key] = m;
+        engine.noteOn(m, velRef.current);
       }
     };
     const up = (e: KeyboardEvent) => {
-      const m = PL_KEYMAP[e.key.toLowerCase()];
-      if (m !== undefined && held[m]) {
-        delete held[m];
-        engine.noteOff(m);
+      const key = e.key.toLowerCase();
+      if (held[key] !== undefined) {
+        engine.noteOff(held[key]);
+        delete held[key];
       }
     };
     window.addEventListener("keydown", dn);
@@ -177,22 +205,37 @@ export function PresetLab() {
           </select>
           <span className="pointer-events-none absolute right-[9px] text-[8px] text-faint">▼</span>
         </span>
-        <span
-          className={
-            "ml-auto rounded-[3px] border px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap " +
-            (midiStatus.indexOf("device") > 0
-              ? "border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-accent"
-              : "border-line text-faint")
-          }
-          title="plug in a MIDI controller and just play"
-        >
-          midi: {midiStatus}
+        <span className="ml-auto flex items-center gap-[6px]">
+          <span
+            className="rounded-[3px] border border-line px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap text-faint"
+            title="Z / X shift the typing-keyboard octave"
+          >
+            oct <span className={"text-accent " + (octave !== 0 ? "" : "opacity-60")}>{octave >= 0 ? "+" + octave : octave}</span>
+          </span>
+          <span
+            className="rounded-[3px] border border-line px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap text-faint"
+            title="C / V lower / raise the typing-keyboard velocity"
+          >
+            vel <span className="text-accent">{Math.round(vel * 127)}</span>
+          </span>
+          <span
+            className={
+              "rounded-[3px] border px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap " +
+              (midiStatus.indexOf("device") > 0
+                ? "border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-accent"
+                : "border-line text-faint")
+            }
+            title="plug in a MIDI controller and just play"
+          >
+            midi: {midiStatus}
+          </span>
         </span>
       </div>
-      <PresetKeyboard />
+      <PresetKeyboard octave={octave} vel={vel} />
       <div className="font-mono text-[10.5px] leading-[1.6] tracking-[0.03em] text-faint">
-        click · computer keys A–K (W/E/T/Y/U for sharps) · or a MIDI controller — runs through the fx rack above. real
-        bounced preset one-shots, pitch-mapped across the keys.
+        click · computer keys A–K (W/E/T/Y/U for sharps) · <span className="text-dim">Z / X</span> octave down / up ·{" "}
+        <span className="text-dim">C / V</span> velocity down / up · or a MIDI controller — runs through the fx rack
+        above. real bounced preset one-shots, pitch-mapped across the keys.
       </div>
     </div>
   );
