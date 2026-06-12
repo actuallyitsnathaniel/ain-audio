@@ -1,14 +1,19 @@
 // ── PIANO ROLL — playable + editable MIDI clip editor ────────────────────
 // A scrollable / zoomable viewport over the full MIDI range. ONE coordinate
 // system for grid + notes (no squashing) so rows and notes always align.
+// Gesture set models Ableton Live's MIDI Note Editor (non-draw-mode).
 //
-// Edit (plain pointer):
-//   click empty → add note (snapped to 1/16) · drag body → move ·
-//   drag right edge → resize · double-click / alt-click / right-click → delete
+// Edit:
+//   click empty → draw a note · click a note → select · shift+click → add/remove ·
+//   drag empty → marquee select (shift adds) · drag a note → move the selection ·
+//   drag right edge → resize · hold ⌘/ctrl while moving/resizing → bypass snap ·
+//   ⌥/ctrl+drag a note → duplicate the selection · double-click / right-click → delete
+// Keyboard (when the roll has focus):
+//   ←/→ nudge in time · ⌘/ctrl+←/→ nudge w/o snap · shift+←/→ resize ·
+//   ↑/↓ transpose semitone · shift+↑/↓ octave · delete/backspace · ⌘/ctrl+A all ·
+//   ⌘/ctrl+D duplicate · esc deselect
 // Navigate:
-//   wheel → scroll pitches (vertical) · shift+wheel → scroll time (horizontal) ·
-//   cmd/ctrl+wheel → zoom time around cursor · hold SPACE + drag (or middle-drag)
-//   → pan both axes
+//   wheel → pitch · shift+wheel → time · ⌘/ctrl+wheel → zoom · space/middle-drag → pan
 //
 // The working clip lives in a ref (mutated during drag for perf) and is pushed
 // to engine.setActiveClip; the lookahead scheduler plays from there.
@@ -24,35 +29,44 @@ const ROW_H = 14; // px per semitone row
 const KEY_W = 30; // left piano-key gutter
 const LO_MIDI = 12; // C0
 const HI_MIDI = 108; // C8
-const PITCH_SPAN = HI_MIDI - LO_MIDI; // rows below the top
-const FULL_H = (PITCH_SPAN + 1) * ROW_H; // full grid height in px
-const MIN_PPB = 28; // min pixels-per-beat (zoom out)
-const MAX_PPB = 220; // max pixels-per-beat (zoom in)
+const PITCH_SPAN = HI_MIDI - LO_MIDI;
+const FULL_H = (PITCH_SPAN + 1) * ROW_H;
+const MIN_PPB = 28;
+const MAX_PPB = 220;
+const DRAG_SLOP = 3; // px before a press becomes a drag
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const noteName = (m: number) => NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
 
 const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#54adbd";
-const snap = (b: number) => Math.round(b / SNAP) * SNAP;
+const snapTo = (b: number) => Math.round(b / SNAP) * SNAP;
 const isBlack = (m: number) => [1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+// Live's modifier convention: ⌘(mac)/ctrl(win) bypasses snap & is the "command" key
+const cmd = (e: { metaKey: boolean; ctrlKey: boolean }) => e.metaKey || e.ctrlKey;
 
 type Drag =
-  | { mode: "move"; id: string; grabBeat: number; startBeat: number }
-  | { mode: "resize"; id: string }
+  | { mode: "move"; grabBeat: number; grabPitch: number; base: Map<string, { start: number; pitch: number }>; moved: boolean; dup: boolean }
+  | { mode: "resize"; base: Map<string, number>; anchor: string; moved: boolean }
   | { mode: "create"; id: string }
+  | { mode: "marquee"; x0: number; y0: number; x1: number; y1: number; add: Set<string> }
   | { mode: "pan"; startX: number; startY: number; baseX: number; baseY: number }
   | { mode: "play" }
   | null;
 
 interface View {
-  scrollX: number; // px scrolled in time
-  scrollY: number; // px scrolled in pitch
-  ppb: number; // pixels per beat (horizontal zoom)
+  scrollX: number;
+  scrollY: number;
+  ppb: number;
 }
 
 export function PianoRoll({ height = 280 }: { height?: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const clipRef = useRef<NoteClip | null>(null);
+  const sel = useRef<Set<string>>(new Set()); // selected note ids
   const drag = useRef<Drag>(null);
-  const gutterKey = useRef<number | null>(null); // pitch currently held via the gutter keyboard
+  const pressXY = useRef<{ x: number; y: number } | null>(null); // for drag-slop
+  const gutterKey = useRef<number | null>(null);
   const spaceHeld = useRef(false);
   const view = useRef<View>({ scrollX: 0, scrollY: 0, ppb: 64 });
 
@@ -60,7 +74,6 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     if (clipRef.current) engine.setActiveClip(clipRef.current);
   };
 
-  // center the viewport vertically on a clip's notes (or middle C) on load
   const centerOn = (clip: NoteClip) => {
     const cv = ref.current;
     const h = cv ? cv.clientHeight : height;
@@ -74,13 +87,13 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       });
       mid = (lo + hi) / 2;
     }
-    const midY = (HI_MIDI - mid) * ROW_H;
-    view.current.scrollY = clamp(midY - h / 2, 0, Math.max(0, FULL_H - h));
+    view.current.scrollY = clamp((HI_MIDI - mid) * ROW_H - h / 2, 0, Math.max(0, FULL_H - h));
     view.current.scrollX = 0;
   };
 
   const loadClip = (clip: NoteClip) => {
     clipRef.current = cloneClip(clip);
+    sel.current = new Set();
     centerOn(clipRef.current);
     commit();
   };
@@ -91,11 +104,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     if (!el) return;
     const onLoad = (e: Event) => loadClip((e as CustomEvent<NoteClip>).detail);
     el.addEventListener("pr-load", onLoad as EventListener);
-    // wheel must be a non-passive native listener so we can preventDefault the
-    // page from scrolling while we scroll/zoom the roll.
     el.addEventListener("wheel", handleWheel, { passive: false });
-    // space-to-pan: track the key globally so it works while hovering the canvas.
-    // preventDefault on space stops the page from scrolling while panning.
     const kd = (e: KeyboardEvent) => {
       if (e.code === "Space" && !isTypingTarget(e.target)) {
         spaceHeld.current = true;
@@ -116,7 +125,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── coordinate system (one source of truth, scroll-aware) ──
+  // ── coordinate system ──
   const totalBeats = () => (clipRef.current ? clipBeats(clipRef.current) : 4);
   const maxScrollX = (w: number) => Math.max(0, totalBeats() * view.current.ppb - (w - KEY_W));
   const beatToX = (b: number) => KEY_W + b * view.current.ppb - view.current.scrollX;
@@ -124,7 +133,9 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
   const pitchToY = (p: number) => (HI_MIDI - p) * ROW_H - view.current.scrollY;
   const yToPitch = (y: number) => HI_MIDI - Math.floor((y + view.current.scrollY) / ROW_H);
 
-  // ── pointer edit ──
+  const notes = () => clipRef.current?.notes || [];
+  const byId = (id: string) => notes().find((n) => n.id === id);
+
   const hitNote = (x: number, y: number): { note: Note; edge: boolean } | null => {
     if (!clipRef.current) return null;
     const beat = xToBeat(x);
@@ -133,8 +144,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       const n = clipRef.current.notes[i];
       if (n.pitch !== pitch) continue;
       if (beat >= n.start && beat <= n.start + n.length) {
-        const edgeX = beatToX(n.start + n.length);
-        return { note: n, edge: x >= edgeX - 6 };
+        return { note: n, edge: x >= beatToX(n.start + n.length) - 6 };
       }
     }
     return null;
@@ -145,7 +155,12 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
-  // ── gutter keyboard (tap a left-edge key to audition the pitch) ──
+  const blip = (pitch: number) => {
+    engine.noteOn(pitch, 0.85);
+    setTimeout(() => engine.noteOff(pitch), 140);
+  };
+
+  // ── gutter keyboard ──
   const gutterOn = (pitch: number) => {
     if (gutterKey.current === pitch) return;
     if (gutterKey.current !== null) engine.noteOff(gutterKey.current);
@@ -158,20 +173,31 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     gutterKey.current = null;
   };
 
+  // shift+click a gutter key → select/deselect the whole pitch row
+  const togglePitchRow = (pitch: number) => {
+    const ids = notes().filter((n) => n.pitch === pitch).map((n) => n.id);
+    if (!ids.length) return;
+    const allSel = ids.every((id) => sel.current.has(id));
+    ids.forEach((id) => (allSel ? sel.current.delete(id) : sel.current.add(id)));
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!clipRef.current) return;
     const cv = ref.current!;
+    cv.focus();
     cv.setPointerCapture(e.pointerId);
     const { x, y } = localXY(e);
+    pressXY.current = { x, y };
 
-    // pan: space-held or middle button, anywhere
     if (spaceHeld.current || e.button === 1) {
       drag.current = { mode: "pan", startX: e.clientX, startY: e.clientY, baseX: view.current.scrollX, baseY: view.current.scrollY };
       return;
     }
-    // gutter: play the pitch under the pointer like a sideways keyboard
+    // gutter
     if (x < KEY_W) {
-      if (e.button === 0) {
+      if (e.button === 0 && e.shiftKey) {
+        togglePitchRow(clamp(yToPitch(y), LO_MIDI, HI_MIDI));
+      } else if (e.button === 0) {
         drag.current = { mode: "play" };
         gutterOn(clamp(yToPitch(y), LO_MIDI, HI_MIDI));
       }
@@ -179,25 +205,43 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     }
 
     const hit = hitNote(x, y);
-    // right-click / alt → delete
-    if (e.button === 2 || e.altKey) {
-      if (hit) {
-        clipRef.current.notes = clipRef.current.notes.filter((n) => n.id !== hit.note.id);
-        commit();
-      }
+    // right-click / alt(without a note-duplicate intent) → delete
+    if (e.button === 2) {
+      if (hit) deleteNotes([hit.note.id]);
       return;
     }
-    if (hit && hit.edge) {
-      drag.current = { mode: "resize", id: hit.note.id };
-    } else if (hit) {
-      drag.current = { mode: "move", id: hit.note.id, grabBeat: xToBeat(x), startBeat: hit.note.start };
-    } else {
-      const note: Note = { id: newNoteId(), pitch: yToPitch(y), start: Math.max(0, snap(xToBeat(x) - SNAP / 2)), length: SNAP * 2, vel: 0.85 };
-      clipRef.current.notes.push(note);
-      drag.current = { mode: "create", id: note.id };
-      engine.noteOn(note.pitch, note.vel);
-      setTimeout(() => engine.noteOff(note.pitch), 140);
-      commit();
+
+    if (hit) {
+      const id = hit.note.id;
+      if (e.shiftKey) {
+        // toggle in/out of selection
+        if (sel.current.has(id)) sel.current.delete(id);
+        else sel.current.add(id);
+      } else if (!sel.current.has(id)) {
+        // fresh selection of just this note
+        sel.current = new Set([id]);
+      }
+      if (hit.edge && sel.current.has(id)) {
+        const base = new Map<string, number>();
+        sel.current.forEach((sid) => {
+          const n = byId(sid);
+          if (n) base.set(sid, n.length);
+        });
+        drag.current = { mode: "resize", base, anchor: id, moved: false };
+      } else if (sel.current.has(id)) {
+        const base = new Map<string, { start: number; pitch: number }>();
+        sel.current.forEach((sid) => {
+          const n = byId(sid);
+          if (n) base.set(sid, { start: n.start, pitch: n.pitch });
+        });
+        // ⌥(mac)/ctrl(win) or alt at press → duplicate-drag
+        drag.current = { mode: "move", grabBeat: xToBeat(x), grabPitch: yToPitch(y), base, moved: false, dup: e.altKey };
+      }
+    } else if (e.button === 0) {
+      // empty: marquee (shift adds to selection) — promoted from a press once it
+      // exceeds the slop; a plain click that doesn't drag draws a note on up.
+      drag.current = { mode: "marquee", x0: x, y0: y, x1: x, y1: y, add: e.shiftKey ? new Set(sel.current) : new Set() };
+      if (!e.shiftKey) sel.current = new Set();
     }
   };
 
@@ -213,49 +257,223 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       return;
     }
     if (d.mode === "play") {
-      // slide up/down the keys to retrigger; slide into the lane to release
       if (x < KEY_W) gutterOn(clamp(yToPitch(y), LO_MIDI, HI_MIDI));
       else gutterOff();
       return;
     }
     if (!clipRef.current) return;
-    const note = clipRef.current.notes.find((n) => n.id === d.id);
-    if (!note) return;
+    const free = cmd(e) || e.altKey; // bypass snap while held
     const tb = totalBeats();
-    if (d.mode === "move") {
-      const db = xToBeat(x) - d.grabBeat;
-      note.start = clamp(snap(d.startBeat + db), 0, tb - note.length);
-      note.pitch = clamp(yToPitch(y), LO_MIDI, HI_MIDI);
-    } else if (d.mode === "resize" || d.mode === "create") {
-      const end = snap(xToBeat(x));
-      note.length = clamp(end - note.start, SNAP, tb - note.start);
+
+    if (d.mode === "marquee") {
+      d.x1 = x;
+      d.y1 = y;
+      // live-select notes intersecting the box
+      const b0 = xToBeat(Math.min(d.x0, x));
+      const b1 = xToBeat(Math.max(d.x0, x));
+      const p0 = yToPitch(Math.max(d.y0, y));
+      const p1 = yToPitch(Math.min(d.y0, y));
+      const next = new Set(d.add);
+      notes().forEach((n) => {
+        const hit = n.pitch >= p0 && n.pitch <= p1 && n.start + n.length >= b0 && n.start <= b1;
+        if (hit) next.add(n.id);
+      });
+      sel.current = next;
+      return;
     }
-    commit();
+
+    if (d.mode === "move") {
+      if (!d.moved && pressXY.current && Math.hypot(x - pressXY.current.x, y - pressXY.current.y) < DRAG_SLOP) return;
+      // on first real movement, if duplicating, clone the selection in place
+      if (!d.moved && d.dup) duplicateSelection(0, 0, true);
+      d.moved = true;
+      const dBeatRaw = xToBeat(x) - d.grabBeat;
+      const dPitch = yToPitch(y) - d.grabPitch;
+      d.base.forEach((b, id) => {
+        const n = byId(id);
+        if (!n) return;
+        const ns = free ? b.start + dBeatRaw : snapTo(b.start + dBeatRaw);
+        n.start = clamp(ns, 0, tb - n.length);
+        n.pitch = clamp(b.pitch + dPitch, LO_MIDI, HI_MIDI);
+      });
+      commit();
+      return;
+    }
+
+    if (d.mode === "resize") {
+      if (!d.moved && pressXY.current && Math.hypot(x - pressXY.current.x, y - pressXY.current.y) < DRAG_SLOP) return;
+      d.moved = true;
+      const anchor = byId(d.anchor);
+      if (!anchor) return;
+      const end = free ? xToBeat(x) : snapTo(xToBeat(x));
+      const newLen = clamp(end - anchor.start, SNAP, tb - anchor.start);
+      const dLen = newLen - (d.base.get(d.anchor) || newLen);
+      d.base.forEach((len0, id) => {
+        const n = byId(id);
+        if (!n) return;
+        n.length = clamp(len0 + dLen, SNAP, tb - n.start);
+      });
+      commit();
+      return;
+    }
   };
 
-  const onPointerUp = () => {
-    if (drag.current?.mode === "play") gutterOff();
+  const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    const d = drag.current;
     drag.current = null;
+    if (!d) return;
+    if (d.mode === "play") {
+      gutterOff();
+      return;
+    }
+    if (d.mode === "marquee") {
+      // a click that never dragged on empty space → draw a note
+      const moved = pressXY.current && Math.hypot(d.x1 - d.x0, d.y1 - d.y0) >= DRAG_SLOP;
+      if (!moved && clipRef.current) {
+        const { x, y } = localXY(e);
+        if (x >= KEY_W) {
+          const note: Note = { id: newNoteId(), pitch: clamp(yToPitch(y), LO_MIDI, HI_MIDI), start: clamp(snapTo(xToBeat(x) - SNAP / 2), 0, totalBeats() - SNAP * 2), length: SNAP * 2, vel: 0.85 };
+          clipRef.current.notes.push(note);
+          sel.current = new Set([note.id]);
+          blip(note.pitch);
+          commit();
+        }
+      }
+      return;
+    }
+    if ((d.mode === "move" && !d.moved) || (d.mode === "resize" && !d.moved)) {
+      // a plain click on a note (no drag): selection already set in pointerDown
+      return;
+    }
     commit();
   };
 
   const onDoubleClick = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = localXY(e);
     const hit = hitNote(x, y);
-    if (hit && clipRef.current) {
-      clipRef.current.notes = clipRef.current.notes.filter((n) => n.id !== hit.note.id);
-      commit();
+    if (hit) deleteNotes([hit.note.id]);
+  };
+
+  // ── editing ops ──
+  const deleteNotes = (ids: string[]) => {
+    if (!clipRef.current) return;
+    const kill = new Set(ids);
+    clipRef.current.notes = clipRef.current.notes.filter((n) => !kill.has(n.id));
+    ids.forEach((id) => sel.current.delete(id));
+    commit();
+  };
+
+  // clone the current selection; if inPlace, leaves copies on top (for dup-drag),
+  // else offsets by (dBeat, dPitch). New copies become the selection.
+  const duplicateSelection = (dBeat: number, dPitch: number, inPlace = false) => {
+    if (!clipRef.current || !sel.current.size) return;
+    const fresh: string[] = [];
+    const tb = totalBeats();
+    [...sel.current].forEach((id) => {
+      const n = byId(id);
+      if (!n) return;
+      const copy: Note = {
+        id: newNoteId(),
+        pitch: clamp(n.pitch + dPitch, LO_MIDI, HI_MIDI),
+        start: clamp(n.start + dBeat, 0, tb - n.length),
+        length: n.length,
+        vel: n.vel,
+      };
+      clipRef.current!.notes.push(copy);
+      fresh.push(copy.id);
+    });
+    if (!inPlace) sel.current = new Set(fresh);
+    commit();
+  };
+
+  const nudge = (dBeat: number, dPitch: number, free: boolean) => {
+    if (!sel.current.size) return;
+    const tb = totalBeats();
+    sel.current.forEach((id) => {
+      const n = byId(id);
+      if (!n) return;
+      if (dBeat) n.start = clamp(free ? n.start + dBeat : snapTo(n.start + dBeat), 0, tb - n.length);
+      if (dPitch) n.pitch = clamp(n.pitch + dPitch, LO_MIDI, HI_MIDI);
+    });
+    if (dPitch) {
+      const first = byId([...sel.current][0]);
+      if (first) blip(first.pitch);
+    }
+    commit();
+  };
+
+  const resizeSel = (dBeat: number) => {
+    if (!sel.current.size) return;
+    const tb = totalBeats();
+    sel.current.forEach((id) => {
+      const n = byId(id);
+      if (!n) return;
+      n.length = clamp(snapTo(n.length + dBeat), SNAP, tb - n.start);
+    });
+    commit();
+  };
+
+  // shift every selected note's velocity by dV (0–1). Reports the new value of
+  // the selection's representative note to the HUD readout.
+  const velSel = (dV: number) => {
+    if (!sel.current.size) return;
+    sel.current.forEach((id) => {
+      const n = byId(id);
+      if (!n) return;
+      n.vel = clamp(Math.round((n.vel + dV) * 100) / 100, 0.05, 1);
+    });
+    commit();
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    if (!clipRef.current) return;
+    const k = e.key;
+    if (k === "Escape") {
+      sel.current = new Set();
+      return;
+    }
+    if (cmd(e) && (k === "a" || k === "A")) {
+      sel.current = new Set(notes().map((n) => n.id));
+      e.preventDefault();
+      return;
+    }
+    if (cmd(e) && (k === "d" || k === "D")) {
+      duplicateSelection(1, 0); // duplicate one beat to the right
+      e.preventDefault();
+      return;
+    }
+    if (k === "Delete" || k === "Backspace") {
+      deleteNotes([...sel.current]);
+      e.preventDefault();
+      return;
+    }
+    if (!sel.current.size) return;
+    const altFree = e.altKey; // alt = bypass snap on time nudge (Live convention)
+    if (k === "ArrowLeft") {
+      e.preventDefault();
+      if (e.shiftKey) resizeSel(-SNAP);
+      else nudge(-SNAP, 0, altFree);
+    } else if (k === "ArrowRight") {
+      e.preventDefault();
+      if (e.shiftKey) resizeSel(SNAP);
+      else nudge(SNAP, 0, altFree);
+    } else if (k === "ArrowUp") {
+      e.preventDefault();
+      if (cmd(e)) velSel(0.1); // ⌘/ctrl+↑ → velocity +10 (Live convention)
+      else nudge(0, e.shiftKey ? 12 : 1, altFree); // ↑ semitone · shift+↑ octave
+    } else if (k === "ArrowDown") {
+      e.preventDefault();
+      if (cmd(e)) velSel(-0.1);
+      else nudge(0, e.shiftKey ? -12 : -1, altFree);
     }
   };
 
-  // ── wheel: scroll / zoom (native non-passive so we can preventDefault) ──
   const handleWheel = (e: WheelEvent) => {
     const cv = ref.current;
     if (!cv) return;
     e.preventDefault();
     const v = view.current;
     if (e.ctrlKey || e.metaKey) {
-      // zoom time around cursor — keep the beat under the cursor fixed
       const rect = cv.getBoundingClientRect();
       const cx = e.clientX - rect.left;
       const beatAt = xToBeat(cx);
@@ -268,7 +486,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     }
   };
 
-  // ── render: grid + notes + playhead, all in one scroll-aware pass ──
+  // ── render ──
   useRafLoop(() => {
     const cv = ref.current;
     if (!cv) return;
@@ -289,10 +507,9 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     const v = view.current;
     const tb = totalBeats();
     const bpb = clipRef.current?.beatsPerBar || 4;
-
-    // visible pitch rows only
     const firstP = clamp(yToPitch(h), LO_MIDI, HI_MIDI);
     const lastP = clamp(yToPitch(0), LO_MIDI, HI_MIDI);
+
     for (let p = firstP; p <= lastP; p++) {
       const y = pitchToY(p);
       g.fillStyle = isBlack(p) ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.045)";
@@ -300,8 +517,6 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       g.fillStyle = "rgba(255,255,255,0.05)";
       g.fillRect(KEY_W, y, w - KEY_W, 1);
     }
-
-    // beat / bar lines (vertical)
     for (let b = 0; b <= tb; b++) {
       const x = beatToX(b);
       if (x < KEY_W - 1 || x > w) continue;
@@ -309,7 +524,6 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       g.fillStyle = bar ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.07)";
       g.fillRect(x, 0, bar ? 1.5 : 1, h);
     }
-    // 1/16 sub-grid only when zoomed in enough to be readable
     if (v.ppb >= 90) {
       for (let b = 0; b <= tb; b += SNAP) {
         if (b % 1 === 0) continue;
@@ -320,30 +534,50 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       }
     }
 
-    // notes + playhead, clipped to the lane area so they never paint over the gutter
     const ac = accent();
     const pos = engine.getSequencePosition();
-    const notes = clipRef.current?.notes || [];
     g.save();
     g.beginPath();
     g.rect(KEY_W, 0, w - KEY_W, h);
     g.clip();
-    notes.forEach((n) => {
+    notes().forEach((n) => {
       const x = beatToX(n.start);
       const y = pitchToY(n.pitch);
       if (y < -ROW_H || y > h) return;
       const wn = Math.max(3, n.length * v.ppb - 1.5);
       if (x + wn < KEY_W || x > w) return;
       const playing = pos.playing && pos.beat >= n.start && pos.beat < n.start + n.length;
+      const selected = sel.current.has(n.id);
       g.fillStyle = ac;
       g.globalAlpha = playing ? 1 : 0.5 + n.vel * 0.4;
       g.beginPath();
       g.roundRect(x, y + 1, wn, ROW_H - 2, 2);
       g.fill();
       g.globalAlpha = 1;
-      g.fillStyle = "rgba(255,255,255,0.28)";
-      g.fillRect(x, y + 1, wn, 1);
+      if (selected) {
+        g.strokeStyle = "#ffffff";
+        g.lineWidth = 1.25;
+        g.beginPath();
+        g.roundRect(x + 0.5, y + 1.5, wn - 1, ROW_H - 3, 2);
+        g.stroke();
+      } else {
+        g.fillStyle = "rgba(255,255,255,0.28)";
+        g.fillRect(x, y + 1, wn, 1);
+      }
     });
+    // marquee box
+    if (drag.current?.mode === "marquee") {
+      const d = drag.current;
+      const mx = Math.min(d.x0, d.x1),
+        my = Math.min(d.y0, d.y1);
+      g.strokeStyle = "rgba(255,255,255,0.55)";
+      g.setLineDash([3, 3]);
+      g.lineWidth = 1;
+      g.strokeRect(mx + 0.5, my + 0.5, Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
+      g.setLineDash([]);
+      g.fillStyle = "rgba(255,255,255,0.05)";
+      g.fillRect(mx, my, Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
+    }
     if (pos.playing) {
       const px = beatToX(pos.beat);
       g.fillStyle = "#ffffff";
@@ -353,8 +587,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     }
     g.restore();
 
-    // ── piano-key gutter (drawn last, fixed to the left, scrolls vertically) ──
-    // tap-to-play sideways keyboard; the held key + every sounding pitch glow.
+    // gutter keyboard
     const held = gutterKey.current;
     const sounding = new Set(engine.activeNotes());
     g.fillStyle = "#0c0c0e";
@@ -372,18 +605,63 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     }
     g.fillStyle = "rgba(255,255,255,0.12)";
     g.fillRect(KEY_W - 1, 0, 1, h);
+
+    // ── HUD readout (top-right): live state of the selection's params ──
+    const ids = [...sel.current];
+    const rep = ids.length ? byId(ids[0]) : null;
+    g.font = "9px ui-monospace, monospace";
+    const lines: string[] = [];
+    if (rep) {
+      const vMin = Math.min(...ids.map((id) => byId(id)?.vel ?? 1));
+      const vMax = Math.max(...ids.map((id) => byId(id)?.vel ?? 0));
+      const velStr = Math.abs(vMax - vMin) < 0.005 ? `${Math.round(rep.vel * 127)}` : `${Math.round(vMin * 127)}–${Math.round(vMax * 127)}`;
+      lines.push(`sel ${ids.length}`);
+      lines.push(`note ${noteName(rep.pitch)}`);
+      lines.push(`vel ${velStr}`);
+      lines.push(`len ${rep.length.toFixed(2)}b`);
+    } else {
+      lines.push("no selection");
+    }
+    const pad = 6;
+    let bw = 0;
+    lines.forEach((l) => (bw = Math.max(bw, g.measureText(l).width)));
+    const boxW = bw + pad * 2;
+    const boxH = lines.length * 12 + pad * 2 - 2;
+    const bx = w - boxW - 6;
+    const by = 6;
+    g.fillStyle = "rgba(8,8,10,0.82)";
+    g.beginPath();
+    g.roundRect(bx, by, boxW, boxH, 3);
+    g.fill();
+    g.strokeStyle = "rgba(255,255,255,0.1)";
+    g.lineWidth = 1;
+    g.stroke();
+    lines.forEach((l, i) => {
+      const isLabelVal = l.includes(" ");
+      const label = isLabelVal ? l.slice(0, l.indexOf(" ")) : l;
+      const val = isLabelVal ? l.slice(l.indexOf(" ") + 1) : "";
+      const ty = by + pad + 8 + i * 12;
+      g.fillStyle = "#5c5c66";
+      g.fillText(label, bx + pad, ty);
+      if (val) {
+        g.fillStyle = ac;
+        g.fillText(val, bx + pad + g.measureText(label + " ").width, ty);
+      }
+    });
   });
 
   return (
     <canvas
       ref={ref}
-      className={"w-full touch-none rounded-[3px] border border-line bg-inset select-none " + (spaceHeld.current ? "cursor-grab" : "")}
+      tabIndex={0}
+      className="w-full touch-none rounded-[3px] border border-line bg-inset outline-none select-none focus:border-line2"
       style={{ height }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
+      onKeyDown={onKeyDown}
       onContextMenu={(e) => e.preventDefault()}
     />
   );
