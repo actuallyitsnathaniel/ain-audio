@@ -16,6 +16,8 @@
 // rack. Per-preset settings (display name, envelope, gain) default by
 // convention and can be overridden per folder id in PRESET_OVERRIDES below.
 
+import { phrase, type NoteClip } from "./clips";
+
 export interface SampleZone {
   url: string;
   rootMidi: number; // MIDI note the sample was bounced at (e.g. 60 = C4)
@@ -37,7 +39,8 @@ export interface SampledPreset {
   env: AmpEnv;
   gain: number; // output trim
   fallbackPatch?: string; // PATCHES key used when no zone decodes
-  // Phase 2 adds: defaultPhrase, bpmHint
+  defaultPhrase: NoteClip; // demo phrase shown/played in the piano roll
+  bpmHint?: number; // suggested tempo for the phrase
 }
 
 // Default amp envelope + gain for any preset that has no override entry.
@@ -55,14 +58,40 @@ interface PresetOverride {
   // explicit zone ranges, keyed by note filename (without extension), when you
   // want hard multisample boundaries instead of nearest-root selection.
   zoneRanges?: Record<string, { loMidi: number; hiMidi: number }>;
+  defaultPhrase?: NoteClip;
+  bpmHint?: number;
 }
+
+// Demo phrases — the "here's how I used it" the piano roll plays back. 1 bar of
+// 4/4; beats are floats (0.25 = a 1/16). Authored with the phrase() helper.
+// MIDI: 60 = C4. Editable in the roll; "reset" restores these.
+const PHRASE_GLASS = phrase(2, [
+  // sustained Cmaj9 → Amin pad swell across two bars
+  [60, 0, 4, 0.7], [64, 0, 4, 0.6], [67, 0, 4, 0.6], [71, 0, 4, 0.5],
+  [57, 4, 4, 0.7], [60, 4, 4, 0.6], [64, 4, 4, 0.6], [67, 4, 4, 0.5],
+]);
+const PHRASE_NEON = phrase(1, [
+  // bright 1/16 arpeggio, Cmaj triad climbing
+  [60, 0, 0.25, 0.9], [64, 0.5, 0.25, 0.8], [67, 1, 0.25, 0.85], [72, 1.5, 0.25, 0.9],
+  [67, 2, 0.25, 0.8], [64, 2.5, 0.25, 0.75], [69, 3, 0.25, 0.85], [72, 3.5, 0.25, 0.9],
+]);
+const PHRASE_SUB = phrase(1, [
+  // syncopated low root/fifth groove
+  [36, 0, 0.75, 1], [36, 1, 0.5, 0.85], [43, 1.75, 0.25, 0.7],
+  [36, 2, 0.75, 1], [36, 3, 0.5, 0.85], [41, 3.5, 0.5, 0.75],
+]);
 
 const PRESET_OVERRIDES: Record<string, PresetOverride> = {
   // keep the original demo patches sounding identical until real files land:
-  "glass-pad": { name: "glass pad", env: { a: 0.16, d: 0.4, s: 0.7, r: 0.9 }, gain: 0.13, fallbackPatch: "glass pad" },
-  "neon-pluck": { name: "neon pluck", env: { a: 0.004, d: 0.28, s: 0.0, r: 0.28 }, gain: 0.16, fallbackPatch: "neon pluck" },
-  "sub-bass": { name: "sub bass", env: { a: 0.006, d: 0.12, s: 0.9, r: 0.16 }, gain: 0.24, fallbackPatch: "sub bass" },
+  "glass-pad": { name: "glass pad", env: { a: 0.16, d: 0.4, s: 0.7, r: 0.9 }, gain: 0.13, fallbackPatch: "glass pad", defaultPhrase: PHRASE_GLASS, bpmHint: 96 },
+  "neon-pluck": { name: "neon pluck", env: { a: 0.004, d: 0.28, s: 0.0, r: 0.28 }, gain: 0.16, fallbackPatch: "neon pluck", defaultPhrase: PHRASE_NEON, bpmHint: 124 },
+  "sub-bass": { name: "sub bass", env: { a: 0.006, d: 0.12, s: 0.9, r: 0.16 }, gain: 0.24, fallbackPatch: "sub bass", defaultPhrase: PHRASE_SUB, bpmHint: 110 },
 };
+
+// fallback phrase for any preset that ships no defaultPhrase override
+const PHRASE_DEFAULT = phrase(1, [
+  [60, 0, 1, 0.85], [64, 1, 1, 0.8], [67, 2, 1, 0.8], [72, 3, 1, 0.85],
+]);
 
 // Presets to show even when no audio file exists yet (so the JS-synth fallback
 // has something to attach to). These ids must have a fallbackPatch override.
@@ -132,6 +161,8 @@ function buildPresets(): SampledPreset[] {
       env: { ...DEFAULT_ENV, ...ov.env },
       gain: ov.gain ?? DEFAULT_GAIN,
       fallbackPatch: ov.fallbackPatch,
+      defaultPhrase: ov.defaultPhrase || PHRASE_DEFAULT,
+      bpmHint: ov.bpmHint,
     };
   });
 }
