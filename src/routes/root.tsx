@@ -1,13 +1,6 @@
-import Home from "./home";
-import AboutMe from "./about-me";
-import ProjectHighlights from "./music/projects";
-import Press from "./press";
-
-import VideoBG from "../components/video-background";
-import Footer from "../components/footer";
-import { NavBar } from "../components/navbar";
-import ScrollToHashElement from "../utilities/ScrollToHashElement";
 import SEO from "../components/seo";
+import { DawShell } from "../daw/DawShell";
+import { DawHome } from "../daw/DawHome";
 
 const Root = () => {
   return (
@@ -38,19 +31,9 @@ const Root = () => {
           ],
         }}
       />
-      <div
-        id="root"
-        className="flex flex-col w-full text-center font-light *:text-white"
-      >
-        <VideoBG />
-        <ScrollToHashElement />
-        <Home />
-        <AboutMe />
-        <ProjectHighlights />
-        <Press />
-        <Footer />
-        <NavBar />
-      </div>
+      <DawShell>
+        <DawHome />
+      </DawShell>
     </>
   );
 };
