@@ -1,0 +1,108 @@
+# Audio Engine Reference
+
+Developer documentation for the Web Audio engine (`src/daw/engine.ts`, exported as the
+singleton `engine`). One `AudioContext`, one global "master track", a preset sampler, and a
+reorderable FX rack. React subscribes via `engine.on(event, fn)` / `off`; it never owns audio
+state. Companion to [DESIGN.md](DESIGN.md) (visual tokens) and
+[../assets/presets/README.md](../assets/presets/README.md) (preset drop-in convention).
+
+## Signal flow (the graph)
+
+Built once in `buildGraph()` on first user gesture (`ensureCtx`). Top-to-bottom is series:
+
+```
+ track A (mix) ─┐                        synth/sampler voices ──┐
+ tapMix→lm→gMix │                          (noteOn → voiceGain) │
+ track B (mast) ┤→ sum ──[ REORDERABLE FX RACK ]──→ anOut ──→ limiter ──→ master ──→ speakers
+ tapMaster→gMaster                                  (meter)   (safety)    (0.95)
+                  ▲                                            ▲
+           phase-locked A/B                          fixed tail — never reordered
+           dry/wet crossfade
+```
+
+- **`sum`** is the junction everything feeds: the two track branches AND every synth/sampler
+  voice (`voiceGain.connect(n.sum)`). Anything connected to `sum` runs through the whole rack.
+- **Phase-lock invariant (do not break):** the A/B pair starts both buffer sources on the *same*
+  context sample (`startSources`). The reorderable rack is strictly the `sum → … → anOut`
+  segment — it never touches the track-source plumbing or the source-start timing.
+- **`anOut`** is the output analyser (spectrum, meters). It sits *before* the safety limiter, so
+  meters read the program signal, not the limited signal.
+
+## Reorderable FX rack
+
+Five effects, reorderable at runtime: **filter · comp · space · crush · reverb**
+(default `FX_DEFAULT_ORDER`, a musical chain). Each is a module with a single input + output
+GainNode (`FxModule { in, out }`), so the chain rewires cleanly at the gain boundaries.
+
+| Key | Node(s) | Notes |
+|-----|---------|-------|
+| `filter` | BiquadFilter | bipolar morph: <0.5 lowpass, >0.5 highpass, ~0.5 off |
+| `comp` | DynamicsCompressor + makeup gain | *creative* dynamics; manual makeup. Off ⇒ threshold 0/ratio 1 (neutral) |
+| `space` | Delay + feedback (internal dry/wet) | the one effect with an internal parallel/feedback branch |
+| `crush` | WaveShaper (tanh) + auto-gain | see loudness safety below |
+| `reverb` | Convolver (internal dry/wet) | synth IR by default; real IR optional |
+
+**Reordering** — `engine.setFxOrder(keys)` (a permutation of the 5). `rewireChain()`:
+1. ducks `sum.gain` to 0 over ~8 ms (click-safe — the click comes from signal discontinuity,
+   not the rewiring),
+2. disconnects `sum` + every module `out`,
+3. reconnects `sum → m0.in, m0.out → m1.in, … last.out → anOut` in `fxOrder`,
+4. ramps `sum.gain` back to 1.
+
+Effects are **always all in-chain**. "Bypass" (the power dot) neutralizes the node *in place*
+via `applyFx()` (filter → 20 kHz, comp → neutral, wet gains → 0, shaper → null curve), so
+toggling never reorders the rack. The UI ([components/audio-lab/FxRack.tsx](components/audio-lab/FxRack.tsx))
+renders devices in `engine.fxOrder`. Each device has a **⠿ drag handle** that reorders via
+**pointer events** (mouse + touch + pen — not HTML5 DnD, which doesn't fire on touch). The handle
+captures the pointer; `onPointerMove` hit-tests the device under the pointer (`elementFromPoint` →
+`data-fxkey`) and calls `setFxOrder` live, so the chain visibly rearranges as you drag. The handle
+is a separate target from the knobs, so knob-dragging is unaffected; `touch-none` on it stops the
+page scrolling mid-drag.
+
+## Loudness safety (two independent safeguards, both default ON)
+
+Saturation, resonance, and stacked delay feedback can all spike level — and with a reorderable
+chain the peak is unpredictable. Two guards, deliberately separate:
+
+1. **Crush auto-gain** (`fx.crush.autoGain`, default on) — `applyFx` trims `crushComp.gain` by
+   `1/sqrt(1 + drive·3.5)` as drive rises, so driving the waveshaper changes *grit*, not
+   *loudness*. Toggleable per the "auto" button on the CRUSH device.
+2. **Safety limiter** (`fx.limiter`, default on) — a brickwall `DynamicsCompressorNode`
+   (ratio 20:1, fast attack, ceiling ≈ −1.5 dBFS) in the **fixed tail after `anOut`**, *outside*
+   the reorderable rack so it can never be moved or bypassed by reordering. Catches any peak
+   regardless of fx order. User-toggleable (off = audition raw output, at their own risk).
+   `engine.getReduction()` returns its live gain reduction (dB) — the LIMIT device's "peak" LED
+   lights when it engages (rAF-driven, imperative, lint-safe).
+
+## Preset sampler
+
+Selecting a preset (`setSynthPatch(id)`) lazily fetches + decodes its zone files
+(`loadPreset` mirrors `fetchBuf`). `noteOn(midi, vel)` branches: if the current preset has a
+decoded zone, it plays an `AudioBufferSourceNode` pitch-shifted by `playbackRate` from the
+zone's root (`pickZone` = nearest-root + a ±7-semitone shift cap), wrapped in an amp ADSR,
+`→ sum` (so it shares the FX rack). No decoded zone ⇒ falls back to the JS-synth `PATCHES`.
+Presets are **auto-discovered** from `src/assets/presets/` at build time — see
+[../assets/presets/README.md](../assets/presets/README.md) for the folder/file convention,
+multisampling, and formats.
+
+## Reverb impulse response
+
+Default is a **synthesised IR** (`makeReverbIR`): exponentially-decaying, lightly low-passed,
+L/R-decorrelated noise. The `decay` knob regenerates it. To use a **real IR file** instead, call
+`engine.loadReverbIR(url)` — it fetches/decodes via `fetchBuf`, pins the convolver buffer, and
+disables decay regeneration; `engine.useSynthReverbIR()` reverts. Real IRs can live alongside the
+preset assets and be loaded on demand (no fixed convention wired yet — add one when needed).
+
+## Events (`EngineEvent`)
+
+`state | wet | fx | track | ready | synth | preset`. Subscribe with `useEngine([...])` (the hook
+force-re-renders on those events). **The union is duplicated** in
+[hooks/useEngine.ts](hooks/useEngine.ts) — update both when adding an event.
+
+## Gotchas
+
+- **esbuild build does not typecheck.** Run `npx tsc --noEmit` (a few *pre-existing* errors live
+  in the surviving old `src/components/*` files; lint + build are the real gates).
+- **react-hooks v7 purity** — no `ref.current = x` or `performance.now()` *during render*. All
+  imperative meter/LED drawing happens inside `useRafLoop` callbacks (see `LimitLed`, `LevelMeter`).
+- **Canvas/SVG read `--accent` at runtime** via `getComputedStyle`, so theme changes are live.

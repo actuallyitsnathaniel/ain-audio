@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../engine";
 import { useEngine } from "../hooks/useEngine";
-import { abSnap, abSnapActive } from "../lab-utils";
 
 const PL_START = 48; // C3
 const PL_END = 64; // E4
@@ -95,7 +94,7 @@ function PresetKeyboard() {
 }
 
 export function PresetLab() {
-  const eng = useEngine(["synth"]);
+  const eng = useEngine(["synth", "preset"]);
   const [midiStatus, setMidiStatus] = useState("unavailable");
 
   // computer keyboard
@@ -163,16 +162,20 @@ export function PresetLab() {
     <div className="flex flex-col gap-[10px] border-t border-line pt-[14px]">
       <div className="flex flex-wrap items-center gap-3">
         <span className="font-mono text-[10.5px] tracking-[0.1em] whitespace-nowrap text-daw-text">PRESET LAB</span>
-        <span className="flex flex-wrap gap-[6px]">
-          {engine.synthPatches.map((name) => (
-            <button
-              key={name}
-              className={(eng.synthPatch === name ? abSnapActive : abSnap) + " px-[10px] py-[5px] text-[10.5px]"}
-              onClick={() => engine.setSynthPatch(name)}
-            >
-              {name}
-            </button>
-          ))}
+        <span className="relative inline-flex items-center">
+          <select
+            value={eng.samplePreset}
+            onChange={(e) => engine.setSynthPatch(e.target.value)}
+            aria-label="preset"
+            className="cursor-pointer appearance-none rounded-[3px] border border-line2 bg-panel2 py-[5px] pr-[26px] pl-[10px] font-mono text-[11px] tracking-[0.03em] text-daw-text transition-colors hover:border-accent focus:border-accent focus:outline-none"
+          >
+            {engine.samplePresets.map((preset) => (
+              <option key={preset.id} value={preset.id} className="bg-panel2 text-daw-text">
+                {preset.name}
+              </option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-[9px] text-[8px] text-faint">▼</span>
         </span>
         <span
           className={
@@ -188,8 +191,8 @@ export function PresetLab() {
       </div>
       <PresetKeyboard />
       <div className="font-mono text-[10.5px] leading-[1.6] tracking-[0.03em] text-faint">
-        click · computer keys A–K (W/E/T/Y/U for sharps) · or a MIDI controller — runs through the fx rack above. demo
-        patches for now; my real preset one-shots land here soon.
+        click · computer keys A–K (W/E/T/Y/U for sharps) · or a MIDI controller — runs through the fx rack above. real
+        bounced preset one-shots, pitch-mapped across the keys.
       </div>
     </div>
   );

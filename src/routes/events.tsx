@@ -457,13 +457,13 @@ const Events = () => {
   return (
     <>
       <SEO
-        title="DJ & MC Services — Weddings & Events | actually-its-nathaniel"
+        title="DJ & MC Services — Weddings & Events | actuallyitsnathaniel"
         description="Professional DJ and MC services for weddings, corporate events, and private parties in Los Angeles and Southern California. 5-star reviews, fully insured, custom playlists."
         url="https://audio.actuallyitsnathaniel.com/events"
         jsonLd={{
           "@context": "https://schema.org",
           "@type": "EntertainmentBusiness",
-          name: "actually-its-nathaniel — DJ & MC Services",
+          name: "actuallyitsnathaniel — DJ & MC Services",
           description:
             "Professional DJ and MC services for weddings, corporate events, and private parties in Los Angeles and Southern California.",
           url: "https://audio.actuallyitsnathaniel.com/events",
