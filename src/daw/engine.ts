@@ -9,8 +9,11 @@
 
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
+import { clipBeats, type NoteClip } from "./data/clips";
 
-type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset";
+export type TransportMode = "track" | "sequence";
+
+type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip";
 
 export interface Levels {
   rms: number;
@@ -78,18 +81,12 @@ interface FxState {
   limiter: { on: boolean; ceiling: number };
 }
 
-interface Voice {
-  oscs: OscillatorNode[];
-  vg: GainNode;
-  vf: BiquadFilterNode;
-  p: Patch;
-}
-
-interface SampleVoice {
-  src: AudioBufferSourceNode;
-  vg: GainNode;
-  r: number; // release (s), from the preset's amp env
-}
+// A live voice handle returned by startVoiceAt. The voice gain `vg` carries the
+// amp ADSR; `r` is the release time. Discriminated by source kind so releaseVoice
+// can stop the right nodes.
+type VoiceHandle =
+  | { kind: "synth"; vg: GainNode; r: number; oscs: OscillatorNode[]; vf: BiquadFilterNode }
+  | { kind: "sample"; vg: GainNode; r: number; src: AudioBufferSourceNode };
 
 interface Patch {
   osc: [OscillatorType, number][];
@@ -150,12 +147,25 @@ class AudioEngine {
   samplePresets: SampledPreset[] = PRESETS;
   samplePreset = PRESETS[0]?.id || "";
 
+  // ── sequencer transport ──
+  bpm = 110;
+  transportMode: TransportMode = "track";
+  sequencePlaying = false;
+  loopOn = true;
+  private _clip: NoteClip | null = null;
+  private _schedTimer = 0;
+  private _scheduledThrough = 0; // ctx time we've scheduled notes up to
+  private _seqAnchorTime = 0; // ctx time at which _seqAnchorBeat played
+  private _seqAnchorBeat = 0; // beat value at the anchor
+  private _seqVoices: VoiceHandle[] = []; // voices started by the scheduler
+  private static SCHED_INTERVAL = 25; // ms — clock tick
+  private static SCHED_AHEAD = 0.12; // s — schedule this far ahead of currentTime
+
   private _startCtx = 0;
   private _offset = 0;
   private _peaks: Float32Array | null = null;
   private _srcs: AudioBufferSourceNode[] | null = null;
-  private _voices: Record<number, Voice> = {};
-  private _sampleVoices: Record<number, SampleVoice> = {};
+  private _liveVoices: Record<number, VoiceHandle> = {};
   // decoded zone buffers per preset id; index parallels preset.zones.
   // an entry of `null` at a slot means that zone failed to decode.
   private _sampleBufs: Record<string, (AudioBuffer | null)[]> = {};
@@ -604,6 +614,8 @@ class AudioEngine {
 
   async play() {
     this.ensureCtx();
+    // transport mutual-exclusion: starting track playback stops the sequencer
+    if (this.sequencePlaying) this.stopSequence();
     if (!this.ready) {
       const t = this.track || this._defaultTrack;
       if (t) await this.loadTrack(t, { autoplay: false });
@@ -848,18 +860,21 @@ class AudioEngine {
     return { buf: bufs[idx]!, rootMidi: effRoot };
   }
 
-  noteOn(midi: number, vel?: number) {
-    vel = vel == null ? 1 : vel;
+  // ── voice factory (shared by live keyboard + sequencer scheduler) ──
+  // Build and start a voice at an explicit context time `when`. Returns a handle
+  // the caller releases via releaseVoice(handle, when). Used directly by the
+  // scheduler (which can play the same pitch repeatedly, so it can't key by MIDI);
+  // noteOn/noteOff wrap this and key by MIDI for the held-key keyboard.
+  startVoiceAt(midi: number, vel: number, when: number): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
-    this.noteOff(midi, true);
+    const t = when;
 
     // ── sampled-preset path: bufferSource → voice gain (ADSR) → sum (FX rack) ──
     const preset = this.currentPreset();
     const zone = preset ? this.pickZone(preset, midi) : null;
     if (preset && zone) {
       const env = preset.env;
-      const t = c.currentTime;
       const vg = c.createGain();
       vg.gain.value = 0;
       const src = c.createBufferSource();
@@ -872,15 +887,12 @@ class AudioEngine {
       vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, env.a));
       vg.gain.setTargetAtTime(peak * env.s, t + env.a, Math.max(0.03, env.d));
       src.start(t);
-      this._sampleVoices[midi] = { src, vg, r: env.r };
-      this.emit("synth");
-      return;
+      return { kind: "sample", vg, r: env.r, src };
     }
 
     // ── JS-synth fallback path ──
     const p = PATCHES[this.synthPatch];
     const f = 440 * Math.pow(2, (midi + p.oct * 12 - 69) / 12);
-    const t = c.currentTime;
     const vg = c.createGain();
     vg.gain.value = 0;
     const vf = c.createBiquadFilter();
@@ -904,75 +916,204 @@ class AudioEngine {
     vg.gain.setValueAtTime(0, t);
     vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, p.a));
     vg.gain.setTargetAtTime(peak * p.s, t + p.a, Math.max(0.03, p.d));
-    this._voices[midi] = { oscs, vg, vf, p };
+    return { kind: "synth", vg, r: p.r, oscs, vf };
+  }
+
+  // Release a voice handle at an explicit time. `instant` skips the patch release.
+  releaseVoice(h: VoiceHandle, when: number, instant?: boolean) {
+    const c = this.ctx!;
+    const t = when;
+    const r = instant ? 0.03 : h.r;
+    h.vg.gain.cancelScheduledValues(t);
+    h.vg.gain.setValueAtTime(h.vg.gain.value, t);
+    h.vg.gain.setTargetAtTime(0, t, Math.max(0.01, r / 4));
+    const stopAt = t + r + 0.15;
+    if (h.kind === "sample") {
+      try {
+        h.src.stop(stopAt);
+      } catch {
+        /* already stopped */
+      }
+    } else {
+      h.oscs.forEach((o) => {
+        try {
+          o.stop(stopAt);
+        } catch {
+          /* already stopped */
+        }
+      });
+    }
+    const delayMs = (Math.max(0, stopAt - c.currentTime) + 0.1) * 1000;
+    setTimeout(() => {
+      try {
+        h.vg.disconnect();
+      } catch {
+        /* fine */
+      }
+    }, delayMs);
+  }
+
+  // ── live keyboard (held notes keyed by MIDI; retrigger replaces) ──
+  noteOn(midi: number, vel?: number) {
+    vel = vel == null ? 1 : vel;
+    this.ensureCtx();
+    this.noteOff(midi, true);
+    this._liveVoices[midi] = this.startVoiceAt(midi, vel, this.ctx!.currentTime);
     this.emit("synth");
   }
 
   noteOff(midi: number, instant?: boolean) {
-    // ── sampled-voice release ──
-    const sv = this._sampleVoices[midi];
-    if (sv) {
-      delete this._sampleVoices[midi];
-      const c = this.ctx!;
-      const t = c.currentTime;
-      const r = instant ? 0.03 : sv.r;
-      sv.vg.gain.cancelScheduledValues(t);
-      sv.vg.gain.setValueAtTime(sv.vg.gain.value, t);
-      sv.vg.gain.setTargetAtTime(0, t, Math.max(0.01, r / 4));
-      try {
-        sv.src.stop(t + r + 0.15);
-      } catch {
-        /* already stopped */
-      }
-      setTimeout(
-        () => {
-          try {
-            sv.vg.disconnect();
-          } catch {
-            /* fine */
-          }
-        },
-        (r + 0.25) * 1000,
-      );
-      this.emit("synth");
-      return;
-    }
-
-    const v = this._voices[midi];
-    if (!v) return;
-    delete this._voices[midi];
-    const c = this.ctx!;
-    const t = c.currentTime;
-    const r = instant ? 0.03 : v.p.r;
-    v.vg.gain.cancelScheduledValues(t);
-    v.vg.gain.setValueAtTime(v.vg.gain.value, t);
-    v.vg.gain.setTargetAtTime(0, t, Math.max(0.01, r / 4));
-    const stopAt = t + r + 0.15;
-    v.oscs.forEach((o) => {
-      try {
-        o.stop(stopAt);
-      } catch {
-        /* already stopped */
-      }
-    });
-    setTimeout(
-      () => {
-        try {
-          v.vg.disconnect();
-        } catch {
-          /* fine */
-        }
-      },
-      (r + 0.25) * 1000,
-    );
+    const h = this._liveVoices[midi];
+    if (!h) return;
+    delete this._liveVoices[midi];
+    this.releaseVoice(h, this.ctx!.currentTime, instant);
     this.emit("synth");
   }
 
   activeNotes(): number[] {
-    const set = new Set<number>();
-    Object.keys(this._voices).forEach((k) => set.add(Number(k)));
-    Object.keys(this._sampleVoices).forEach((k) => set.add(Number(k)));
-    return [...set];
+    return Object.keys(this._liveVoices).map(Number);
+  }
+
+  // ── sequencer: lookahead scheduler ──
+  // A setInterval clock walks ctx.currentTime and schedules note events slightly
+  // ahead with sample-accurate start/stop times. rAF is NOT used for audio timing
+  // (it pauses in background tabs and jitters) — only the visual playhead reads
+  // getSequencePosition() from rAF.
+
+  setActiveClip(clip: NoteClip | null) {
+    this._clip = clip;
+    this.emit("clip");
+  }
+  getClip(): NoteClip | null {
+    return this._clip;
+  }
+
+  setBpm(bpm: number) {
+    bpm = Math.min(220, Math.max(40, bpm));
+    if (this.sequencePlaying && this.ctx) {
+      // re-anchor at "now" so the playhead doesn't jump when tempo changes; keep
+      // already-scheduled notes (they were placed at the old tempo) by advancing
+      // the anchor to the current beat at the current time.
+      const beat = this.currentBeat();
+      const now = this.ctx.currentTime;
+      this.bpm = bpm;
+      this._seqAnchorBeat = beat;
+      this._seqAnchorTime = now;
+      // re-schedule from here at the new tempo
+      this._scheduledThrough = now;
+    } else {
+      this.bpm = bpm;
+    }
+    this.emit("transport");
+  }
+
+  setLoop(on: boolean) {
+    this.loopOn = on;
+    this.emit("transport");
+  }
+
+  private beatDur() {
+    return 60 / this.bpm;
+  }
+
+  // current beat position within the clip (loops), from the ctx clock
+  private currentBeat(): number {
+    if (!this.ctx || !this._clip) return 0;
+    const elapsed = this.ctx.currentTime - this._seqAnchorTime;
+    let beat = this._seqAnchorBeat + elapsed / this.beatDur();
+    const total = clipBeats(this._clip);
+    if (this.loopOn && total > 0) beat = ((beat % total) + total) % total;
+    return beat;
+  }
+
+  // for the visual playhead (pure read — lint-safe in rAF)
+  getSequencePosition(): { beat: number; bars: number; playing: boolean } {
+    const clip = this._clip;
+    return {
+      beat: this.sequencePlaying ? this.currentBeat() : 0,
+      bars: clip ? clip.bars : 0,
+      playing: this.sequencePlaying,
+    };
+  }
+
+  playSequence() {
+    if (!this._clip) return;
+    const c = this.ensureCtx();
+    // transport mutual-exclusion: track playback and the sequencer can't both
+    // drive the graph (double-sum + corrupt metering)
+    if (this.playing) this.pause();
+    this.transportMode = "sequence";
+    this.sequencePlaying = true;
+    const start = c.currentTime + 0.08; // small headroom before first note
+    this._seqAnchorTime = start;
+    this._seqAnchorBeat = 0;
+    this._scheduledThrough = start;
+    if (this._schedTimer) clearInterval(this._schedTimer);
+    this._schedTimer = window.setInterval(() => this.schedTick(), AudioEngine.SCHED_INTERVAL);
+    this.schedTick();
+    this.emit("transport");
+    this.emit("state");
+  }
+
+  stopSequence() {
+    if (this._schedTimer) {
+      clearInterval(this._schedTimer);
+      this._schedTimer = 0;
+    }
+    this.sequencePlaying = false;
+    this.transportMode = "track";
+    // release any voices still ringing from scheduled notes
+    const now = this.ctx ? this.ctx.currentTime : 0;
+    this._seqVoices.forEach((h) => this.releaseVoice(h, now, true));
+    this._seqVoices = [];
+    this.emit("transport");
+    this.emit("state");
+  }
+
+  toggleSequence() {
+    if (this.sequencePlaying) this.stopSequence();
+    else this.playSequence();
+  }
+
+  // schedule every note whose start lands in (_scheduledThrough, currentTime+AHEAD],
+  // mapping clip beats onto absolute ctx times and wrapping at the loop boundary.
+  private schedTick() {
+    const c = this.ctx;
+    const clip = this._clip;
+    if (!c || !clip || !this.sequencePlaying) return;
+    const total = clipBeats(clip);
+    if (total <= 0) return;
+    const bd = this.beatDur();
+    const horizon = c.currentTime + AudioEngine.SCHED_AHEAD;
+
+    // beat at the start of our scheduling window
+    const fromBeatAbs = this._seqAnchorBeat + (this._scheduledThrough - this._seqAnchorTime) / bd;
+    const toBeatAbs = this._seqAnchorBeat + (horizon - this._seqAnchorTime) / bd;
+
+    // walk absolute beats; for each, find notes at that clip-beat (mod loop)
+    for (const note of clip.notes) {
+      // candidate absolute-beat positions of this note within the window
+      // (loop can place it multiple times across passes)
+      let k = Math.floor((fromBeatAbs - note.start) / total);
+      if (!this.loopOn) k = 0;
+      for (; ; k++) {
+        const absBeat = note.start + (this.loopOn ? k * total : 0);
+        if (absBeat >= toBeatAbs) break;
+        if (absBeat < fromBeatAbs) {
+          if (!this.loopOn) break;
+          continue;
+        }
+        const when = this._seqAnchorTime + (absBeat - this._seqAnchorBeat) * bd;
+        const off = when + Math.max(0.04, note.length * bd);
+        const h = this.startVoiceAt(note.pitch, note.vel, when);
+        this.releaseVoice(h, off);
+        this._seqVoices.push(h);
+        if (!this.loopOn) break;
+      }
+    }
+    // prune released handles occasionally to bound memory
+    if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
+    this._scheduledThrough = horizon;
   }
 }
 

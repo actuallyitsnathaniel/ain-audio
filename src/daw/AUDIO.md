@@ -74,6 +74,62 @@ chain the peak is unpredictable. Two guards, deliberately separate:
    `engine.getReduction()` returns its live gain reduction (dB) — the LIMIT device's "peak" LED
    lights when it engages (rAF-driven, imperative, lint-safe).
 
+## Sequencer scheduler + piano roll
+
+The piano roll plays a **clip** (a bar-length phrase of notes in musical time) through a
+**lookahead scheduler** in the engine.
+
+**Voice factory (shared).** `noteOn`/`noteOff` were refactored into `startVoiceAt(midi, vel,
+when)` → `VoiceHandle` and `releaseVoice(handle, when, instant?)`, both taking an **explicit
+context time**. The live keyboard wraps these (keying held notes by MIDI); the scheduler calls
+them directly with future `when` values (it can't key by MIDI — a phrase repeats pitches). One
+voice factory, three callers (keyboard, roll, future beat-maker).
+
+**Clip model** ([data/clips.ts](data/clips.ts)). `Note { id, pitch, start, length, vel }` with
+`start`/`length` in **beats** (float; `seconds = beat * 60 / bpm`). `NoteClip { bars, beatsPerBar,
+notes }`. Each preset ships a `defaultPhrase` (authored with the `phrase()` helper in
+[data/presets.ts](data/presets.ts)); the roll clones it (`cloneClip`) so edits never mutate the
+shipped data.
+
+**The scheduler** (Chris Wilson "Tale of Two Clocks"). A `setInterval(~25 ms)` walks
+`ctx.currentTime`; each tick schedules every note whose start falls in the window
+`(_scheduledThrough, currentTime + 0.12s]`, mapping clip-beats → absolute ctx times and wrapping
+at the loop boundary, calling `startVoiceAt`/`releaseVoice` with sample-accurate times.
+**rAF is never used for audio timing** (it jitters and pauses in background tabs) — only the visual
+playhead reads `getSequencePosition()` (a pure clock read) from `useRafLoop`. Tempo changes
+re-anchor the clock so the playhead doesn't jump. API: `setActiveClip`/`getClip`, `setBpm`,
+`setLoop`, `playSequence`/`stopSequence`/`toggleSequence`, `getSequencePosition()`.
+
+**Transport mutual-exclusion.** `transportMode: "track" | "sequence"`. `playSequence()` calls
+`pause()` (track playback feeds the taps; the sequencer feeds `sum` — both at once double-sums and
+corrupts metering); `play()` calls `stopSequence()`.
+
+**The editor** ([components/piano-roll/PianoRoll.tsx](components/piano-roll/PianoRoll.tsx)). One
+`<canvas>` over the full MIDI range (C0–C8) with a **scroll-aware single coordinate system** for
+grid + notes (`pitchToY(p) = (HI_MIDI - p)*ROW_H - scrollY`) — no squashing, so rows and notes
+always align. Drawn per-frame in `useRafLoop` (grid → notes/playhead clipped to the lane → key
+gutter on top). The working clip lives in a **ref** (mutated during drag for perf), pushed to
+`engine.setActiveClip` on change.
+- **Edit:** click empty → add (snap 1/16) · drag body → move · drag right edge → resize ·
+  double-click / alt-click / right-click → delete.
+- **Navigate:** wheel → scroll pitch · shift+wheel → scroll time · ⌘/ctrl+wheel → zoom time around
+  cursor · hold Space (or middle-drag) → pan. Wheel is a **non-passive native listener** so it can
+  `preventDefault` the page scroll.
+- **Gutter keyboard:** the left key column is tap-to-play — pointer-down auditions the pitch
+  (`engine.noteOn`), sliding up/down retriggers, releasing/leaving the gutter stops. Held + sounding
+  pitches glow (reads `engine.activeNotes()` each frame).
+- **Purity:** the clip ref is populated in the mount effect and only read inside handlers/rAF —
+  never during render (react-hooks v7 `refs` rule).
+
+[components/piano-roll/RollLab.tsx](components/piano-roll/RollLab.tsx) wraps it with play/stop, a
+tempo `Knob`, loop + reset, and loads the selected preset's `defaultPhrase` on preset change (via a
+`pr-load` CustomEvent on the canvas).
+
+**Not yet implemented (Ableton parity, future):** marquee/rubber-band select, shift-click
+multi-select, shift-click a key to select a whole pitch row, arrow-key nudge/transpose
+(shift = octave / length), alt-drag for snap-bypass fine moves, ctrl/alt-drag to duplicate, a
+velocity lane, and note-stretch markers. See [[piano-roll-ableton-gestures]] for the full reference.
+
 ## Preset sampler
 
 Selecting a preset (`setSynthPatch(id)`) lazily fetches + decodes its zone files
@@ -95,8 +151,8 @@ preset assets and be loaded on demand (no fixed convention wired yet — add one
 
 ## Events (`EngineEvent`)
 
-`state | wet | fx | track | ready | synth | preset`. Subscribe with `useEngine([...])` (the hook
-force-re-renders on those events). **The union is duplicated** in
+`state | wet | fx | track | ready | synth | preset | transport | clip`. Subscribe with
+`useEngine([...])` (the hook force-re-renders on those events). **The union is duplicated** in
 [hooks/useEngine.ts](hooks/useEngine.ts) — update both when adding an event.
 
 ## Gotchas

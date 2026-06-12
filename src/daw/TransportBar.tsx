@@ -28,9 +28,9 @@ function MiniTransport() {
   });
   const cur = eng.track || jlmTrack;
   return (
-    <div className="group relative flex h-8 items-center gap-[10px] rounded-[3px] border border-line bg-inset px-3">
+    <div className="group relative flex h-8 items-center gap-2.5 rounded-[3px] border border-line bg-inset px-3">
       <button
-        className="flex h-[22px] w-[22px] items-center justify-center"
+        className="flex h-5.5 w-5.5 items-center justify-center"
         onClick={() => engine.toggle()}
         aria-label="play / pause"
       >
@@ -42,11 +42,12 @@ function MiniTransport() {
           <span className="icon-play small" />
         )}
       </button>
-      <span className="min-w-[58px] font-mono text-[12px] text-accent" ref={ref}>
+      <span className="min-w-14.5 font-mono text-[12px] text-accent" ref={ref}>
         0:00.0
       </span>
-      <span className="pointer-events-none absolute top-[calc(100%+9px)] left-0 z-[60] hidden whitespace-nowrap rounded-[3px] border border-line2 bg-panel2 px-[10px] py-[6px] font-mono text-[11px] text-daw-text shadow-[0_6px_20px_-8px_rgba(0,0,0,0.8)] group-hover:block">
-        ▸ {cur ? cur.title : "—"} · {eng.loading ? "loading" : eng.playing ? "playing" : "paused"}
+      <span className="pointer-events-none absolute top-[calc(100%+9px)] left-0 z-60 hidden whitespace-nowrap rounded-[3px] border border-line2 bg-panel2 px-[10px] py-[6px] font-mono text-[11px] text-daw-text shadow-[0_6px_20px_-8px_rgba(0,0,0,0.8)] group-hover:block">
+        ▸ {cur ? cur.title : "—"} ·{" "}
+        {eng.loading ? "loading" : eng.playing ? "playing" : "paused"}
       </span>
     </div>
   );
@@ -62,7 +63,10 @@ function CpuMeter() {
     acc.current.last = now;
     acc.current.avg = acc.current.avg * 0.95 + dt * 0.05;
     if (ref.current) {
-      const pct = Math.min(99, Math.max(1, Math.round((acc.current.avg / 16.7) * 8)));
+      const pct = Math.min(
+        99,
+        Math.max(1, Math.round((acc.current.avg / 16.7) * 8)),
+      );
       ref.current.textContent = String(pct) + "%";
     }
   });
@@ -91,26 +95,28 @@ export function TransportBar() {
   };
 
   return (
-    <header className="tbar-bg fixed top-0 right-0 left-0 z-50 flex h-[52px] items-center gap-5 border-b border-line px-4 max-[760px]:gap-[10px] max-[760px]:overflow-x-auto">
+    <header className="tbar-bg fixed top-0 right-0 left-0 z-50 flex h-13 items-center gap-5 border-b border-line px-4 max-[760px]:gap-[10px] max-[760px]:overflow-x-auto">
       <button
-        className="flex items-center gap-[9px]"
+        className="flex items-center gap-2.25"
         onClick={() => {
           if (location.pathname !== "/") navigate("/");
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
       >
-        <span className="h-[14px] w-[14px] rounded-[2px] bg-accent" />
-        <span className="font-mono text-[12px] font-semibold tracking-[0.14em]">AIN·AUDIO</span>
+        <span className="h-3.5 w-3.5 rounded-xs bg-accent" />
+        <span className="font-mono text-[12px] font-semibold tracking-[0.14em]">
+          AIN·AUDIO
+        </span>
       </button>
       <MiniTransport />
-      <nav className="ml-auto flex gap-[2px] max-[760px]:gap-0">
+      <nav className="ml-auto flex gap-0.5 max-[760px]:gap-0">
         {NAV.map((n) => (
           <button
             key={n.id}
-            className="rounded-[3px] px-[10px] py-[6px] font-mono text-[11px] tracking-[0.06em] whitespace-nowrap text-dim transition-[color,background] duration-150 hover:bg-panel2 hover:text-daw-text max-[760px]:px-[7px]"
+            className="rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap text-dim transition-[color,background] duration-150 hover:bg-panel2 hover:text-daw-text max-[760px]:px-[7px]"
             onClick={() => goToSection(n.id)}
           >
-            <span className="mr-[2px] text-faint">{n.num}</span> {n.label}
+            <span className="mr-0.5 text-faint">{n.num}</span> {n.label}
           </button>
         ))}
       </nav>
