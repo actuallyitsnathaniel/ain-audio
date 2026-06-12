@@ -10,6 +10,7 @@
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
 import { clipBeats, type NoteClip } from "./data/clips";
+import { parseMidi } from "./data/midi-file";
 
 export type TransportMode = "track" | "sequence";
 
@@ -72,10 +73,26 @@ interface GraphNodes {
 export type FxKey = "filter" | "comp" | "space" | "crush" | "reverb";
 const FX_DEFAULT_ORDER: FxKey[] = ["filter", "comp", "space", "crush", "reverb"];
 
+// Tempo-synced delay: the `div` knob picks one of these STRAIGHT divisions (in
+// beats, 1/4 note = 1 beat), and a separate `feel` flips it dotted (×1.5) or
+// triplet (×2/3). delay seconds = base beats × feel × 60 / bpm.
+const DELAY_DIVS: { label: string; beats: number }[] = [
+  { label: "1/1", beats: 4 },
+  { label: "1/2", beats: 2 },
+  { label: "1/4", beats: 1 },
+  { label: "1/8", beats: 0.5 },
+  { label: "1/16", beats: 0.25 },
+  { label: "1/32", beats: 0.125 },
+];
+export const delayDivLabels = DELAY_DIVS.map((d) => d.label);
+export type DelayFeel = "straight" | "dotted" | "triplet";
+const DELAY_FEEL_MULT: Record<DelayFeel, number> = { straight: 1, dotted: 1.5, triplet: 2 / 3 };
+const DEFAULT_DELAY_DIV = 3; // 1/8
+
 interface FxState {
   filter: { on: boolean; morph: number };
   comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number; makeup: number };
-  space: { on: boolean; time: number; fb: number; mix: number };
+  space: { on: boolean; time: number; fb: number; mix: number; sync: boolean; div: number; feel: DelayFeel };
   crush: { on: boolean; drive: number; autoGain: boolean };
   reverb: { on: boolean; decay: number; mix: number };
   limiter: { on: boolean; ceiling: number };
@@ -130,7 +147,7 @@ class AudioEngine {
   fx: FxState = {
     filter: { on: false, morph: 0.5 },
     comp: { on: false, threshold: -18, ratio: 4, attack: 0.01, release: 0.18, makeup: 0 },
-    space: { on: false, time: 0.32, fb: 0.35, mix: 0.3 },
+    space: { on: false, time: 0.32, fb: 0.35, mix: 0.3, sync: false, div: DEFAULT_DELAY_DIV, feel: "dotted" },
     crush: { on: false, drive: 0.35, autoGain: true },
     reverb: { on: false, decay: 2.2, mix: 0.25 },
     limiter: { on: true, ceiling: -1.5 },
@@ -170,6 +187,7 @@ class AudioEngine {
   // an entry of `null` at a slot means that zone failed to decode.
   private _sampleBufs: Record<string, (AudioBuffer | null)[]> = {};
   private _presetLoading: Record<string, boolean> = {};
+  private _phraseCache: Record<string, { clip: NoteClip; bpm?: number }> = {};
   private _ls: Partial<Record<EngineEvent, Array<() => void>>> = {};
   private _lastSave = 0;
   private _defaultTrack: Track | null = null;
@@ -452,7 +470,13 @@ class AudioEngine {
       n.compMakeup.gain.setTargetAtTime(1, t, 0.03);
     }
 
-    n.delay.delayTime.setTargetAtTime(fx.space.time, t, 0.05);
+    // delay time: free ms (space.time) or tempo-synced. Synced = base division ×
+    // feel (straight/dotted/triplet) × 60/bpm, clamped to the DelayNode's 2s max
+    // (long divisions at slow tempos can exceed it — e.g. a dotted 1/1 at 60 bpm).
+    const baseBeats = DELAY_DIVS[fx.space.div]?.beats ?? 0.5;
+    const syncedSec = baseBeats * DELAY_FEEL_MULT[fx.space.feel] * (60 / this.bpm);
+    const delaySec = fx.space.sync ? Math.min(2, syncedSec) : fx.space.time;
+    n.delay.delayTime.setTargetAtTime(delaySec, t, 0.05);
     n.dFb.gain.setTargetAtTime(fx.space.on ? fx.space.fb : 0, t, 0.05);
     n.dWet.gain.setTargetAtTime(fx.space.on ? fx.space.mix : 0, t, 0.05);
 
@@ -824,6 +848,30 @@ class AudioEngine {
     this.emit("preset");
   }
 
+  // Resolve a preset's default piano-roll phrase: parse its bundled .mid if it
+  // has one (cached), else use the hand-authored defaultPhrase. Also returns a
+  // bpm hint (from the .mid tempo, or the preset's bpmHint). Never throws — a
+  // bad/missing .mid falls back to the static phrase.
+  async loadPresetPhrase(id: string): Promise<{ clip: NoteClip; bpm?: number } | null> {
+    const preset = this.samplePresets.find((pr) => pr.id === id);
+    if (!preset) return null;
+    if (!preset.phraseUrl) return { clip: preset.defaultPhrase, bpm: preset.bpmHint };
+    if (this._phraseCache[id]) return this._phraseCache[id];
+    try {
+      const res = await fetch(preset.phraseUrl);
+      if (!res.ok) throw new Error("mid " + res.status);
+      const parsed = parseMidi(await res.arrayBuffer());
+      if (!parsed) throw new Error("mid parse");
+      // use the .mid's tempo only if it actually carried one; otherwise fall back
+      // to the preset's bpmHint (Ableton clip-export omits tempo).
+      const out = { clip: parsed.clip, bpm: parsed.hasTempo ? parsed.bpm : preset.bpmHint };
+      this._phraseCache[id] = out;
+      return out;
+    } catch {
+      return { clip: preset.defaultPhrase, bpm: preset.bpmHint }; // graceful fallback
+    }
+  }
+
   // Max semitones a sample is pitch-shifted before the result sounds artificial.
   // With tritone-spaced multisampling (roots 6 apart) every in-range note lands
   // within ±3 of a root; this only bites notes played past the sampled extremes,
@@ -880,6 +928,14 @@ class AudioEngine {
       const src = c.createBufferSource();
       src.buffer = zone.buf;
       src.playbackRate.value = Math.pow(2, (midi - zone.rootMidi) / 12);
+      // per-note micro-detune (opt-in per preset) — restores the subtle "alive"
+      // variation a single bounce flattens. Prefer `detune` (cents); fall back to
+      // a playbackRate nudge where detune is unsupported (older Safari).
+      if (preset.humanize > 0) {
+        const cents = (Math.random() * 2 - 1) * preset.humanize;
+        if (src.detune) src.detune.value = cents;
+        else src.playbackRate.value *= Math.pow(2, cents / 1200);
+      }
       src.connect(vg);
       vg.connect(n.sum);
       const peak = preset.gain * vel;
@@ -1004,6 +1060,8 @@ class AudioEngine {
     } else {
       this.bpm = bpm;
     }
+    // a tempo-synced delay must track the new tempo
+    if (this.fx.space.sync && this.ctx) this.applyFx();
     this.emit("transport");
   }
 

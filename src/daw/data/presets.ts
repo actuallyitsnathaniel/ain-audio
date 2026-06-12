@@ -39,8 +39,10 @@ export interface SampledPreset {
   env: AmpEnv;
   gain: number; // output trim
   fallbackPatch?: string; // PATCHES key used when no zone decodes
-  defaultPhrase: NoteClip; // demo phrase shown/played in the piano roll
+  defaultPhrase: NoteClip; // demo phrase shown/played in the piano roll (fallback)
+  phraseUrl?: string; // a bundled .mid to fetch+parse as the phrase (overrides defaultPhrase)
   bpmHint?: number; // suggested tempo for the phrase
+  humanize: number; // ± random detune (cents) per note, restoring "alive" feel. 0 = off
 }
 
 // Default amp envelope + gain for any preset that has no override entry.
@@ -60,6 +62,10 @@ interface PresetOverride {
   zoneRanges?: Record<string, { loMidi: number; hiMidi: number }>;
   defaultPhrase?: NoteClip;
   bpmHint?: number;
+  // ± random detune in cents applied per note, ONLY for presets whose patch has
+  // that subtle per-voice "alive" detune a single bounce can't capture. Off (0)
+  // by default — set conservatively (~3–8 cents); too much sounds out of tune.
+  humanize?: number;
 }
 
 // Demo phrases — the "here's how I used it" the piano roll plays back. 1 bar of
@@ -67,30 +73,74 @@ interface PresetOverride {
 // MIDI: 60 = C4. Editable in the roll; "reset" restores these.
 const PHRASE_GLASS = phrase(2, [
   // sustained Cmaj9 → Amin pad swell across two bars
-  [60, 0, 4, 0.7], [64, 0, 4, 0.6], [67, 0, 4, 0.6], [71, 0, 4, 0.5],
-  [57, 4, 4, 0.7], [60, 4, 4, 0.6], [64, 4, 4, 0.6], [67, 4, 4, 0.5],
+  [60, 0, 4, 0.7],
+  [64, 0, 4, 0.6],
+  [67, 0, 4, 0.6],
+  [71, 0, 4, 0.5],
+  [57, 4, 4, 0.7],
+  [60, 4, 4, 0.6],
+  [64, 4, 4, 0.6],
+  [67, 4, 4, 0.5],
 ]);
 const PHRASE_NEON = phrase(1, [
   // bright 1/16 arpeggio, Cmaj triad climbing
-  [60, 0, 0.25, 0.9], [64, 0.5, 0.25, 0.8], [67, 1, 0.25, 0.85], [72, 1.5, 0.25, 0.9],
-  [67, 2, 0.25, 0.8], [64, 2.5, 0.25, 0.75], [69, 3, 0.25, 0.85], [72, 3.5, 0.25, 0.9],
+  [60, 0, 0.25, 0.9],
+  [64, 0.5, 0.25, 0.8],
+  [67, 1, 0.25, 0.85],
+  [72, 1.5, 0.25, 0.9],
+  [67, 2, 0.25, 0.8],
+  [64, 2.5, 0.25, 0.75],
+  [69, 3, 0.25, 0.85],
+  [72, 3.5, 0.25, 0.9],
 ]);
 const PHRASE_SUB = phrase(1, [
   // syncopated low root/fifth groove
-  [36, 0, 0.75, 1], [36, 1, 0.5, 0.85], [43, 1.75, 0.25, 0.7],
-  [36, 2, 0.75, 1], [36, 3, 0.5, 0.85], [41, 3.5, 0.5, 0.75],
+  [36, 0, 0.75, 1],
+  [36, 1, 0.5, 0.85],
+  [43, 1.75, 0.25, 0.7],
+  [36, 2, 0.75, 1],
+  [36, 3, 0.5, 0.85],
+  [41, 3.5, 0.5, 0.75],
 ]);
 
 const PRESET_OVERRIDES: Record<string, PresetOverride> = {
   // keep the original demo patches sounding identical until real files land:
-  "glass-pad": { name: "glass pad", env: { a: 0.16, d: 0.4, s: 0.7, r: 0.9 }, gain: 0.13, fallbackPatch: "glass pad", defaultPhrase: PHRASE_GLASS, bpmHint: 96 },
-  "neon-pluck": { name: "neon pluck", env: { a: 0.004, d: 0.28, s: 0.0, r: 0.28 }, gain: 0.16, fallbackPatch: "neon pluck", defaultPhrase: PHRASE_NEON, bpmHint: 124 },
-  "sub-bass": { name: "sub bass", env: { a: 0.006, d: 0.12, s: 0.9, r: 0.16 }, gain: 0.24, fallbackPatch: "sub bass", defaultPhrase: PHRASE_SUB, bpmHint: 110 },
+  "glass-pad": {
+    name: "glass pad",
+    env: { a: 0.16, d: 0.4, s: 0.7, r: 0.9 },
+    gain: 0.13,
+    fallbackPatch: "glass pad",
+    defaultPhrase: PHRASE_GLASS,
+    bpmHint: 96,
+  },
+  "neon-pluck": {
+    name: "neon pluck",
+    env: { a: 0.004, d: 0.28, s: 0.0, r: 0.28 },
+    gain: 0.16,
+    fallbackPatch: "neon pluck",
+    defaultPhrase: PHRASE_NEON,
+    bpmHint: 124,
+  },
+  "sub-bass": {
+    name: "sub bass",
+    env: { a: 0.006, d: 0.12, s: 0.9, r: 0.16 },
+    gain: 0.24,
+    fallbackPatch: "sub bass",
+    defaultPhrase: PHRASE_SUB,
+    bpmHint: 110,
+  },
+  // real bounced preset — has subtle per-voice detune, so a touch of humanize
+  // restores the "alive" feel a single bounce flattens. start conservative.
+  // bpmHint used because the exported .mid carries no tempo (Ableton clip-export).
+  "losing-hearts-pluck": { humanize: 5, bpmHint: 143 },
 };
 
 // fallback phrase for any preset that ships no defaultPhrase override
 const PHRASE_DEFAULT = phrase(1, [
-  [60, 0, 1, 0.85], [64, 1, 1, 0.8], [67, 2, 1, 0.8], [72, 3, 1, 0.85],
+  [60, 0, 1, 0.85],
+  [64, 1, 1, 0.8],
+  [67, 2, 1, 0.8],
+  [72, 3, 1, 0.85],
 ]);
 
 // Presets to show even when no audio file exists yet (so the JS-synth fallback
@@ -98,16 +148,28 @@ const PHRASE_DEFAULT = phrase(1, [
 const FALLBACK_ONLY_IDS = ["glass-pad", "neon-pluck", "sub-bass"];
 
 // ── note-name → MIDI ──────────────────────────────────────────────────────
-const NOTE_SEMITONE: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+const NOTE_SEMITONE: Record<string, number> = {
+  c: 0,
+  d: 2,
+  e: 4,
+  f: 5,
+  g: 7,
+  a: 9,
+  b: 11,
+};
 
-// Parse "C4", "F#3", "Gb2", "A#-1" → MIDI number (C4 = 60). Returns null if the
-// filename isn't a note name. Octave convention: C4 = middle C = MIDI 60.
+// Parse a note-name filename → MIDI number (C4 = 60). Accepts sharps written as
+// "s" (URL-safe, the recommended form: "Fs2") OR "#" ("F#2") — though "#" breaks
+// Vite's glob import-analysis, so prefer "s" for filenames. Flats use "b"/"f".
+// Returns null if the name isn't a note. Octave convention: C4 = middle C = 60.
 function noteToMidi(name: string): number | null {
-  const m = /^([a-gA-G])([#b]?)(-?\d+)$/.exec(name.trim());
+  const m = /^([a-gA-G])(#|s|S|b|f|F)?(-?\d+)$/.exec(name.trim());
   if (!m) return null;
   const base = NOTE_SEMITONE[m[1].toLowerCase()];
   if (base == null) return null;
-  const accidental = m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0;
+  const acc = (m[2] || "").toLowerCase();
+  const accidental =
+    acc === "#" || acc === "s" ? 1 : acc === "b" || acc === "f" ? -1 : 0;
   const octave = parseInt(m[3], 10);
   return base + accidental + (octave + 1) * 12;
 }
@@ -129,29 +191,60 @@ const FILES = import.meta.glob("/src/assets/presets/**/*.{m4a,flac,ogg}", {
   import: "default",
 }) as Record<string, string>;
 
+// Default-phrase MIDI: one .mid per preset folder, auto-imported and parsed at
+// load (mirrors the audio pipeline). Dropping phrase.mid in is all it takes.
+const MIDI_FILES = import.meta.glob("/src/assets/presets/**/*.mid", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
 const AUDIO_EXT_RE = /\.(m4a|flac|ogg)$/i;
 
+function folderOf(path: string) {
+  const parts = path.split("/");
+  return parts[parts.length - 2];
+}
+
 function buildPresets(): SampledPreset[] {
-  // group resolved files by their immediate folder id
+  // group resolved audio files by their immediate folder id
   const byFolder: Record<string, { note: string; url: string }[]> = {};
   for (const path in FILES) {
-    const parts = path.split("/");
-    const file = parts[parts.length - 1];
-    const folder = parts[parts.length - 2];
+    const file = path.split("/").pop()!;
     const note = file.replace(AUDIO_EXT_RE, "");
     if (noteToMidi(note) == null) continue; // skip files that aren't note names
-    (byFolder[folder] = byFolder[folder] || []).push({ note, url: FILES[path] });
+    const folder = folderOf(path);
+    (byFolder[folder] = byFolder[folder] || []).push({
+      note,
+      url: FILES[path],
+    });
   }
 
+  // one .mid per folder → phraseUrl (last one wins if several)
+  const midiByFolder: Record<string, string> = {};
+  for (const path in MIDI_FILES)
+    midiByFolder[folderOf(path)] = MIDI_FILES[path];
+
   // union of discovered folders + fallback-only ids, in a stable order
-  const ids = [...new Set([...FALLBACK_ONLY_IDS, ...Object.keys(byFolder)])];
+  const ids = [
+    ...new Set([
+      ...FALLBACK_ONLY_IDS,
+      ...Object.keys(byFolder),
+      ...Object.keys(midiByFolder),
+    ]),
+  ];
 
   return ids.map((id) => {
     const ov = PRESET_OVERRIDES[id] || {};
     const zones: SampleZone[] = (byFolder[id] || [])
       .map(({ note, url }) => {
         const range = ov.zoneRanges?.[note];
-        return { url, rootMidi: noteToMidi(note)!, loMidi: range?.loMidi, hiMidi: range?.hiMidi };
+        return {
+          url,
+          rootMidi: noteToMidi(note)!,
+          loMidi: range?.loMidi,
+          hiMidi: range?.hiMidi,
+        };
       })
       .sort((a, b) => a.rootMidi - b.rootMidi);
     return {
@@ -162,7 +255,9 @@ function buildPresets(): SampledPreset[] {
       gain: ov.gain ?? DEFAULT_GAIN,
       fallbackPatch: ov.fallbackPatch,
       defaultPhrase: ov.defaultPhrase || PHRASE_DEFAULT,
+      phraseUrl: midiByFolder[id],
       bpmHint: ov.bpmHint,
+      humanize: ov.humanize ?? 0,
     };
   });
 }
