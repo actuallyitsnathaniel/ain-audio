@@ -38,7 +38,7 @@ GainNode (`FxModule { in, out }`), so the chain rewires cleanly at the gain boun
 |-----|---------|-------|
 | `filter` | BiquadFilter | bipolar morph: <0.5 lowpass, >0.5 highpass, ~0.5 off |
 | `comp` | DynamicsCompressor + makeup gain | *creative* dynamics; manual makeup. Off ⇒ threshold 0/ratio 1 (neutral) |
-| `space` | Delay + feedback (internal dry/wet) | the one effect with an internal parallel/feedback branch |
+| `space` | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the roll tempo: the `div` knob steps the 6 straight divisions (1/1→1/32, `DELAY_DIVS`); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies it. Off = free ms (`time`). |
 | `crush` | WaveShaper (tanh) + auto-gain | see loudness safety below |
 | `reverb` | Convolver (internal dry/wet) | synth IR by default; real IR optional |
 

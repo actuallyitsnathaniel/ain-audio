@@ -38,21 +38,24 @@ export function RollLab() {
 
   const canvasEl = () => wrapRef.current?.querySelector("canvas") || null;
 
-  // load the active preset's default phrase when the preset changes
+  // load the active preset's default phrase (parses its .mid if present) when
+  // the preset changes. async + a guard so a slow fetch can't clobber a newer pick.
+  const loadPhrase = (id: string) => {
+    engine.loadPresetPhrase(id).then((res) => {
+      if (!res || lastPreset.current !== id) return;
+      if (res.bpm) engine.setBpm(res.bpm);
+      loadClipInto(canvasEl(), cloneClip(res.clip));
+    });
+  };
+
   useEffect(() => {
     if (lastPreset.current === eng.samplePreset) return;
     lastPreset.current = eng.samplePreset;
-    const preset = engine.samplePresets.find((p) => p.id === eng.samplePreset);
-    if (preset) {
-      if (preset.bpmHint) engine.setBpm(preset.bpmHint);
-      loadClipInto(canvasEl(), cloneClip(preset.defaultPhrase));
-    }
+    loadPhrase(eng.samplePreset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eng.samplePreset]);
 
-  const resetPhrase = () => {
-    const preset = engine.samplePresets.find((p) => p.id === eng.samplePreset);
-    if (preset) loadClipInto(canvasEl(), cloneClip(preset.defaultPhrase));
-  };
+  const resetPhrase = () => loadPhrase(eng.samplePreset);
 
   // live bar/beat readout
   const readout = useRef<HTMLSpanElement>(null);
