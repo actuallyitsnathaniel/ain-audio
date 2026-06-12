@@ -1,14 +1,33 @@
 @import "tailwindcss";
 
+/* ── DAW design tokens (Tailwind 4 @theme) ──────────────────────────────────
+   Ported from the prototype's :root custom properties. These become Tailwind
+   utilities: bg-daw-bg, text-daw-dim, border-line, font-mono, etc. */
+@theme {
+  --color-daw-bg: #0c0c0e;
+  --color-panel: #141418;
+  --color-panel2: #1a1a20;
+  --color-inset: #08080a;
+  --color-line: #242429;
+  --color-line2: #32323a;
+  --color-daw-text: #d8d8dc;
+  --color-dim: #8e8e98;
+  --color-faint: #5c5c66;
+  --color-accent: #54adbd;
+
+  --font-display: "Archivo", "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+  /* expose tokens as raw vars too, for canvas / SVG code that reads them */
+  --accent: #54adbd;
+  --line: #242429;
+  --line2: #32323a;
+  --panel: #141418;
+  --panel2: #1a1a20;
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  /* background-color: black; */
-
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -16,50 +35,102 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* DEBUG SPACINGS HERE */
-
-/* * {
-  outline: 1px solid #f00 !important;
-} */
+html {
+  scroll-behavior: smooth;
+}
 
 body {
   margin: 0;
   min-height: 100vh;
-  background-color: #111111;
+  background-color: var(--color-daw-bg);
+  color: var(--color-daw-text);
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.55;
   overflow-x: hidden;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+/* ── CSS play / pause / spinner glyphs (pure CSS, no SVG) ──────────────────── */
+.icon-play {
+  width: 0;
+  height: 0;
+  border-left: 12px solid currentColor;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  display: inline-block;
+}
+.icon-play.small {
+  border-left-width: 9px;
+  border-top-width: 5.5px;
+  border-bottom-width: 5.5px;
+}
+.icon-play.tiny {
+  border-left-width: 7px;
+  border-top-width: 4.5px;
+  border-bottom-width: 4.5px;
+}
+.icon-pause {
+  display: inline-flex;
+  gap: 4px;
+}
+.icon-pause::before,
+.icon-pause::after {
+  content: "";
+  width: 4px;
+  height: 14px;
+  background: currentColor;
+}
+.icon-pause.small::before,
+.icon-pause.small::after {
+  width: 3px;
+  height: 11px;
+}
+.play-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
+}
+.play-spinner.small {
+  width: 11px;
+  height: 11px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+.cursor-blink {
+  animation: blink 1.1s steps(1) infinite;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+/* Mobile project-detail bottom sheet. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
   }
 }
 
-/* Project cards: mobile only — grayed out by default, full color when scrolled into view */
-@media (max-width: 767px) {
-  [data-project-card] {
-    opacity: 0.35;
-    filter: grayscale(1);
-    scroll-snap-align: center;
-    transition: opacity 0.3s ease, filter 0.3s ease, transform 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
-  }
-
-  [data-project-card].is-centered {
-    opacity: 1;
-    filter: grayscale(0);
-    background-color: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.2) !important;
-    box-shadow: 0 0 24px rgba(255, 255, 255, 0.05);
-  }
+/* Translucent blurred transport bar (color-mix isn't expressible as a utility). */
+.tbar-bg {
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(10px);
 }
 
-/* Hide scrollbar on the mobile project strip */
+/* Hide scrollbar (used by other routes + the mobile transport nav). */
 .scrollbar-hide {
   scrollbar-width: none;
   -ms-overflow-style: none;
