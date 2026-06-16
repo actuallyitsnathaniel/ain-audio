@@ -11,8 +11,11 @@ import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
 import { clipBeats, type NoteClip } from "./data/clips";
 import { parseMidi } from "./data/midi-file";
+import { DEFAULT_KIT, defaultSequence, LOOPS, type DrumKit, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
 
 export type TransportMode = "track" | "sequence";
+
+const STEP_BEATS = 0.25; // one drum step = a 1/16 note
 
 type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip";
 
@@ -177,6 +180,17 @@ class AudioEngine {
   private _seqVoices: VoiceHandle[] = []; // voices started by the scheduler
   private static SCHED_INTERVAL = 25; // ms — clock tick
   private static SCHED_AHEAD = 0.12; // s — schedule this far ahead of currentTime
+
+  // ── beat-maker (drum step sequencer; shares the clock above) ──
+  // beatMode switches the scheduler between the piano-roll note clip and the
+  // drum sequence clip. Only one plays at a time.
+  beatMode = false;
+  kit: DrumKit = DEFAULT_KIT;
+  sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
+  loops: LoopLane[] = LOOPS;
+  private _drumBufs: Record<string, AudioBuffer | null> = {}; // laneId → decoded one-shot (null = use synth)
+  private _loopBufs: Record<string, AudioBuffer> = {}; // loopId → decoded buffer
+  private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode }> = {}; // live looping voices
 
   private _startCtx = 0;
   private _offset = 0;
@@ -1030,6 +1044,340 @@ class AudioEngine {
     return Object.keys(this._liveVoices).map(Number);
   }
 
+  // ── beat-maker: drum kit + voices ──
+  setKit(kit: DrumKit) {
+    this.kit = kit;
+    this._drumBufs = {};
+    void this.loadKit(kit);
+    this.emit("transport");
+  }
+
+  // lazily fetch + decode each lane's one-shot (lanes without a url stay synth)
+  async loadKit(kit: DrumKit) {
+    const c = this.ensureCtx();
+    await Promise.all(
+      kit.lanes.map(async (l) => {
+        if (!l.url || this._drumBufs[l.id] !== undefined) return;
+        try {
+          this._drumBufs[l.id] = await this.fetchBuf(l.url, c);
+        } catch {
+          this._drumBufs[l.id] = null; // fall back to synth
+        }
+      }),
+    );
+    this.emit("transport");
+  }
+
+  setSequence(seq: SequenceClip) {
+    this.sequence = seq;
+    this.emit("clip");
+  }
+
+  // trigger one drum lane at an explicit time: decoded sample if present, else a
+  // synthesized hit. Routes to n.sum so it shares the FX rack. `accent` boosts level.
+  triggerDrum(laneId: string, when: number, accent = false) {
+    const c = this.ensureCtx();
+    const n = this.nodes!;
+    const lane = this.kit.lanes.find((l) => l.id === laneId);
+    if (!lane) return;
+    const vel = accent ? 1 : 0.7;
+    const buf = this._drumBufs[laneId];
+    if (buf) {
+      const g = c.createGain();
+      g.gain.value = vel;
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      src.connect(g);
+      g.connect(n.sum);
+      src.start(when);
+      src.onended = () => {
+        try {
+          g.disconnect();
+        } catch {
+          /* fine */
+        }
+      };
+    } else {
+      this.synthDrum(lane.synth, when, vel);
+    }
+  }
+
+  // ── synthesized drum voices (Web Audio, when no sample is bounced) ──
+  private synthDrum(kind: DrumSynth, t: number, vel: number) {
+    const c = this.ctx!;
+    const n = this.nodes!;
+    const out = c.createGain();
+    out.gain.value = 1;
+    out.connect(n.sum);
+    const env = (g: GainNode, peak: number, dec: number) => {
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
+    };
+    const noiseBuf = (dur: number) => {
+      const len = Math.floor(c.sampleRate * dur);
+      const b = c.createBuffer(1, len, c.sampleRate);
+      const d = b.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      return b;
+    };
+    const stop = (node: AudioScheduledSourceNode, at: number) => {
+      try {
+        node.stop(at);
+      } catch {
+        /* fine */
+      }
+      node.onended = () => {
+        try {
+          out.disconnect();
+        } catch {
+          /* fine */
+        }
+      };
+    };
+
+    if (kind === "kick") {
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.frequency.setValueAtTime(150, t);
+      o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+      env(g, 0.9 * vel, 0.32);
+      o.connect(g);
+      g.connect(out);
+      o.start(t);
+      stop(o, t + 0.34);
+    } else if (kind === "snare") {
+      const ns = c.createBufferSource();
+      ns.buffer = noiseBuf(0.25);
+      const hp = c.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 1400;
+      const g = c.createGain();
+      env(g, 0.55 * vel, 0.2);
+      ns.connect(hp);
+      hp.connect(g);
+      g.connect(out);
+      // body tone
+      const o = c.createOscillator();
+      o.type = "triangle";
+      o.frequency.value = 180;
+      const og = c.createGain();
+      env(og, 0.3 * vel, 0.12);
+      o.connect(og);
+      og.connect(out);
+      ns.start(t);
+      o.start(t);
+      stop(ns, t + 0.26);
+      stop(o, t + 0.14);
+    } else if (kind === "hat") {
+      const ns = c.createBufferSource();
+      ns.buffer = noiseBuf(0.08);
+      const hp = c.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 7000;
+      const g = c.createGain();
+      env(g, 0.4 * vel, 0.05);
+      ns.connect(hp);
+      hp.connect(g);
+      g.connect(out);
+      ns.start(t);
+      stop(ns, t + 0.09);
+    } else if (kind === "clap") {
+      // three quick noise bursts
+      [0, 0.012, 0.024].forEach((off, i) => {
+        const ns = c.createBufferSource();
+        ns.buffer = noiseBuf(0.12);
+        const bp = c.createBiquadFilter();
+        bp.type = "bandpass";
+        bp.frequency.value = 1200;
+        bp.Q.value = 0.7;
+        const g = c.createGain();
+        const peak = (i === 2 ? 0.5 : 0.35) * vel;
+        g.gain.setValueAtTime(0, t + off);
+        g.gain.linearRampToValueAtTime(peak, t + off + 0.001);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + off + (i === 2 ? 0.18 : 0.05));
+        ns.connect(bp);
+        bp.connect(g);
+        g.connect(out);
+        ns.start(t + off);
+        stop(ns, t + off + 0.2);
+      });
+    } else if (kind === "tom") {
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.frequency.setValueAtTime(220, t);
+      o.frequency.exponentialRampToValueAtTime(90, t + 0.18);
+      env(g, 0.7 * vel, 0.3);
+      o.connect(g);
+      g.connect(out);
+      o.start(t);
+      stop(o, t + 0.32);
+    } else {
+      // rim — short bright click
+      const o = c.createOscillator();
+      o.type = "square";
+      o.frequency.value = 1700;
+      const g = c.createGain();
+      env(g, 0.35 * vel, 0.04);
+      o.connect(g);
+      g.connect(out);
+      o.start(t);
+      stop(o, t + 0.05);
+    }
+  }
+
+  // ── beat-maker: loopable melodic-sample lanes ──
+  async loadLoops() {
+    const c = this.ensureCtx();
+    await Promise.all(
+      this.loops.map(async (l) => {
+        if (this._loopBufs[l.id]) return;
+        try {
+          this._loopBufs[l.id] = await this.fetchBuf(l.url, c);
+        } catch {
+          /* skip — undecodable loop just won't play */
+        }
+      }),
+    );
+    this.emit("clip");
+  }
+
+  // effective gain for a loop: 0 if muted, off, or solo'd-out by another loop.
+  private loopGain(id: string): number {
+    const st = this.sequence.loops[id];
+    if (!st || !st.on || st.mute) return 0;
+    const anySolo = Object.values(this.sequence.loops).some((s) => s.solo && s.on);
+    if (anySolo && !st.solo) return 0;
+    return st.level;
+  }
+
+  // start every "on" loop as a sustained looped source, aligned so its loop
+  // boundary lands on the sequence's bar grid. playbackRate matches tempo.
+  private startLoops(when: number) {
+    const c = this.ctx!;
+    const n = this.nodes!;
+    this.stopLoops();
+    for (const l of this.loops) {
+      const buf = this._loopBufs[l.id];
+      const st = this.sequence.loops[l.id];
+      if (!buf || !st?.on) continue;
+      const gain = c.createGain();
+      gain.gain.value = this.loopGain(l.id);
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.playbackRate.value = this.bpm / l.rootBpm; // tempo-match (pitch follows)
+      src.connect(gain);
+      gain.connect(n.sum);
+      src.start(when);
+      this._loopNodes[l.id] = { src, gain };
+    }
+  }
+
+  private stopLoops() {
+    const now = this.ctx ? this.ctx.currentTime : 0;
+    for (const id in this._loopNodes) {
+      const { src, gain } = this._loopNodes[id];
+      try {
+        src.stop(now + 0.02);
+      } catch {
+        /* fine */
+      }
+      setTimeout(() => {
+        try {
+          gain.disconnect();
+        } catch {
+          /* fine */
+        }
+      }, 60);
+    }
+    this._loopNodes = {};
+  }
+
+  // push current mute/solo/level/on state to the live loop gains (no restart).
+  // Toggling a loop ON mid-play starts it at the next bar; OFF stops it.
+  private refreshLoopGains() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const l of this.loops) {
+      const node = this._loopNodes[l.id];
+      const st = this.sequence.loops[l.id];
+      if (node) {
+        if (st?.on) node.gain.gain.setTargetAtTime(this.loopGain(l.id), t, 0.02);
+        else this.stopOneLoop(l.id); // turned off → stop it
+      } else if (st?.on && this.beatMode && this.sequencePlaying) {
+        this.startOneLoopAligned(l.id); // turned on mid-play → start at next bar
+      }
+    }
+  }
+
+  private stopOneLoop(id: string) {
+    const node = this._loopNodes[id];
+    if (!node) return;
+    const now = this.ctx!.currentTime;
+    node.gain.gain.setTargetAtTime(0, now, 0.03);
+    try {
+      node.src.stop(now + 0.1);
+    } catch {
+      /* fine */
+    }
+    delete this._loopNodes[id];
+  }
+
+  // start a single loop on the next bar boundary (for mid-play toggles)
+  private startOneLoopAligned(id: string) {
+    const c = this.ctx!;
+    const n = this.nodes!;
+    const buf = this._loopBufs[id];
+    const l = this.loops.find((x) => x.id === id);
+    if (!buf || !l) return;
+    const barBeats = this.sequence.beatsPerBar;
+    const beat = this.currentBeat();
+    const nextBarBeat = Math.ceil((beat + 0.01) / barBeats) * barBeats;
+    const when = this._seqAnchorTime + (nextBarBeat - this._seqAnchorBeat) * this.beatDur();
+    const gain = c.createGain();
+    gain.gain.value = this.loopGain(id);
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.playbackRate.value = this.bpm / l.rootBpm;
+    src.connect(gain);
+    gain.connect(n.sum);
+    src.start(when);
+    this._loopNodes[id] = { src, gain };
+  }
+
+  // ── loop control (UI) ──
+  toggleLoop(id: string) {
+    const st = this.sequence.loops[id];
+    if (!st) return;
+    st.on = !st.on;
+    if (st.on) void this.loadLoops();
+    this.refreshLoopGains();
+    this.emit("clip");
+  }
+  setLoopLevel(id: string, level: number) {
+    const st = this.sequence.loops[id];
+    if (!st) return;
+    st.level = Math.min(1, Math.max(0, level));
+    this.refreshLoopGains();
+    this.emit("clip");
+  }
+  toggleLoopMute(id: string) {
+    const st = this.sequence.loops[id];
+    if (!st) return;
+    st.mute = !st.mute;
+    this.refreshLoopGains();
+    this.emit("clip");
+  }
+  toggleLoopSolo(id: string) {
+    const st = this.sequence.loops[id];
+    if (!st) return;
+    st.solo = !st.solo;
+    this.refreshLoopGains();
+    this.emit("clip");
+  }
+
   // ── sequencer: lookahead scheduler ──
   // A setInterval clock walks ctx.currentTime and schedules note events slightly
   // ahead with sample-accurate start/stop times. rAF is NOT used for audio timing
@@ -1062,6 +1410,14 @@ class AudioEngine {
     }
     // a tempo-synced delay must track the new tempo
     if (this.fx.space.sync && this.ctx) this.applyFx();
+    // live loops re-rate to the new tempo so they stay locked to the grid
+    if (this.ctx) {
+      const tt = this.ctx.currentTime;
+      for (const l of this.loops) {
+        const node = this._loopNodes[l.id];
+        if (node) node.src.playbackRate.setTargetAtTime(this.bpm / l.rootBpm, tt, 0.02);
+      }
+    }
     this.emit("transport");
   }
 
@@ -1074,28 +1430,38 @@ class AudioEngine {
     return 60 / this.bpm;
   }
 
-  // current beat position within the clip (loops), from the ctx clock
+  // total beats of whatever's currently playing (drum sequence vs. note clip).
+  // A drum step = one 1/16 note = 0.25 beat, so the grid is steps × 0.25 beats.
+  private activeTotalBeats(): number {
+    if (this.beatMode) return this.sequence.steps * STEP_BEATS;
+    return this._clip ? clipBeats(this._clip) : 0;
+  }
+
+  // current beat position within the active loop, from the ctx clock
   private currentBeat(): number {
-    if (!this.ctx || !this._clip) return 0;
+    if (!this.ctx) return 0;
     const elapsed = this.ctx.currentTime - this._seqAnchorTime;
     let beat = this._seqAnchorBeat + elapsed / this.beatDur();
-    const total = clipBeats(this._clip);
+    const total = this.activeTotalBeats();
     if (this.loopOn && total > 0) beat = ((beat % total) + total) % total;
     return beat;
   }
 
-  // for the visual playhead (pure read — lint-safe in rAF)
-  getSequencePosition(): { beat: number; bars: number; playing: boolean } {
-    const clip = this._clip;
+  // for the visual playhead (pure read — lint-safe in rAF). `step` is the current
+  // drum step (0..steps-1) in beat mode, else -1.
+  getSequencePosition(): { beat: number; bars: number; playing: boolean; step: number } {
+    const total = this.activeTotalBeats();
+    const beat = this.sequencePlaying ? this.currentBeat() : 0;
     return {
-      beat: this.sequencePlaying ? this.currentBeat() : 0,
-      bars: clip ? clip.bars : 0,
+      beat,
+      bars: this.beatMode ? Math.max(1, total / this.sequence.beatsPerBar) : this._clip ? this._clip.bars : 0,
       playing: this.sequencePlaying,
+      step: this.beatMode && this.sequencePlaying ? Math.floor(beat / STEP_BEATS) % this.sequence.steps : -1,
     };
   }
 
   playSequence() {
-    if (!this._clip) return;
+    if (!this.beatMode && !this._clip) return;
     const c = this.ensureCtx();
     // transport mutual-exclusion: track playback and the sequencer can't both
     // drive the graph (double-sum + corrupt metering)
@@ -1128,30 +1494,107 @@ class AudioEngine {
     this.emit("state");
   }
 
+  // piano-roll transport (clears beat mode so the scheduler walks the note clip)
   toggleSequence() {
-    if (this.sequencePlaying) this.stopSequence();
-    else this.playSequence();
+    if (this.sequencePlaying && !this.beatMode) {
+      this.stopSequence();
+    } else {
+      if (this.sequencePlaying) this.stopSequence(); // was a beat — stop it first
+      this.beatMode = false;
+      this.playSequence();
+    }
   }
 
-  // schedule every note whose start lands in (_scheduledThrough, currentTime+AHEAD],
+  // ── beat-maker transport ──
+  // Enter drum mode (the scheduler walks the step grid) and start. Uses the
+  // sequence's own bpm. Mutually exclusive with track + piano-roll playback.
+  playBeat() {
+    this.beatMode = true;
+    this.bpm = this.sequence.bpm;
+    void this.loadKit(this.kit);
+    void this.loadLoops();
+    this.playSequence();
+    // start any "on" loops aligned to the sequence start (_seqAnchorTime set above)
+    this.startLoops(this._seqAnchorTime);
+  }
+
+  stopBeat() {
+    this.stopLoops();
+    this.stopSequence();
+    this.beatMode = false;
+  }
+
+  toggleBeat() {
+    if (this.sequencePlaying && this.beatMode) this.stopBeat();
+    else this.playBeat();
+  }
+
+  setSwing(v: number) {
+    this.sequence.swing = Math.min(0.7, Math.max(0, v));
+    this.emit("clip");
+  }
+
+  // toggle a single step on/off (or its accent) and emit so the grid re-renders
+  toggleStep(laneId: string, step: number, accent = false) {
+    const arr = accent ? this.sequence.accent[laneId] : this.sequence.on[laneId];
+    if (!arr) return;
+    arr[step] = !arr[step];
+    this.emit("clip");
+  }
+
+  setBeatBpm(bpm: number) {
+    this.sequence.bpm = Math.min(220, Math.max(40, Math.round(bpm)));
+    if (this.beatMode) this.setBpm(this.sequence.bpm);
+    else this.emit("clip");
+  }
+
+  // schedule every event landing in (_scheduledThrough, currentTime+AHEAD],
   // mapping clip beats onto absolute ctx times and wrapping at the loop boundary.
+  // Branches on beatMode: drum step grid vs. piano-roll note clip.
   private schedTick() {
     const c = this.ctx;
-    const clip = this._clip;
-    if (!c || !clip || !this.sequencePlaying) return;
-    const total = clipBeats(clip);
+    if (!c || !this.sequencePlaying) return;
+    const total = this.activeTotalBeats();
     if (total <= 0) return;
     const bd = this.beatDur();
     const horizon = c.currentTime + AudioEngine.SCHED_AHEAD;
-
-    // beat at the start of our scheduling window
     const fromBeatAbs = this._seqAnchorBeat + (this._scheduledThrough - this._seqAnchorTime) / bd;
     const toBeatAbs = this._seqAnchorBeat + (horizon - this._seqAnchorTime) / bd;
+    const whenOf = (absBeat: number) => this._seqAnchorTime + (absBeat - this._seqAnchorBeat) * bd;
 
-    // walk absolute beats; for each, find notes at that clip-beat (mod loop)
+    if (this.beatMode) {
+      const seq = this.sequence;
+      // swing pushes odd steps later by up to ~1/3 of a step
+      const swingBeats = seq.swing * STEP_BEATS * 0.66;
+      for (let s = 0; s < seq.steps; s++) {
+        const stepBeat = s * STEP_BEATS + (s % 2 === 1 ? swingBeats : 0);
+        let k = Math.floor((fromBeatAbs - stepBeat) / total);
+        if (!this.loopOn) k = 0;
+        for (; ; k++) {
+          const absBeat = stepBeat + (this.loopOn ? k * total : 0);
+          if (absBeat >= toBeatAbs) break;
+          if (absBeat < fromBeatAbs) {
+            if (!this.loopOn) break;
+            continue;
+          }
+          const when = whenOf(absBeat);
+          for (const lane of this.kit.lanes) {
+            if (seq.on[lane.id]?.[s]) this.triggerDrum(lane.id, when, !!seq.accent[lane.id]?.[s]);
+          }
+          if (!this.loopOn) break;
+        }
+      }
+      this._scheduledThrough = horizon;
+      return;
+    }
+
+    // piano-roll note clip
+    const clip = this._clip;
+    if (!clip) {
+      this._scheduledThrough = horizon;
+      return;
+    }
     for (const note of clip.notes) {
-      // candidate absolute-beat positions of this note within the window
-      // (loop can place it multiple times across passes)
       let k = Math.floor((fromBeatAbs - note.start) / total);
       if (!this.loopOn) k = 0;
       for (; ; k++) {
@@ -1161,7 +1604,7 @@ class AudioEngine {
           if (!this.loopOn) break;
           continue;
         }
-        const when = this._seqAnchorTime + (absBeat - this._seqAnchorBeat) * bd;
+        const when = whenOf(absBeat);
         const off = when + Math.max(0.04, note.length * bd);
         const h = this.startVoiceAt(note.pitch, note.vel, when);
         this.releaseVoice(h, off);
@@ -1169,7 +1612,6 @@ class AudioEngine {
         if (!this.loopOn) break;
       }
     }
-    // prune released handles occasionally to bound memory
     if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
     this._scheduledThrough = horizon;
   }

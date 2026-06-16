@@ -13,7 +13,9 @@ const ProjectPage = lazy(() => import("../src/routes/music/project-page"));
 // eslint-disable-next-line react-refresh/only-export-components
 const EventsPage = lazy(() => import("../src/routes/events"));
 // eslint-disable-next-line react-refresh/only-export-components
-const UsageAndAiPolicy = lazy(() => import("../src/routes/usage-and-ai-policy"));
+const UsageAndAiPolicy = lazy(
+  () => import("../src/routes/usage-and-ai-policy"),
+);
 
 const router = createBrowserRouter([
   {
@@ -40,10 +42,16 @@ const router = createBrowserRouter([
     errorElement: <ErrorPage />,
   },
   {
-    path: "/usage-and-ai-policy",
+    path: "/beatmaker",
     element: (
-      <Suspense fallback={<Loader />}>
-        <UsageAndAiPolicy />
+      <Suspense
+        fallback={
+          <div className="flex items-center justify-center min-h-screen text-white">
+            Loading...
+          </div>
+        }
+      >
+        <BeatmakerPage />
       </Suspense>
     ),
     errorElement: <ErrorPage />,
