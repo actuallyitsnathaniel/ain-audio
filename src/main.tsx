@@ -11,6 +11,8 @@ import "/src/index.css";
 const ProjectPage = lazy(() => import("../src/routes/music/project-page"));
 // eslint-disable-next-line react-refresh/only-export-components
 const EventsPage = lazy(() => import("../src/routes/events"));
+// eslint-disable-next-line react-refresh/only-export-components
+const BeatmakerPage = lazy(() => import("../src/routes/beatmaker"));
 
 // Mobile debugging - log device and browser info
 console.log("User Agent:", navigator.userAgent);
@@ -52,6 +54,21 @@ const router = createBrowserRouter([
         }
       >
         <EventsPage />
+      </Suspense>
+    ),
+    errorElement: <ErrorPage />,
+  },
+  {
+    path: "/beatmaker",
+    element: (
+      <Suspense
+        fallback={
+          <div className="flex items-center justify-center min-h-screen text-white">
+            Loading...
+          </div>
+        }
+      >
+        <BeatmakerPage />
       </Suspense>
     ),
     errorElement: <ErrorPage />,

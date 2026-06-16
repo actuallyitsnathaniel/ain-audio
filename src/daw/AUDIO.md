@@ -141,6 +141,35 @@ tempo `Knob`, loop + reset, and loads the selected preset's `defaultPhrase` on p
 ramps) and alt-drag-vertical for velocity, plus note-stretch markers (scale a selection in time).
 See [[piano-roll-ableton-gestures]] for the full reference.
 
+## Beat-maker (drum step sequencer)
+
+A 16-step drum sequencer on the lazy **`/beatmaker`** route
+([routes/beatmaker.tsx](../routes/beatmaker.tsx) → `DawShell` →
+[components/sequencer/Beatmaker.tsx](components/sequencer/Beatmaker.tsx)). It **reuses the Phase-2
+scheduler** — `beatMode` flips `schedTick` from walking the note clip to walking the step grid.
+
+- **Data** ([data/kits.ts](data/kits.ts)): `DrumKit` = named `DrumLane`s (kick/snare/hat/clap/tom);
+  `SequenceClip` = `{ steps, beatsPerBar, bpm, swing, on: Record<lane, bool[]>, accent: … }`.
+  `DEFAULT_KIT` + `defaultSequence()` ship a starter groove. One-shots are **auto-discovered** from
+  `src/assets/kits/<kitId>/<laneId>.m4a` (glob, like presets) — see
+  [../assets/kits/README.md](../assets/kits/README.md).
+- **Voices**: `triggerDrum(laneId, when, accent)` plays the decoded one-shot if present, else
+  `synthDrum()` — **engine-synthesized** kick (pitched sine sweep), snare/hat/clap (filtered noise),
+  tom, rim. Both route to `n.sum` → the shared FX rack. So the beat-maker works with **zero assets**;
+  drop real samples in later and those lanes switch automatically.
+- **Step = a 1/16 note** (`STEP_BEATS = 0.25`); grid length = `steps × 0.25` beats. **Swing** pushes
+  odd steps later by up to ~⅓ step. Per-step **accent** boosts level.
+- **Transport**: `playBeat`/`stopBeat`/`toggleBeat`, `setBeatBpm`, `setSwing`, `toggleStep`. Shares
+  the `transportMode` mutual-exclusion — playing a beat stops track + piano-roll playback and vice
+  versa. `getSequencePosition().step` drives the grid's current-step highlight (rAF, imperative).
+- **UI**: [StepGrid.tsx](components/sequencer/StepGrid.tsx) (DOM buttons — low cell count;
+  shift-click = accent; highlight updates one column's outline per frame, no React re-render) +
+  [SequencerTransport.tsx](components/sequencer/SequencerTransport.tsx) (play/stop, tempo + swing
+  `Knob`s).
+
+**Not yet built:** loopable melodic-sample lanes (layer a tempo-synced loop alongside the drums) —
+the planned Phase-3 follow-up. Multiple kits + a kit selector once real kits are bounced.
+
 ## Preset sampler
 
 Selecting a preset (`setSynthPatch(id)`) lazily fetches + decodes its zone files
