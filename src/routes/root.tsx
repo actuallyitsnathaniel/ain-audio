@@ -13,7 +13,7 @@ const Root = () => {
   return (
     <>
       <SEO
-        title="Audio - actuallyitsnathaniel"
+        title="audio | actuallyitsnathaniel"
         description="Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations."
         url="https://audio.actuallyitsnathaniel.com"
         type="profile"
