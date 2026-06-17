@@ -12,7 +12,7 @@ const VideoBG = () => {
     // Create fallback div
     const fallback = document.createElement("div");
     fallback.className =
-      "min-w-full top-0 w-full h-full fixed z-[-1] bg-gradient-to-br from-gray-900 via-black to-gray-800";
+      "min-w-full top-0 w-full h-full fixed z-[-1] bg-linear-to-br from-gray-900 via-black to-gray-800";
     video.parentElement?.appendChild(fallback);
   };
 

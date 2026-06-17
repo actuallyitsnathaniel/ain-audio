@@ -12,14 +12,6 @@ const ProjectPage = lazy(() => import("../src/routes/music/project-page"));
 // eslint-disable-next-line react-refresh/only-export-components
 const EventsPage = lazy(() => import("../src/routes/events"));
 
-// Mobile debugging - log device and browser info
-console.log("User Agent:", navigator.userAgent);
-console.log("Screen:", { width: screen.width, height: screen.height });
-console.log("Viewport:", {
-  width: window.innerWidth,
-  height: window.innerHeight,
-});
-
 const router = createBrowserRouter([
   {
     path: "/",
