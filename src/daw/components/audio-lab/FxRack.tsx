@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine, delayDivLabels, type FxKey } from "../../engine";
+import { IRS } from "../../data/kits";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { Knob } from "../Knob";
@@ -97,6 +98,26 @@ function renderDevice(key: FxKey, fx: typeof engine.fx) {
         <DeviceShell name="REVERB" on={fx.reverb.on} onToggle={(v) => engine.setFx("reverb", { on: v })}>
           <Knob value={fx.reverb.decay} min={0.2} max={6} defaultValue={2.2} onChange={(v) => engine.setFx("reverb", { decay: v })} label="decay" disabled={!fx.reverb.on} fmt={(v) => v.toFixed(1) + "s"} />
           <Knob value={fx.reverb.mix} min={0} max={1} defaultValue={0.25} onChange={(v) => engine.setFx("reverb", { mix: v })} label="mix" disabled={!fx.reverb.on} fmt={(v) => Math.round(v * 100) + "%"} />
+          {/* IR source: synth IR (decay knob regenerates it) or a real file from src/assets/irs/ */}
+          <label className="flex flex-col items-center gap-[3px] self-center font-mono text-[8.5px] tracking-[0.05em] text-faint">
+            <select
+              value={engine.reverbIR}
+              onChange={(e) => (e.target.value === "synth" ? engine.useSynthReverbIR() : engine.loadReverbIR(e.target.value))}
+              aria-label="reverb IR"
+              disabled={!fx.reverb.on}
+              className="cursor-pointer appearance-none rounded-[3px] border border-line2 bg-panel2 px-[6px] py-[3px] font-mono text-[8.5px] tracking-[0.03em] text-daw-text transition-colors hover:border-accent focus:border-accent focus:outline-none disabled:cursor-default disabled:opacity-50"
+            >
+              <option value="synth" className="bg-panel2 text-daw-text">
+                synth
+              </option>
+              {IRS.map((ir) => (
+                <option key={ir.id} value={ir.url} className="bg-panel2 text-daw-text">
+                  {ir.name}
+                </option>
+              ))}
+            </select>
+            IR
+          </label>
         </DeviceShell>
       );
   }
