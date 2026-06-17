@@ -3,7 +3,7 @@
 @theme {
   --animate-pulse-strong: pulse-strong 1s ease-in-out infinite;
   --animate-appear: appear 0.35s ease-in;
-  --animate-appear-slow: appear-slow 0.8s ease-in;
+  --animate-appear-slow: appear 0.8s ease-in;
 }
 
 @keyframes pulse-strong {
@@ -12,11 +12,6 @@
 }
 
 @keyframes appear {
-  0% { filter: opacity(0); }
-  100% { filter: opacity(1); }
-}
-
-@keyframes appear-slow {
   0% { filter: opacity(0); }
   100% { filter: opacity(1); }
 }
