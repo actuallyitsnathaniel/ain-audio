@@ -159,6 +159,8 @@ class AudioEngine {
   fxOrder: FxKey[] = [...FX_DEFAULT_ORDER];
   // true once a real IR file is loaded → decay knob stops regenerating the synth IR
   private _reverbIRFile = false;
+  // current reverb IR for the UI selector: "synth" or a loaded IR url
+  reverbIR = "synth";
 
   synthPatch = "glass pad";
   synthPatches = Object.keys(PATCHES);
@@ -756,6 +758,7 @@ class AudioEngine {
     this.emit("fx");
   }
 
+  // ponytail: unused — wired by the reverb IR-file selector (see AUDIO.md "not yet wired")
   // Load a real impulse-response file to replace the synthesised reverb. Pins
   // the convolver buffer so the decay knob no longer regenerates a synth IR.
   // Silently falls back to the synth IR if the fetch/decode fails.
@@ -765,15 +768,18 @@ class AudioEngine {
       const buf = await this.fetchBuf(url, c);
       this.nodes!.conv.buffer = buf;
       this._reverbIRFile = true;
+      this.reverbIR = url;
       this.emit("fx");
     } catch {
       /* keep the synth IR */
     }
   }
 
+  // ponytail: unused — partner of loadReverbIR, wired by the same IR selector
   // Revert reverb to the synthesised IR (re-enables the decay knob).
   useSynthReverbIR() {
     this._reverbIRFile = false;
+    this.reverbIR = "synth";
     if (this.nodes) this.nodes.conv.buffer = this.makeReverbIR(this.fx.reverb.decay);
     this.emit("fx");
   }
@@ -1062,11 +1068,21 @@ class AudioEngine {
   }
 
   // ── beat-maker: drum kit + voices ──
+  // Switch the active drum kit. Lanes with ids already in the sequence keep their
+  // steps/accents; any new lane ids get empty arrays so the grid + toggleStep have
+  // somewhere to write. We don't rebuild the whole sequence — that would wipe the
+  // user's groove.
   setKit(kit: DrumKit) {
     this.kit = kit;
     this._drumBufs = {};
+    const blank = () => new Array(this.sequence.steps).fill(false);
+    for (const l of kit.lanes) {
+      if (!this.sequence.on[l.id]) this.sequence.on[l.id] = blank();
+      if (!this.sequence.accent[l.id]) this.sequence.accent[l.id] = blank();
+    }
     void this.loadKit(kit);
     this.emit("transport");
+    this.emit("clip");
   }
 
   // lazily fetch + decode each lane's one-shot (lanes without a url stay synth)
@@ -1085,6 +1101,8 @@ class AudioEngine {
     this.emit("transport");
   }
 
+  // Replace the whole step-sequence (used by save/load patterns). Emits clip so
+  // the grid re-renders. Callers should pass a copy they own (loads clone first).
   setSequence(seq: SequenceClip) {
     this.sequence = seq;
     this.emit("clip");

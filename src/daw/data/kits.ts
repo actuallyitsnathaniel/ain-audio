@@ -89,7 +89,24 @@ export const DEFAULT_KIT: DrumKit = {
   lanes: withSamples("house", DEFAULT_LANES),
 };
 
-export const KITS: DrumKit[] = [DEFAULT_KIT];
+// A second kit sharing the same lane ids (so patterns/saves remap cleanly) but a
+// different synth voicing — boom-bap leans on the rim/tom side. Synth-only until
+// real one-shots are dropped under src/assets/kits/boombap/.
+const BOOMBAP_LANES: DrumLane[] = [
+  { id: "kick", name: "kick", synth: "kick" },
+  { id: "snare", name: "snare", synth: "snare" },
+  { id: "hat", name: "hat", synth: "hat" },
+  { id: "clap", name: "rim", synth: "rim" },
+  { id: "tom", name: "tom", synth: "tom" },
+];
+
+export const BOOMBAP_KIT: DrumKit = {
+  id: "boombap",
+  name: "boom bap",
+  lanes: withSamples("boombap", BOOMBAP_LANES),
+};
+
+export const KITS: DrumKit[] = [DEFAULT_KIT, BOOMBAP_KIT];
 
 // ── auto-discover loopable melodic samples ──
 // Drop src/assets/loops/<name>.m4a. Encode tempo + length in the filename so the
@@ -132,6 +149,28 @@ export const LOOPS: LoopLane[] = Object.keys(LOOP_FILES)
       rootBpm: ov.rootBpm ?? (bpmTok ? parseInt(bpmTok[1], 10) : 120),
       bars: ov.bars ?? (barTok ? parseInt(barTok[1], 10) : 1),
     };
+  })
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+// ── auto-discover reverb impulse responses ──
+// Drop src/assets/irs/<name>.wav and it appears in the REVERB device's IR selector
+// (loadReverbIR swaps it in). Empty folder → selector shows only the synth IR.
+const IR_FILES = import.meta.glob("/src/assets/irs/*.{wav,flac,m4a,ogg}", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
+export interface ReverbIR {
+  id: string; // filename stem
+  name: string; // prettified display label
+  url: string;
+}
+
+export const IRS: ReverbIR[] = Object.keys(IR_FILES)
+  .map((path) => {
+    const stem = path.split("/").pop()!.replace(KIT_EXT_RE, "");
+    return { id: stem, name: loopPretty(stem), url: IR_FILES[path] };
   })
   .sort((a, b) => a.name.localeCompare(b.name));
 

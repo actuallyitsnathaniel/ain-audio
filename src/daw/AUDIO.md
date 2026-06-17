@@ -167,8 +167,12 @@ scheduler** — `beatMode` flips `schedTick` from walking the note clip to walki
   [SequencerTransport.tsx](components/sequencer/SequencerTransport.tsx) (play/stop, tempo + swing
   `Knob`s).
 
-**Not yet built:** loopable melodic-sample lanes (layer a tempo-synced loop alongside the drums) —
-the planned Phase-3 follow-up. Multiple kits + a kit selector once real kits are bounced.
+**Loop lanes** (done) — `LoopLanes.tsx`: loopable melodic samples auto-discovered from
+`src/assets/loops/`, each a sustained looped source started bar-aligned, `playbackRate = gridBpm /
+rootBpm` so it locks to tempo; per-loop toggle / level / mute / solo; `setBpm` re-rates live loops.
+
+**Not yet wired to UI** (engine seams exist, no callers): `setKit` (multi-kit selector),
+`setSequence` (save/load patterns), `loadReverbIR`/`useSynthReverbIR` (real IR files).
 
 ## Preset sampler
 
