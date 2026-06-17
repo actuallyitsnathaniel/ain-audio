@@ -19,13 +19,13 @@ const ProjectSkeleton = () => (
     {/* Profile image placeholder */}
     <div className="flex flex-col items-center p-8 gap-4">
       <div className="h-64 w-64 rounded-xl bg-white/10" />
-      <div className="h-6 w-32 rounded bg-white/10" />
-      <div className="h-4 w-20 rounded bg-white/10" />
+      <div className="h-6 w-32 rounded-sm bg-white/10" />
+      <div className="h-4 w-20 rounded-sm bg-white/10" />
     </div>
     {/* Description placeholder */}
     <div className="px-6 space-y-3">
-      <div className="h-4 rounded bg-white/10 w-full" />
-      <div className="h-4 rounded bg-white/10 w-5/6" />
+      <div className="h-4 rounded-sm bg-white/10 w-full" />
+      <div className="h-4 rounded-sm bg-white/10 w-5/6" />
     </div>
     {/* Disc grid placeholder */}
     <div className="mt-10 flex flex-wrap gap-6 justify-center">

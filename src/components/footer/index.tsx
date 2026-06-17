@@ -1,7 +1,7 @@
 const Footer = () => {
   return (
     <footer className="flex flex-wrap text-white text-center justify-center items-center p-6 h-24">
-      <p className="grid md:text-md lowercase">
+      <p className="grid md:text-base lowercase">
         <span>
           <br />
           Built with&nbsp;

@@ -39,7 +39,7 @@ const Disc = ({
         onClick={() => setFocused(!focused)}
       >
         <MusicPlatformLinks
-          className="bg-black bg-opacity-50 backdrop-blur-md"
+          className={`${focused && "bg-black/50 backdrop-blur-md"}`}
           focused={focused}
           {...{
             appleMusicLink,

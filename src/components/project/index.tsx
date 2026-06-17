@@ -206,7 +206,7 @@ const ProjectComponent = memo(
     return (
       <div
         {...{ id }}
-        className={`fixed top-0 left-0 z-4 flex flex-col items-center text-white transition-all duration-100 ease-in-out bg-black bg-opacity-80 w-screen backdrop-blur-md ${
+        className={`fixed top-0 left-0 z-4 flex flex-col items-center text-white transition-all duration-100 ease-in-out bg-black/80 w-screen backdrop-blur-md ${
           isFocused ? "scale-100 h-screen blur-none" : "scale-0 h-0 blur-lg"
         }`}
       >
