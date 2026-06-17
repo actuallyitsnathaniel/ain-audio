@@ -212,6 +212,23 @@ class AudioEngine {
     this.wet = isNaN(v) ? 1 : Math.min(1, Math.max(0, v));
   }
 
+  // ── Section index ───────────────────────────────────────────────────────
+  // This file is one file on purpose: a singleton owning one AudioContext +
+  // one signal graph reads best top-to-bottom. Jump by searching a banner:
+  //   "── pub/sub"                  event bus (on/off/emit)
+  //   "── track loading"           build graph, fetch/decode buffers
+  //   "── transport"               play/pause/seek/getPosition (phase-locked)
+  //   "── controls"                wet, level-match, reverb-IR source
+  //   "── analysis"                meters, spectrum, waveform peaks
+  //   "── preset synth + sampler"  patch selection + sampled-preset zones
+  //   "── voice factory"           startVoiceAt/releaseVoice (kbd + scheduler)
+  //   "── live keyboard"           held notes by MIDI
+  //   "── beat-maker"              drum kit, synth drums, loopable lanes
+  //   "── sequencer: lookahead"    the clock that schedules notes/drums
+  // Graph build + reorderable FX live above the constructor (buildGraph,
+  // rewireChain, applyFx); debug() at the bottom dumps live state.
+  // ─────────────────────────────────────────────────────────────────────────
+
   // ── pub/sub ──
   on(ev: EngineEvent, fn: () => void) {
     (this._ls[ev] = this._ls[ev] || []).push(fn);
@@ -1615,6 +1632,46 @@ class AudioEngine {
     if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
     this._scheduledThrough = horizon;
   }
+
+  // ── debug ──
+  // One call that snapshots the live engine for the console — what you reach for
+  // when audio misbehaves. Pure reads, no side effects. In dev `window.engine`
+  // is set (see below), so just run `engine.debug()` in the browser console.
+  debug() {
+    const c = this.ctx;
+    return {
+      transport: {
+        playing: this.playing,
+        mode: this.transportMode,
+        sequencePlaying: this.sequencePlaying,
+        beatMode: this.beatMode,
+        loopOn: this.loopOn,
+        bpm: this.bpm,
+        position: c ? this._offset + (this.playing ? Math.max(0, c.currentTime - this._startCtx) : 0) : this._offset,
+      },
+      track: { id: this.track?.id ?? null, ready: this.ready, loading: this.loading, error: this.error, duration: this.duration },
+      graph: {
+        ctxState: c?.state ?? "none",
+        ctxTime: c?.currentTime ?? 0,
+        sampleRate: c?.sampleRate ?? 0,
+        fxOrder: [...this.fxOrder],
+        wet: this.wet,
+        levelMatch: this.levelMatch,
+      },
+      fx: this.fx,
+      voices: {
+        liveKeyboard: Object.keys(this._liveVoices).length,
+        scheduler: this._seqVoices.length,
+        loops: Object.keys(this._loopNodes).length,
+        playingSources: this._srcs?.length ?? 0,
+        activeNotes: Object.keys(this._liveVoices).map(Number),
+      },
+    };
+  }
 }
 
 export const engine = new AudioEngine();
+
+// Dev-only console handle: `engine.debug()` in the browser. Statically false in
+// production builds, so it tree-shakes out. ponytail: drop if it ever ships.
+if (import.meta.env.DEV) (globalThis as { engine?: AudioEngine }).engine = engine;

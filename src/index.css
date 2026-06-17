@@ -124,6 +124,20 @@ body {
   }
 }
 
+/* Legacy navbar fade-in (old /events + /secret pages). Ported from the now-deleted
+   tailwind.config.js — Tailwind 4 ignores that file, so these had to move here. */
+@keyframes appear {
+  from {
+    filter: opacity(0);
+  }
+}
+.animate-appear {
+  animation: appear 0.35s ease-in;
+}
+.animate-appear-slow {
+  animation: appear 0.8s ease-in;
+}
+
 /* Translucent blurred transport bar (color-mix isn't expressible as a utility). */
 .tbar-bg {
   background: color-mix(in srgb, var(--panel) 88%, transparent);
