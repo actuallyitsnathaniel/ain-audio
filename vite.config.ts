@@ -66,18 +66,11 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     build: {
-      commonjsOptions: {
-        transformMixedEsModules: false,
-      },
-      target: "ES2022",
       outDir: "./build",
     },
     server: {
       open: true,
       port: 3000,
-      proxy: {
-        "/api": "http://localhost:3001",
-      },
     },
   } satisfies UserConfig;
 });
