@@ -72,6 +72,7 @@ export interface DiscoEntry {
   type: ReleaseType;
   art: string;
   links: PlatformLinkSet;
+  note?: string; // optional short blurb shown in the release lightbox
 }
 
 export const discography: Record<string, DiscoEntry[]> = {

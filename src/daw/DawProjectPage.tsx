@@ -85,10 +85,10 @@ export function DawProjectPage({ project }: { project: Project }) {
           ◂ back to session
         </Link>
 
-        <div className="mb-[14px] grid grid-cols-[6px_230px_1fr] overflow-hidden rounded-[4px] border border-line bg-panel max-[760px]:grid-cols-[6px_1fr]">
+        <div className="mb-[14px] grid grid-cols-[6px_320px_1fr] overflow-hidden rounded-[4px] border border-line bg-panel max-[980px]:grid-cols-[6px_260px_1fr] max-[760px]:grid-cols-[6px_1fr]">
           <div className="bg-[var(--clip)] max-[760px]:row-span-2" />
           <img
-            className="h-full min-h-[230px] w-[230px] border-r border-line object-cover max-[760px]:max-h-[280px] max-[760px]:w-full max-[760px]:border-r-0 max-[760px]:border-b max-[760px]:border-line"
+            className="h-full min-h-[320px] w-[320px] border-r border-line object-cover max-[980px]:min-h-[260px] max-[980px]:w-[260px] max-[760px]:max-h-[360px] max-[760px]:min-h-0 max-[760px]:w-full max-[760px]:border-r-0 max-[760px]:border-b max-[760px]:border-line"
             src={p.art}
             alt={p.artist}
           />
