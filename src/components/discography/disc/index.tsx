@@ -30,7 +30,7 @@ const Disc = ({
 
   return (
     <div
-      className={`${className} transition-scale duration-100 text-8xl md:hover:scale-110 group p-3`}
+      className={`${className} transition-transform duration-100 text-8xl md:hover:scale-110 group p-3`}
     >
       <div
         className="relative h-72 w-72 mx-auto"
@@ -59,7 +59,7 @@ const Disc = ({
           loading="eager"
         />
       </div>
-      <div className="flex flex-row w-80 flex-wrap text-center justify-center transition-scale duration-100 origin-top text-lg md:invisible md:group-hover:visible md:scale-0 md:group-hover:scale-90">
+      <div className="flex flex-row w-80 flex-wrap text-center justify-center transition-transform duration-100 origin-top text-lg md:invisible md:group-hover:visible md:scale-0 md:group-hover:scale-90">
         {title}
       </div>
     </div>
