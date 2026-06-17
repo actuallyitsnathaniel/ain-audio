@@ -5,24 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "nodemon server.js",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint ."
   },
   "dependencies": {
     "@unhead/react": "^2.0.19",
-    "axios": "^1.13.2",
-    "dotenv": "^17.2.3",
-    "esbuild": "^0.27.2",
-    "express": "^5.2.1",
     "framer-motion": "^12.27.1",
-    "from": "^0.1.7",
-    "nodemon": "^3.1.4",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-router-dom": "^7.12.0",
-    "typeit-react": "2.7.8",
     "vite-plugin-image-optimizer": "^1.1.7"
   },
   "devDependencies": {
@@ -41,7 +33,7 @@
     "postcss": "^8.4.31",
     "prettier": "^3.0.3",
     "prettier-plugin-tailwindcss": "^0.7.2",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.1",
     "svgo": "^4.0.0",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",

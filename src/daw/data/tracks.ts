@@ -41,6 +41,11 @@ export const jlmTrack: PairTrack = {
   subtitle: "prod. Day Wave · alt grunge · mastered by AIN",
   mixUrl: "/audio/jlm-mix.m4a",
   masterUrl: "/audio/jlm-master.m4a",
+  // PHASE-LOCK INVARIANT: mix + master MUST be exported sample-aligned (identical
+  // start point, same length) or the A/B crossfade comb-filters. The engine starts
+  // both on the same ctx sample, so any offset baked into the files plays as a fixed
+  // delay. Prefer lossless (WAV/FLAC) — separate AAC encodes also drift the waveform.
+  // (Jun 2026: the m4a pair measured a constant 9 ms / 397-sample offset; re-export aligned.)
   // measured offline: master is ≈ +1.7 dB RMS over the mix
   lmDb: 1.7,
   notes:
