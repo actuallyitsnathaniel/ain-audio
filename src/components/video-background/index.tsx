@@ -1,4 +1,5 @@
 import rileyBGMP4 from "/src/assets/videos/riley-bg.mp4";
+import rileyBGPoster from "/src/assets/videos/riley-bg-poster.jpg";
 // import rileyBGWEBM from "/src/assets/videos/riley-bg.webm";
 
 const VideoBG = () => {
@@ -22,7 +23,8 @@ const VideoBG = () => {
         height={"110%"}
         width={"auto"}
         id="video"
-        rel="preload"
+        poster={rileyBGPoster}
+        preload="auto"
         autoPlay
         loop
         muted
