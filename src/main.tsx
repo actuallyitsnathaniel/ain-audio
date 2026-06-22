@@ -11,6 +11,8 @@ import "/src/index.css";
 const ProjectPage = lazy(() => import("../src/routes/music/project-page"));
 // eslint-disable-next-line react-refresh/only-export-components
 const EventsPage = lazy(() => import("../src/routes/events"));
+// eslint-disable-next-line react-refresh/only-export-components
+const UsageAndAiPolicy = lazy(() => import("../src/routes/usage-and-ai-policy"));
 
 const router = createBrowserRouter([
   {
@@ -44,6 +46,21 @@ const router = createBrowserRouter([
         }
       >
         <EventsPage />
+      </Suspense>
+    ),
+    errorElement: <ErrorPage />,
+  },
+  {
+    path: "/usage-and-ai-policy",
+    element: (
+      <Suspense
+        fallback={
+          <div className="flex items-center justify-center min-h-screen text-white">
+            Loading...
+          </div>
+        }
+      >
+        <UsageAndAiPolicy />
       </Suspense>
     ),
     errorElement: <ErrorPage />,

@@ -1,9 +1,22 @@
+import { Link } from "react-router-dom";
+
 const Footer = () => {
   return (
-    <footer className="flex flex-wrap text-white text-center justify-center items-center p-6 h-24">
-      <p className="grid md:text-base lowercase">
+    <footer className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 text-white text-center p-6">
+      <p className="flex-1 md:max-w-xs md:text-left text-sm text-white/70 normal-case">
+        actually-its-nathaniel&rsquo;s music is not licensed for AI or machine
+        learning training. Any violation of this policy will be pursued to the
+        fullest extent of the law.{" "}
+        <Link
+          className="italic underline underline-offset-2 text-purple-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-white"
+          to="/usage-and-ai-policy"
+        >
+          Read the usage &amp; AI policy
+        </Link>
+        .
+      </p>
+      <p className="flex-1 md:text-base lowercase">
         <span>
-          <br />
           Built with&nbsp;
           <a
             className="italic underline underline-offset-2 text-purple-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-white"
@@ -40,7 +53,10 @@ const Footer = () => {
           </a>
           .
         </span>
-        Copyright © {new Date().getFullYear()} Nathaniel Bowman.
+      </p>
+      <p className="flex-1 md:max-w-xs md:text-right text-sm text-white/70 normal-case">
+        Copyright © {new Date().getFullYear()} Nathaniel Riley Bowman. All
+        rights reserved.
       </p>
     </footer>
   );
