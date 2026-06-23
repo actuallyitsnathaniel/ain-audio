@@ -1,33 +1,41 @@
-// scripts/showcase.mjs — record a nav tour of a running site and convert to GIF.
-// Records a real video with Playwright (captures the page exactly as it renders,
-// background video and all), then ffmpeg converts it. Requires a running server.
+// scripts/showcase.mjs — site-agnostic showcase engine. Records a configured
+// tour of a running site as a video (Playwright), then converts it with ffmpeg.
+// DO NOT edit per-site — edit showcase.config.mjs instead. Requires a running
+// server. Records a real video so the page is captured exactly as it renders
+// (CSS animation, smooth-scroll, route transitions, <video> backgrounds).
 import { parseArgs } from "node:util";
 import { mkdir, rm, readdir, rename } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
 import { chromium } from "playwright";
 
 const { values: f } = parseArgs({
   options: {
-    base: { type: "string", default: "http://localhost:3000" },
+    config: { type: "string", default: "showcase.config.mjs" },
+    base: { type: "string" }, // overrides config.base
     viewport: { type: "string", default: "1280x800" },
     delay: { type: "string", default: "1500" }, // ms settle on first load
-    dwell: { type: "string", default: "2500" }, // ms to hold on each nav target
+    dwell: { type: "string", default: "2500" }, // ms hold per beat
     out: { type: "string", default: "showcase" },
     gif: { type: "boolean", default: true },
-    mp4: { type: "boolean", default: false }, // also keep the raw mp4
+    mp4: { type: "boolean", default: false },
     fps: { type: "string", default: "15" },
     scale: { type: "string", default: "960" }, // output width px
   },
 });
 
+const cfg = (await import(pathToFileURL(resolve(f.config)).href)).default;
+const base = f.base ?? cfg.base ?? "http://localhost:3000";
+const dwell = Number(f.dwell);
 const [w, h] = f.viewport.split("x").map(Number);
 
 await rm(f.out, { recursive: true, force: true });
 await mkdir(f.out, { recursive: true });
 
-// real video autoplay needs the full browser, not the headless-shell, so the
-// site's background <video> actually renders in the recording.
+// REAL Chrome channel (not bundled headless-shell) so <video> renders in the
+// recording; autoplay flag so muted bg videos start without a gesture.
 const browser = await chromium.launch({
   channel: "chrome",
   args: ["--autoplay-policy=no-user-gesture-required"],
@@ -38,76 +46,101 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
-// The site's background <video> is z-index:-1, so it sits behind <body>, whose
-// opaque `background:#111111` paints over it in screen capture (a live browser
-// lets the negative-z layer show through; Playwright's compositor doesn't).
-// Clearing the body bg reveals the video exactly as the site shows it — the
-// video keeps its own brightness(0.3)/blur dimming. Re-applied after every
-// navigation because a full route change (e.g. /events) drops injected styles.
+// showVideo: clear the opaque body bg so a z-index:-1 background <video> shows
+// through in capture (it keeps the site's own dimming). Re-applied after every
+// navigation since a full route change drops injected styles. See skill step 5.
 const revealBgVideo = () =>
-  page.addStyleTag({ content: "html,body{background:transparent!important}" }).catch(() => {});
+  cfg.showVideo
+    ? page.addStyleTag({ content: "html,body{background:transparent!important}" }).catch(() => {})
+    : Promise.resolve();
 
-await page.goto(new URL("/", f.base).href, { waitUntil: "networkidle" });
+const startUrl = new URL(cfg.startPath ?? "/", base).href;
+await page.goto(startUrl, { waitUntil: "networkidle" });
 await revealBgVideo();
 await page.waitForTimeout(Number(f.delay));
 
-// discover nav links left->right by on-screen x position, click each in order
-const links = await page.$$eval("nav a", (els) =>
-  els
-    .map((el) => ({ text: el.textContent.trim(), x: el.getBoundingClientRect().left }))
-    .filter((l) => l.text)
-    .sort((a, b) => a.x - b.x),
-);
-console.log("nav tour:", links.map((l) => l.text).join(" -> "));
+// ─── beat runners (generic; driven entirely by showcase.config.mjs) ──────────
+const hold = (ms) => page.waitForTimeout(ms ?? dwell);
 
-await page.waitForTimeout(Number(f.dwell)); // dwell on the initial view
-for (const { text } of links) {
+const clickNav = async (text) => {
   await page.getByRole("link", { name: text, exact: true }).first().click();
-  await revealBgVideo(); // re-inject after route changes drop the style
-  await page.waitForTimeout(Number(f.dwell));
-  console.log("clicked", text);
+  await revealBgVideo();
+};
 
-  // After landing on Projects, open the first project card, dwell, then exit
-  // back to the highlights — same dwell duration as every other beat.
-  if (text.toLowerCase() === "projects") {
-    const firstCard = page.locator("[data-project-card]").first();
-    await firstCard.scrollIntoViewIfNeeded();
-    await firstCard.click(); // navigates to /projects/<first> (lazy-loaded route)
-    // wait for the standalone route to commit + the lazy chunk to render before
-    // dwelling, else the recording shows the old homepage while it loads
-    await page.waitForURL(/\/projects\//);
-    await page.getByText("Back to Projects").waitFor({ state: "visible" });
-    await revealBgVideo();
-    await page.waitForTimeout(Number(f.dwell));
-    console.log("opened first project");
-    await page.goBack(); // exit back to the highlights
-    await page.waitForURL((u) => !u.pathname.startsWith("/projects/"));
-    await revealBgVideo();
-    await page.waitForTimeout(Number(f.dwell));
-    console.log("exited first project");
+const navTour = async () => {
+  const links = await page.$$eval("nav a", (els) =>
+    els
+      .map((el) => ({ text: el.textContent.trim(), x: el.getBoundingClientRect().left }))
+      .filter((l) => l.text)
+      .sort((a, b) => a.x - b.x),
+  );
+  console.log("navTour:", links.map((l) => l.text).join(" -> "));
+  for (const { text } of links) {
+    await clickNav(text);
+    await hold();
+    console.log("  clicked", text);
   }
+};
 
-  // On the Events page, slowly scroll the whole thing top -> bottom.
-  if (text.toLowerCase() === "events") {
-    await page.evaluate(async () => {
-      const max = document.documentElement.scrollHeight - window.innerHeight;
-      const durationMs = 4000; // slow, steady scroll
-      const start = performance.now();
-      await new Promise((resolve) => {
-        const tick = (now) => {
-          const t = Math.min(1, (now - start) / durationMs);
-          window.scrollTo(0, max * t);
-          t < 1 ? requestAnimationFrame(tick) : resolve();
-        };
-        requestAnimationFrame(tick);
-      });
+const openClose = async (selector, { waitText, back = true } = {}) => {
+  const startPath = new URL(page.url()).pathname;
+  const el = page.locator(selector).first();
+  await el.scrollIntoViewIfNeeded();
+  await el.click();
+  // wait for the target to actually commit + render before dwelling, else the
+  // recording shows the pre-click page while a lazy chunk loads.
+  if (waitText) await page.getByText(waitText).waitFor({ state: "visible" });
+  await revealBgVideo();
+  await hold();
+  if (back) {
+    await page.goBack();
+    await page.waitForURL((u) => u.pathname === startPath || u.hash);
+  }
+  await revealBgVideo();
+};
+
+const scrollPage = async (durationMs = 4000) => {
+  await page.evaluate(async (d) => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const start = performance.now();
+    await new Promise((res) => {
+      const tick = (now) => {
+        const t = Math.min(1, (now - start) / d);
+        window.scrollTo(0, max * t);
+        t < 1 ? requestAnimationFrame(tick) : res();
+      };
+      requestAnimationFrame(tick);
     });
-    await page.waitForTimeout(Number(f.dwell)); // dwell at the bottom
-    console.log("scrolled events page");
+  }, durationMs);
+};
+
+// ─── run the configured beats ────────────────────────────────────────────────
+await hold(); // dwell on the initial view
+for (const beat of cfg.beats ?? []) {
+  if (beat.visit !== undefined) {
+    await page.goto(new URL(beat.visit, base).href, { waitUntil: "networkidle" });
+    await revealBgVideo();
+    await hold(beat.dwell);
+  } else if (beat.navTour) {
+    await navTour();
+  } else if (beat.clickNav !== undefined) {
+    await clickNav(beat.clickNav);
+    await hold(beat.dwell);
+    console.log("clickNav", beat.clickNav);
+  } else if (beat.openClose !== undefined) {
+    await openClose(beat.openClose, { waitText: beat.waitText, back: beat.back });
+    await hold(beat.dwell);
+    console.log("openClose", beat.openClose);
+  } else if (beat.scrollPage !== undefined) {
+    await scrollPage(beat.scrollPage);
+    await hold(beat.dwell);
+    console.log("scrollPage", beat.scrollPage);
+  } else {
+    console.warn("unknown beat, skipped:", JSON.stringify(beat));
   }
 }
 
-// finalize the recording: video is written on context close
+// video is written on context close
 await context.close();
 await browser.close();
 
@@ -126,6 +159,8 @@ const ff = (args, out) => {
 const scale = `scale=${f.scale}:-2:flags=lanczos`;
 
 if (f.gif) {
+  // split-graph palettegen/paletteuse in ONE pass = clean GIF colors, no 2-input
+  // graph (which can trip an ffmpeg "Internal bug" on the threaded flush).
   ff(["-i", src, "-vf", `fps=${f.fps},${scale},split[a][b];[a]palettegen[p];[b][p]paletteuse`,
       `${f.out}/showcase.gif`], `${f.out}/showcase.gif`);
   console.log("wrote", `${f.out}/showcase.gif`);
@@ -136,5 +171,4 @@ if (f.mp4) {
   console.log("wrote", `${f.out}/showcase.mp4`);
 }
 
-// keep only the requested artifacts; drop the raw recording unless --mp4 wanted it kept as source
-await rm(src, { force: true });
+await rm(src, { force: true }); // drop the raw recording; keep only GIF/MP4
