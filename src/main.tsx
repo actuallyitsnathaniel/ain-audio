@@ -5,6 +5,7 @@ import { createHead, UnheadProvider } from "@unhead/react/client";
 import Root from "../src/routes/root";
 import Secret from "../src/routes/secret";
 import ErrorPage from "../src/error-page";
+import Loader from "../src/components/loader";
 import "/src/index.css";
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -23,13 +24,7 @@ const router = createBrowserRouter([
   {
     path: "/projects/:projectId",
     element: (
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center min-h-screen text-white">
-            Loading...
-          </div>
-        }
-      >
+      <Suspense fallback={<Loader />}>
         <ProjectPage />
       </Suspense>
     ),
@@ -38,13 +33,7 @@ const router = createBrowserRouter([
   {
     path: "/events",
     element: (
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center min-h-screen text-white">
-            Loading...
-          </div>
-        }
-      >
+      <Suspense fallback={<Loader />}>
         <EventsPage />
       </Suspense>
     ),
@@ -53,13 +42,7 @@ const router = createBrowserRouter([
   {
     path: "/usage-and-ai-policy",
     element: (
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center min-h-screen text-white">
-            Loading...
-          </div>
-        }
-      >
+      <Suspense fallback={<Loader />}>
         <UsageAndAiPolicy />
       </Suspense>
     ),
