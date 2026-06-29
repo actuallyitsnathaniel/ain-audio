@@ -1277,6 +1277,45 @@ class AudioEngine {
     this.emit("clip");
   }
 
+  // Add a user-dropped audio file as a session loop lane: decode it in-browser,
+  // register the lane + its already-decoded buffer + mixer state, and switch it
+  // on. Mirrors what LOOPS + defaultSequence produce, but for an in-memory buffer
+  // (no url fetch). rootBpm/bars come from the filename (…-120bpm-2bar…) if present,
+  // else default to the current grid tempo so it plays at unity rate. Returns the
+  // new loop id, or null if the file couldn't be decoded.
+  async addLoop(file: File): Promise<string | null> {
+    const c = this.ensureCtx();
+    let buf: AudioBuffer;
+    try {
+      buf = await c.decodeAudioData(await file.arrayBuffer());
+    } catch {
+      return null; // not decodable audio
+    }
+    const stem = file.name.replace(/\.[^.]+$/, "");
+    const bpmTok = /(\d+)\s*bpm/i.exec(stem);
+    const barTok = /(\d+)\s*bar/i.exec(stem);
+    const name = stem
+      .replace(/[-_]?\d+\s*bpm/i, "")
+      .replace(/[-_]?\d+\s*bar/i, "")
+      .replace(/[-_]+/g, " ")
+      .trim();
+    let id = (name || "loop").toLowerCase().replace(/\s+/g, "-");
+    while (this.sequence.loops[id]) id += "-2"; // de-dupe against existing ids
+    const lane: LoopLane = {
+      id,
+      name: name || id,
+      url: "", // in-memory: buffer is pre-stored, never fetched
+      rootBpm: bpmTok ? parseInt(bpmTok[1], 10) : Math.round(this.sequence.bpm),
+      bars: barTok ? parseInt(barTok[1], 10) : 1,
+    };
+    this._loopBufs[id] = buf;
+    this.loops = [...this.loops, lane];
+    this.sequence.loops[id] = { on: true, level: 0.8, mute: false, solo: false };
+    this.refreshLoopGains(); // start it if a beat is already playing
+    this.emit("clip");
+    return id;
+  }
+
   // effective gain for a loop: 0 if muted, off, or solo'd-out by another loop.
   private loopGain(id: string): number {
     const st = this.sequence.loops[id];
