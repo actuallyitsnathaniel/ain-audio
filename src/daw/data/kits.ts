@@ -36,6 +36,7 @@ export interface LoopState {
   level: number; // 0–1 gain
   mute: boolean;
   solo: boolean;
+  sync?: boolean; // locked to grid tempo (playbackRate = bpm/rootBpm)? off = original speed
 }
 
 // per-lane step arrays live in SequenceClip keyed by lane id.
@@ -47,6 +48,7 @@ export interface SequenceClip {
   on: Record<string, boolean[]>; // laneId → per-step on/off
   accent: Record<string, boolean[]>; // laneId → per-step accent (louder hit)
   loops: Record<string, LoopState>; // loopId → mixer state
+  laneMix: Record<string, { mute: boolean; solo: boolean }>; // drum laneId → mute/solo
 }
 
 // ── lane definitions for the default kit ──
@@ -186,9 +188,11 @@ const empty = () => new Array(STEPS).fill(false);
 export function defaultSequence(kit: DrumKit = DEFAULT_KIT): SequenceClip {
   const on: Record<string, boolean[]> = {};
   const accent: Record<string, boolean[]> = {};
+  const laneMix: Record<string, { mute: boolean; solo: boolean }> = {};
   kit.lanes.forEach((l) => {
     on[l.id] = empty();
     accent[l.id] = empty();
+    laneMix[l.id] = { mute: false, solo: false };
   });
   // a usable groove out of the box
   on.kick = row(0, 4, 8, 12);
@@ -200,5 +204,5 @@ export function defaultSequence(kit: DrumKit = DEFAULT_KIT): SequenceClip {
   // loop mixer state — off by default, unity level
   const loops: Record<string, LoopState> = {};
   LOOPS.forEach((l) => (loops[l.id] = { on: false, level: 0.8, mute: false, solo: false }));
-  return { steps: STEPS, beatsPerBar: 4, bpm: 120, swing: 0, on, accent, loops };
+  return { steps: STEPS, beatsPerBar: 4, bpm: 120, swing: 0, on, accent, loops, laneMix };
 }

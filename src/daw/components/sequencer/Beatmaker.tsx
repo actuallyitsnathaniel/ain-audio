@@ -31,7 +31,7 @@ export function Beatmaker() {
         <div className="flex flex-col gap-[16px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]">
           <SequencerTransport />
           <div className="overflow-x-auto">
-            <div className="min-w-[520px]">
+            <div className="min-w-[580px]">
               <StepGrid />
             </div>
           </div>

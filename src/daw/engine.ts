@@ -1076,9 +1076,11 @@ class AudioEngine {
     this.kit = kit;
     this._drumBufs = {};
     const blank = () => new Array(this.sequence.steps).fill(false);
+    this.sequence.laneMix = this.sequence.laneMix || {};
     for (const l of kit.lanes) {
       if (!this.sequence.on[l.id]) this.sequence.on[l.id] = blank();
       if (!this.sequence.accent[l.id]) this.sequence.accent[l.id] = blank();
+      if (!this.sequence.laneMix[l.id]) this.sequence.laneMix[l.id] = { mute: false, solo: false };
     }
     void this.loadKit(kit);
     this.emit("transport");
@@ -1115,7 +1117,8 @@ class AudioEngine {
     const n = this.nodes!;
     const lane = this.kit.lanes.find((l) => l.id === laneId);
     if (!lane) return;
-    const vel = accent ? 1 : 0.7;
+    const vel = (accent ? 1 : 0.7) * this.drumGain(laneId); // mute/solo → 0 = silent
+    if (vel <= 0) return; // muted or solo'd-out — skip the voice entirely
     const buf = this._drumBufs[laneId];
     if (buf) {
       const g = c.createGain();
@@ -1135,6 +1138,29 @@ class AudioEngine {
     } else {
       this.synthDrum(lane.synth, when, vel);
     }
+  }
+
+  // ── drum lane mute/solo (mirrors loopGain) ──
+  // 1 normally; 0 if this lane is muted, or if any lane is solo'd and this isn't.
+  private drumGain(laneId: string): number {
+    const mix = this.sequence.laneMix || {};
+    const st = mix[laneId];
+    if (st?.mute) return 0;
+    const anySolo = Object.values(mix).some((m) => m.solo);
+    if (anySolo && !st?.solo) return 0;
+    return 1;
+  }
+  toggleDrumMute(laneId: string) {
+    const mix = (this.sequence.laneMix = this.sequence.laneMix || {});
+    const st = (mix[laneId] = mix[laneId] || { mute: false, solo: false });
+    st.mute = !st.mute;
+    this.emit("clip");
+  }
+  toggleDrumSolo(laneId: string) {
+    const mix = (this.sequence.laneMix = this.sequence.laneMix || {});
+    const st = (mix[laneId] = mix[laneId] || { mute: false, solo: false });
+    st.solo = !st.solo;
+    this.emit("clip");
   }
 
   // ── synthesized drum voices (Web Audio, when no sample is bounced) ──
@@ -1316,6 +1342,18 @@ class AudioEngine {
     return id;
   }
 
+  // Remove a loop lane (reverses addLoop): stop any live voice, drop its buffer,
+  // lane, and mixer state. Build-time loops return on reload (re-discovered from
+  // disk); session-imported loops are gone for good.
+  removeLoop(id: string) {
+    this.stopOneLoop(id);
+    this.loops = this.loops.filter((l) => l.id !== id);
+    delete this._loopBufs[id];
+    delete this.sequence.loops[id];
+    this.refreshLoopGains(); // re-evaluate solo state for the remaining loops
+    this.emit("clip");
+  }
+
   // effective gain for a loop: 0 if muted, off, or solo'd-out by another loop.
   private loopGain(id: string): number {
     const st = this.sequence.loops[id];
@@ -1323,6 +1361,12 @@ class AudioEngine {
     const anySolo = Object.values(this.sequence.loops).some((s) => s.solo && s.on);
     if (anySolo && !st.solo) return 0;
     return st.level;
+  }
+
+  // playbackRate for a loop: locked -> tempo-match the grid (pitch follows); else
+  // play at original recorded speed (1) so changing BPM doesn't touch it.
+  private loopRate(l: LoopLane): number {
+    return this.sequence.loops[l.id]?.sync ? this.bpm / l.rootBpm : 1;
   }
 
   // start every "on" loop as a sustained looped source, aligned so its loop
@@ -1340,7 +1384,7 @@ class AudioEngine {
       const src = c.createBufferSource();
       src.buffer = buf;
       src.loop = true;
-      src.playbackRate.value = this.bpm / l.rootBpm; // tempo-match (pitch follows)
+      src.playbackRate.value = this.loopRate(l); // grid-locked or original speed
       src.connect(gain);
       gain.connect(n.sum);
       src.start(when);
@@ -1414,7 +1458,7 @@ class AudioEngine {
     const src = c.createBufferSource();
     src.buffer = buf;
     src.loop = true;
-    src.playbackRate.value = this.bpm / l.rootBpm;
+    src.playbackRate.value = this.loopRate(l);
     src.connect(gain);
     gain.connect(n.sum);
     src.start(when);
@@ -1451,6 +1495,17 @@ class AudioEngine {
     this.refreshLoopGains();
     this.emit("clip");
   }
+  // lock/unlock a loop to the grid tempo. Re-rates a live voice immediately so the
+  // speed snaps (locked = bpm/rootBpm; unlocked = original speed) without restart.
+  toggleLoopSync(id: string) {
+    const st = this.sequence.loops[id];
+    if (!st) return;
+    st.sync = !st.sync;
+    const node = this._loopNodes[id];
+    const l = this.loops.find((x) => x.id === id);
+    if (node && l && this.ctx) node.src.playbackRate.setTargetAtTime(this.loopRate(l), this.ctx.currentTime, 0.02);
+    this.emit("clip");
+  }
 
   // ── sequencer: lookahead scheduler ──
   // A setInterval clock walks ctx.currentTime and schedules note events slightly
@@ -1484,12 +1539,13 @@ class AudioEngine {
     }
     // a tempo-synced delay must track the new tempo
     if (this.fx.space.sync && this.ctx) this.applyFx();
-    // live loops re-rate to the new tempo so they stay locked to the grid
+    // live loops re-rate to the new tempo, but only the LOCKED ones; unlocked
+    // loops resolve to rate 1 (loopRate) so a tempo change leaves them untouched
     if (this.ctx) {
       const tt = this.ctx.currentTime;
       for (const l of this.loops) {
         const node = this._loopNodes[l.id];
-        if (node) node.src.playbackRate.setTargetAtTime(this.bpm / l.rootBpm, tt, 0.02);
+        if (node) node.src.playbackRate.setTargetAtTime(this.loopRate(l), tt, 0.02);
       }
     }
     this.emit("transport");

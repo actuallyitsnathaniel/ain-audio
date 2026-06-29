@@ -32,9 +32,32 @@ export function StepGrid() {
       {lanes.map((lane) => {
         const on = seq.on[lane.id] || [];
         const accent = seq.accent[lane.id] || [];
+        const mix = seq.laneMix?.[lane.id];
         return (
           <div key={lane.id} className="flex items-center gap-[8px]">
             <span className="w-[44px] shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
+            <span className="flex w-[52px] shrink-0 gap-[3px]">
+              <button
+                onClick={() => engine.toggleDrumMute(lane.id)}
+                title="mute"
+                className={
+                  "flex-1 rounded-[3px] border py-[3px] font-mono text-[9px] tracking-[0.06em] transition-colors " +
+                  (mix?.mute ? "border-[color-mix(in_srgb,#e0654f_60%,transparent)] bg-[color-mix(in_srgb,#e0654f_22%,transparent)] text-[#e98c79]" : "border-line text-faint hover:text-dim")
+                }
+              >
+                M
+              </button>
+              <button
+                onClick={() => engine.toggleDrumSolo(lane.id)}
+                title="solo"
+                className={
+                  "flex-1 rounded-[3px] border py-[3px] font-mono text-[9px] tracking-[0.06em] transition-colors " +
+                  (mix?.solo ? "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent" : "border-line text-faint hover:text-dim")
+                }
+              >
+                S
+              </button>
+            </span>
             <div className="flex flex-1 gap-[3px]">
               {Array.from({ length: seq.steps }).map((_, s) => {
                 const isOn = on[s];
@@ -66,6 +89,7 @@ export function StepGrid() {
       {/* step ruler */}
       <div className="flex items-center gap-[8px]">
         <span className="w-[44px] shrink-0" />
+        <span className="w-[52px] shrink-0" />
         <div className="flex flex-1 gap-[3px]">
           {Array.from({ length: seq.steps }).map((_, s) => (
             <span key={s} className={"flex-1 text-center font-mono text-[8px] " + (s % 4 === 0 ? "text-faint" : "text-transparent")}>
