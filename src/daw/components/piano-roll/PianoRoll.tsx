@@ -625,7 +625,14 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     }
 
     const ac = accent();
-    const pos = engine.getSequencePosition();
+    // a channel-bound roll follows ITS OWN loop position (channels can loop at a
+    // length different from the grid); the Audio-Lab roll follows the transport.
+    const pos = channelId
+      ? (() => {
+          const b = engine.channelPosition(channelId); // -1 when not playing
+          return { playing: b >= 0, beat: b < 0 ? 0 : b };
+        })()
+      : engine.getSequencePosition();
     g.save();
     g.beginPath();
     g.rect(KEY_W, 0, w - KEY_W, gh);

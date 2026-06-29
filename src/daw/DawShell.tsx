@@ -4,6 +4,7 @@ import { engine } from "./engine";
 import { jlmTrack } from "./data/tracks";
 import { TransportBar } from "./TransportBar";
 import { BgCanvas } from "./BgCanvas";
+import { MidiGate } from "./components/MidiGate";
 import { scrollToId } from "./lab-utils";
 
 // Shared chrome for every DAW route: the fixed transport bar, the audio-reactive
@@ -30,6 +31,7 @@ export function DawShell({ children }: { children: ReactNode }) {
       <BgCanvas />
       <TransportBar />
       {children}
+      <MidiGate />
     </>
   );
 }

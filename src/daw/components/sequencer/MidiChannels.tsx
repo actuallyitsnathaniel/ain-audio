@@ -14,6 +14,7 @@ import { useRafLoop } from "../../hooks/useRafLoop";
 import { cloneClip, clipBeats, type MidiChannel, type NoteClip } from "../../data/clips";
 import { PianoRoll } from "../piano-roll/PianoRoll";
 import { Knob } from "../Knob";
+import { requestMidiEnable } from "../midi-gate-bus";
 
 const CLIP_SLOTS_KEY = "ain-channel-clips"; // localStorage: { slotName: NoteClip }
 const readClipSlots = (): Record<string, NoteClip> => {
@@ -127,7 +128,7 @@ function ChannelMarker({ ch }: { ch: MidiChannel }) {
   );
 }
 
-function ChannelRow({ ch, armed }: { ch: MidiChannel; armed: boolean }) {
+function ChannelRow({ ch, armed, onArm }: { ch: MidiChannel; armed: boolean; onArm: (id: string | null) => void }) {
   const eng = useEngine(["clip", "preset"]);
   const [editing, setEditing] = useState(false);
   const rollWrap = useRef<HTMLDivElement>(null);
@@ -183,7 +184,7 @@ function ChannelRow({ ch, armed }: { ch: MidiChannel; armed: boolean }) {
         )}
 
         <button
-          onClick={() => engine.armChannel(armed ? null : ch.id)}
+          onClick={() => onArm(armed ? null : ch.id)}
           title={armed ? "armed — keyboard plays this channel (click to disarm)" : "arm: route the keyboard to this channel"}
           className={"flex items-center gap-[5px] " + chip(armed, true)}
         >
@@ -244,10 +245,18 @@ function ChannelRow({ ch, armed }: { ch: MidiChannel; armed: boolean }) {
 }
 
 export function MidiChannels() {
-  const eng = useEngine(["clip", "preset"]);
+  const eng = useEngine(["clip", "preset", "midi"]);
   const channels = eng.sequence.channels;
   const atCap = channels.length >= MAX_CHANNELS;
   const warn = channels.length >= SOFT_CHANNELS; // warn about the *next* add
+
+  // Arm the channel, and offer to connect MIDI for it. The shared MidiGate shows
+  // the explainer modal (once) before the browser's own permission prompt; arming
+  // itself doesn't depend on the MIDI answer (computer keys always work).
+  const handleArm = (id: string | null) => {
+    engine.armChannel(id);
+    if (id) requestMidiEnable();
+  };
 
   return (
     <div className="flex flex-col gap-[10px]">
@@ -272,7 +281,7 @@ export function MidiChannels() {
       </div>
 
       {channels.map((ch) => (
-        <ChannelRow key={ch.id} ch={ch} armed={eng.armedChannel === ch.id} />
+        <ChannelRow key={ch.id} ch={ch} armed={eng.armedChannel === ch.id} onArm={handleArm} />
       ))}
     </div>
   );
