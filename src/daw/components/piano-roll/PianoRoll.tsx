@@ -499,6 +499,35 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     sel.current = new Set();
     commit();
   };
+  // portamento: glide a note from a source pitch into its own. Default source = the
+  // nearest earlier note's pitch (FL-like "slide from the previous note"), else a
+  // major-third below so a lone note still slides audibly.
+  const prevPitch = (n: Note): number => {
+    let best: Note | null = null;
+    notes().forEach((m) => {
+      if (m.id !== n.id && m.start < n.start && (!best || m.start > best.start)) best = m;
+    });
+    return best ? (best as Note).pitch : clamp(n.pitch - 4, LO_MIDI, HI_MIDI);
+  };
+  const setPortamento = (on: boolean) => {
+    if (!sel.current.size) return;
+    sel.current.forEach((id) => {
+      const n = byId(id);
+      if (!n) return;
+      n.slideFrom = on ? prevPitch(n) : undefined;
+    });
+    commit();
+  };
+  // vibrato: a sine pitch wobble. `depth` in cents (0 clears it); rate ~5.5 Hz.
+  const setVibrato = (depth: number) => {
+    if (!sel.current.size) return;
+    sel.current.forEach((id) => {
+      const n = byId(id);
+      if (!n) return;
+      n.vibrato = depth > 0 ? { rate: 5.5, depth } : undefined;
+    });
+    commit();
+  };
 
   // Right-click → custom menu (Shift+right-click falls through to the browser's).
   // Items adapt: a note under the cursor gets note/velocity actions; the clip-wide
@@ -515,7 +544,8 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     const selCount = sel.current.size;
     const items: MenuItem[] = [];
     if (hit || selCount) {
-      const n = selCount === 1 ? byId([...sel.current][0]) : null;
+      const anySlide = [...sel.current].some((id) => byId(id)?.slideFrom != null);
+      const anyVib = [...sel.current].some((id) => byId(id)?.vibrato != null);
       items.push(
         { label: selCount > 1 ? `delete ${selCount} notes` : "delete note", danger: true, onClick: () => deleteNotes([...sel.current]) },
         { label: "duplicate", hint: "⌘D", onClick: () => duplicateSelection(1, 0) },
@@ -524,12 +554,19 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
         { label: "velocity 75%", onClick: () => setVelSel(0.75) },
         { label: "velocity 50%", onClick: () => setVelSel(0.5) },
         { separator: true },
+        anySlide
+          ? { label: "clear portamento", onClick: () => setPortamento(false) }
+          : { label: "make portamento (slide in)", onClick: () => setPortamento(true) },
+        { label: "vibrato · light", onClick: () => setVibrato(20) },
+        { label: "vibrato · medium", onClick: () => setVibrato(40) },
+        { label: "vibrato · heavy", onClick: () => setVibrato(75) },
+        { label: "clear vibrato", disabled: !anyVib, onClick: () => setVibrato(0) },
+        { separator: true },
         { label: "octave up", hint: "⇧↑", onClick: () => nudge(0, 12, false) },
         { label: "octave down", hint: "⇧↓", onClick: () => nudge(0, -12, false) },
         { label: "quantize to grid", onClick: quantizeSel },
         { separator: true },
       );
-      void n; // (kept for future per-note readouts)
     }
     items.push(
       { label: "select all", hint: "⌘A", onClick: selectAll },
@@ -725,6 +762,40 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
       } else {
         g.fillStyle = "rgba(255,255,255,0.28)";
         g.fillRect(x, y + 1, wn, 1);
+      }
+      // portamento glyph: a diagonal lead-in from the source pitch (note start) to
+      // the note's own pitch (note end) — the pitch reaches target at the end.
+      if (n.slideFrom != null) {
+        const yFrom = pitchToY(n.slideFrom) + ROW_H / 2;
+        const yTo = y + ROW_H / 2;
+        g.strokeStyle = "#e0a24f"; // amber, distinct from the accent note color
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.moveTo(x, yFrom);
+        g.lineTo(x + wn, yTo);
+        g.stroke();
+        g.fillStyle = "#e0a24f"; // source marker
+        g.beginPath();
+        g.arc(x, yFrom, 2.5, 0, Math.PI * 2);
+        g.fill();
+      }
+      // vibrato glyph: a sine squiggle along the note centre; amplitude grows with
+      // depth (intensity on both sides), wavelength loosely tracks the rate.
+      if (n.vibrato && n.vibrato.depth > 0) {
+        const midY = y + ROW_H / 2;
+        const amp = Math.min(ROW_H / 2 - 1, 1.5 + (n.vibrato.depth / 100) * (ROW_H / 2));
+        const cycles = Math.max(1.5, Math.min(8, wn / 9)); // visual density, not exact Hz
+        g.strokeStyle = "#9a7ff0"; // violet, distinct from porta amber + accent
+        g.lineWidth = 1.25;
+        g.beginPath();
+        const steps = Math.max(8, Math.floor(wn / 2));
+        for (let i = 0; i <= steps; i++) {
+          const px = x + (i / steps) * wn;
+          const py = midY + Math.sin((i / steps) * cycles * Math.PI * 2) * amp;
+          if (i === 0) g.moveTo(px, py);
+          else g.lineTo(px, py);
+        }
+        g.stroke();
       }
     });
     // marquee box
