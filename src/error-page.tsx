@@ -10,7 +10,7 @@ const ErrorPage = () => {
       className="flex w-screen flex-wrap flex-col text-center justify-center"
     >
       <h1>Oops!</h1>
-      <p>Sorry, an unexpected error has occurred.</p>
+      <p>My bad, that error was unexpected.</p>
       <p>
         <i>{error.statusText || error.message}</i>
       </p>
