@@ -8,6 +8,27 @@ import { useRef } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
+import { openContextMenu } from "../context-menu-bus";
+
+// right-click a drum lane → lane actions (Shift+right-click → browser menu)
+function laneMenu(e: React.MouseEvent, laneId: string, name: string) {
+  if (e.shiftKey) return;
+  e.preventDefault();
+  const mix = engine.sequence.laneMix?.[laneId];
+  openContextMenu({
+    x: e.clientX,
+    y: e.clientY,
+    title: "lane: " + name,
+    items: [
+      { label: mix?.mute ? "unmute" : "mute", onClick: () => engine.toggleDrumMute(laneId) },
+      { label: mix?.solo ? "unsolo" : "solo", onClick: () => engine.toggleDrumSolo(laneId) },
+      { separator: true },
+      { label: "clear lane", danger: true, onClick: () => engine.clearDrumLane(laneId) },
+      { separator: true },
+      { label: "browser menu", hint: "⇧right-click", disabled: true },
+    ],
+  });
+}
 
 export function StepGrid() {
   useEngine(["clip", "transport"]);
@@ -36,7 +57,7 @@ export function StepGrid() {
         const accent = seq.accent[lane.id] || [];
         const mix = seq.laneMix?.[lane.id];
         return (
-          <div key={lane.id} className="flex items-center gap-[8px]">
+          <div key={lane.id} className="flex items-center gap-[8px]" onContextMenu={(e) => laneMenu(e, lane.id, lane.name)}>
             <span className="w-[44px] shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
             <div className="flex flex-1 gap-[8px]">
               {Array.from({ length: bars }).map((_, b) => (

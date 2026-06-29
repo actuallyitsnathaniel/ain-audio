@@ -11,6 +11,32 @@ import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { Knob } from "../Knob";
 import type { LoopLane } from "../../data/kits";
+import { openContextMenu } from "../context-menu-bus";
+
+// right-click a loop lane → loop actions (Shift+right-click → browser menu)
+function loopMenu(e: React.MouseEvent, l: LoopLane) {
+  if (e.shiftKey) return;
+  e.preventDefault();
+  const st = engine.sequence.loops[l.id];
+  if (!st) return;
+  openContextMenu({
+    x: e.clientX,
+    y: e.clientY,
+    title: "loop: " + l.name,
+    items: [
+      { label: st.on ? "turn off" : "turn on", onClick: () => engine.toggleLoop(l.id) },
+      { label: st.mute ? "unmute" : "mute", onClick: () => engine.toggleLoopMute(l.id) },
+      { label: st.solo ? "unsolo" : "solo", onClick: () => engine.toggleLoopSolo(l.id) },
+      { separator: true },
+      { label: st.sync ? "unlock from grid tempo" : "lock to grid tempo", onClick: () => engine.toggleLoopSync(l.id) },
+      { label: "reset A→B region", disabled: (st.a ?? 0) === 0 && (st.b ?? 1) === 1, onClick: () => engine.setLoopRegion(l.id, 0, 1) },
+      { separator: true },
+      { label: "remove loop", danger: true, onClick: () => engine.removeLoop(l.id) },
+      { separator: true },
+      { label: "browser menu", hint: "⇧right-click", disabled: true },
+    ],
+  });
+}
 
 // ── per-loop A→B region strip ──────────────────────────────────────────────
 // A small waveform canvas with two draggable handles. Region is stored as 0..1
@@ -271,7 +297,7 @@ export function LoopLanes() {
               (st.on ? "border-line2 bg-panel2" : "border-line bg-[#101014]")
             }
           >
-            <div className="flex items-center gap-[10px]">
+            <div className="flex items-center gap-[10px]" onContextMenu={(e) => loopMenu(e, l)}>
             <button
               onClick={() => engine.toggleLoop(l.id)}
               className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-line2"

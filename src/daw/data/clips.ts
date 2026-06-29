@@ -13,6 +13,7 @@ export interface Note {
   start: number; // beats from clip start
   length: number; // beats
   vel: number; // 0–1
+  slideFrom?: number; // portamento: glide FROM this MIDI pitch into `pitch` over the note's length
 }
 
 export interface NoteClip {

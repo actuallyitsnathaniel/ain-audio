@@ -962,10 +962,13 @@ class AudioEngine {
   // the caller releases via releaseVoice(handle, when). Used directly by the
   // scheduler (which can play the same pitch repeatedly, so it can't key by MIDI);
   // noteOn/noteOff wrap this and key by MIDI for the held-key keyboard.
-  startVoiceAt(midi: number, vel: number, when: number, sel?: VoiceSel): VoiceHandle {
+  // `slide` (portamento): glide pitch FROM `slide.from` (MIDI) into `midi` over
+  // `slide.durSec`, using native AudioParam ramps on the voice's pitch param.
+  startVoiceAt(midi: number, vel: number, when: number, sel?: VoiceSel, slide?: { from: number; durSec: number }): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
     const t = when;
+    const glideEnd = slide ? t + Math.max(0.01, slide.durSec) : t;
 
     // resolve which instrument to voice: an explicit per-channel selection, or
     // the global live-keyboard/Audio-Lab selection when none is passed.
@@ -989,6 +992,18 @@ class AudioEngine {
         const cents = (Math.random() * 2 - 1) * preset.humanize;
         if (src.detune) src.detune.value = cents;
         else src.playbackRate.value *= Math.pow(2, cents / 1200);
+      }
+      // portamento: detune (cents) glides from the source pitch up/down to 0 (target)
+      if (slide && src.detune) {
+        const off = (slide.from - midi) * 100;
+        src.detune.setValueAtTime(src.detune.value + off, t);
+        src.detune.linearRampToValueAtTime(src.detune.value, glideEnd);
+      } else if (slide) {
+        // detune unsupported → glide playbackRate instead
+        const fromRate = Math.pow(2, (slide.from - zone.rootMidi) / 12);
+        const toRate = src.playbackRate.value;
+        src.playbackRate.setValueAtTime(fromRate, t);
+        src.playbackRate.linearRampToValueAtTime(toRate, glideEnd);
       }
       src.connect(vg);
       vg.connect(dest);
@@ -2075,6 +2090,14 @@ class AudioEngine {
     const arr = accent ? this.sequence.accent[laneId] : this.sequence.on[laneId];
     if (!arr) return;
     arr[step] = !arr[step];
+    this.emit("clip");
+  }
+  // clear every step (and accent) of one drum lane
+  clearDrumLane(laneId: string) {
+    const on = this.sequence.on[laneId];
+    const acc = this.sequence.accent[laneId];
+    if (on) on.fill(false);
+    if (acc) acc.fill(false);
     this.emit("clip");
   }
 
