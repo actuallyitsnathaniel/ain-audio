@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 
 const knobPolar = (cx: number, cy: number, r: number, aDeg: number): [number, number] => {
@@ -41,6 +41,20 @@ export function Knob({
 }) {
   const norm = (value - min) / (max - min);
   const drag = useRef<{ y: number; norm: number } | null>(null);
+  // click the readout to type an exact value (edits in the knob's own [min,max] domain)
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const beginEdit = () => {
+    if (disabled) return;
+    setDraft(String(Math.round(value * 1000) / 1000));
+    setEditing(true);
+  };
+  const commitEdit = () => {
+    const parsed = parseFloat(draft);
+    if (!Number.isNaN(parsed)) onChange(Math.min(max, Math.max(min, parsed)));
+    setEditing(false);
+  };
 
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
     if (disabled) return;
@@ -95,7 +109,30 @@ export function Knob({
         <line x1="32" y1="32" x2={px} y2={py} stroke="var(--color-daw-text, #d8d8dc)" strokeWidth="2.5" strokeLinecap="round" />
       </svg>
       <div className="text-center font-mono text-[10px] tracking-[0.07em] whitespace-nowrap text-dim">{label}</div>
-      {fmt ? <div className="text-center font-mono text-[10.5px] whitespace-nowrap text-accent">{fmt(value)}</div> : null}
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitEdit();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          className="w-[52px] rounded-[2px] border border-accent bg-inset text-center font-mono text-[10.5px] text-accent outline-none"
+          aria-label={label + " value"}
+        />
+      ) : (
+        <div
+          className={"text-center font-mono text-[10.5px] whitespace-nowrap text-accent " + (disabled ? "" : "cursor-text")}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={beginEdit}
+          title="click to type a value"
+        >
+          {fmt ? fmt(value) : Math.round(value * 1000) / 1000}
+        </div>
+      )}
     </div>
   );
 }

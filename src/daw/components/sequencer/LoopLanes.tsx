@@ -121,6 +121,16 @@ export function LoopLanes() {
             <span className="ml-auto flex items-center gap-[10px]">
               <Knob value={st.level} min={0} max={1} defaultValue={0.8} size={34} onChange={(v) => engine.setLoopLevel(l.id, v)} label="lvl" disabled={!st.on} fmt={(v) => Math.round(v * 100) + "%"} />
               <button
+                onClick={() => engine.toggleLoopSync(l.id)}
+                title={st.sync ? "locked to grid tempo — click to play at original speed" : "playing at original speed — click to lock to grid tempo"}
+                className={
+                  "rounded-[3px] border px-[7px] py-[4px] font-mono text-[9px] tracking-[0.06em] transition-colors " +
+                  (st.sync ? "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent" : "border-line text-faint hover:text-dim")
+                }
+              >
+                lock
+              </button>
+              <button
                 onClick={() => engine.toggleLoopMute(l.id)}
                 title="mute"
                 className={
@@ -139,6 +149,14 @@ export function LoopLanes() {
                 }
               >
                 S
+              </button>
+              <button
+                onClick={() => engine.removeLoop(l.id)}
+                title="remove this loop"
+                aria-label={"remove " + l.name}
+                className="rounded-[3px] border border-line px-[7px] py-[4px] font-mono text-[9px] text-faint transition-colors hover:border-[color-mix(in_srgb,#e0654f_60%,transparent)] hover:text-[#e98c79]"
+              >
+                ✕
               </button>
             </span>
           </div>
