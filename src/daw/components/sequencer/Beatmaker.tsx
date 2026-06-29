@@ -11,6 +11,7 @@ import { TrackSection } from "../TrackSection";
 import { FxRack } from "../audio-lab/FxRack";
 import { SequencerTransport } from "./SequencerTransport";
 import { StepGrid } from "./StepGrid";
+import { MidiChannels } from "./MidiChannels";
 import { LoopLanes } from "./LoopLanes";
 
 export function Beatmaker() {
@@ -26,7 +27,7 @@ export function Beatmaker() {
   return (
     <main className="relative z-[1] pt-[64px]">
       <TrackSection id="beatmaker" label="beat maker" rail="05">
-        <SectionHead num="05" title="beat maker" sub="16-step drum sequencer · runs through the fx rack" />
+        <SectionHead num="05" title="beat maker" sub="step sequencer + melodic midi channels · runs through the fx rack" />
 
         <div className="flex flex-col gap-[16px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]">
           <SequencerTransport />
@@ -35,6 +36,7 @@ export function Beatmaker() {
               <StepGrid />
             </div>
           </div>
+          <MidiChannels />
           <LoopLanes />
           <FxRack />
         </div>

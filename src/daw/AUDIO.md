@@ -125,9 +125,13 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
 - **Navigate:** wheel → scroll pitch · shift+wheel → scroll time · ⌘/ctrl+wheel → zoom time around
   cursor · hold Space (or middle-drag) → pan. Wheel is a **non-passive native listener** so it can
   `preventDefault` the page scroll.
+- **Velocity lane:** a docked band (`VEL_H` px) at the canvas bottom sharing the time axis. Each note
+  draws a stem+cap with height ∝ velocity; drag a stem up/down to set velocity, sweep across notes to
+  paint a ramp (a multi-note selection sets together). The pitch grid renders into `gridH = h - VEL_H`;
+  pointer presses with `y ≥ gridH` are velocity edits (`Drag` mode `"vel"`).
 - **Gutter keyboard:** the left key column is tap-to-play — pointer-down auditions the pitch
   (`engine.noteOn`), sliding up/down retriggers, releasing/leaving the gutter stops. Held + sounding
-  pitches glow (reads `engine.activeNotes()` each frame).
+  pitches glow (reads `engine.activeNotes(channelId)` each frame).
 - **Platform convention** (matching Live): ⌘(mac)/ctrl(win) is the "command"/snap-bypass key; ⌥ also
   bypasses snap and triggers duplicate-drag. `cmd(e)` helper centralizes the mac/win check.
 - **Purity:** the clip + selection refs are populated in the mount effect / handlers and only read
@@ -137,19 +141,19 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
 tempo `Knob`, loop + reset, and loads the selected preset's `defaultPhrase` on preset change (via a
 `pr-load` CustomEvent on the canvas).
 
-**Not yet implemented (Ableton parity, future):** a dedicated velocity lane (drag markers / draw
-ramps) and alt-drag-vertical for velocity, plus note-stretch markers (scale a selection in time).
+**Not yet implemented (Ableton parity, future):** alt-drag-vertical on a note for velocity (the lane
+covers the common case), and note-stretch markers (scale a selection in time).
 See [[piano-roll-ableton-gestures]] for the full reference.
 
 ## Beat-maker (drum step sequencer)
 
-A 16-step drum sequencer on the lazy **`/beatmaker`** route
+A step drum sequencer (+ melodic MIDI channels) on the lazy **`/beatmaker`** route
 ([routes/beatmaker.tsx](../routes/beatmaker.tsx) → `DawShell` →
 [components/sequencer/Beatmaker.tsx](components/sequencer/Beatmaker.tsx)). It **reuses the Phase-2
 scheduler** — `beatMode` flips `schedTick` from walking the note clip to walking the step grid.
 
 - **Data** ([data/kits.ts](data/kits.ts)): `DrumKit` = named `DrumLane`s (kick/snare/hat/clap/tom);
-  `SequenceClip` = `{ steps, beatsPerBar, bpm, swing, on: Record<lane, bool[]>, accent: … }`.
+  `SequenceClip` = `{ steps, beatsPerBar, bpm, swing, on: Record<lane, bool[]>, accent: …, channels: MidiChannel[] }`.
   `DEFAULT_KIT` + `defaultSequence()` ship a starter groove. One-shots are **auto-discovered** from
   `src/assets/kits/<kitId>/<laneId>.m4a` (glob, like presets) — see
   [../assets/kits/README.md](../assets/kits/README.md).
@@ -159,6 +163,10 @@ scheduler** — `beatMode` flips `schedTick` from walking the note clip to walki
   drop real samples in later and those lanes switch automatically.
 - **Step = a 1/16 note** (`STEP_BEATS = 0.25`); grid length = `steps × 0.25` beats. **Swing** pushes
   odd steps later by up to ~⅓ step. Per-step **accent** boosts level.
+- **Grid length is variable** — `setStepCount(n)` resizes to 16/32/48/64 (`STEP_COUNTS`, whole bars of
+  1/16s), growing/shrinking every lane's `on`/`accent` row via `resizeRow` (preserves existing steps)
+  and re-anchoring the playhead if playing (same trick as `setBpm`). `StepGrid` groups steps into bars
+  of 16 with a gap; the ruler labels `bar.beat`.
 - **Transport**: `playBeat`/`stopBeat`/`toggleBeat`, `setBeatBpm`, `setSwing`, `toggleStep`. Shares
   the `transportMode` mutual-exclusion — playing a beat stops track + piano-roll playback and vice
   versa. `getSequencePosition().step` drives the grid's current-step highlight (rAF, imperative).
@@ -167,12 +175,56 @@ scheduler** — `beatMode` flips `schedTick` from walking the note clip to walki
   [SequencerTransport.tsx](components/sequencer/SequencerTransport.tsx) (play/stop, tempo + swing
   `Knob`s).
 
+**Melodic MIDI channels** — `seq.channels: MidiChannel[]` ([data/clips.ts](data/clips.ts)). Each
+channel is its own instrument + `NoteClip`, scheduled on the **same clock** as the drums: `schedTick`'s
+beat branch walks `seq.channels` after the drum loop, wrapping each clip's notes against the grid total.
+- **Per-channel voice** — the voice factory `startVoiceAt(midi, vel, when, sel?)` takes an optional
+  resolved `VoiceSel = { preset?, patch, dest? }`. No `sel` ⇒ global live-keyboard/Audio-Lab selection
+  (unchanged); a channel passes `channelVoice(ch)` so each channel sounds its own preset/patch and routes
+  to its own strip (`dest`). Sample buffers are cached by **preset id** (`_sampleBufs[id]`), so two
+  channels on the same preset share one decode.
+- **Vol / pan strip** — `channelStrip(ch)` lazily builds `gain → StereoPanner → n.sum` per channel
+  (`_chNodes[id]`); voices connect to its gain (the `dest`). `setChannelVol`/`setChannelPan` ramp the
+  live nodes; mute/solo fold into the gain via `refreshChannelGains`. `removeChannel`/`setSequence` tear
+  down orphaned strips. Stored as `ch.vol` (0..1, def 0.8) / `ch.pan` (-1..1, def 0).
+- **API** (all emit `clip`): `addChannel` / `removeChannel` / `setChannelPreset` / `setChannelClip` /
+  `getChannelClip` / `toggleChannelMute` / `toggleChannelSolo` / `renameChannel` / `toggleChannelLoop` /
+  `toggleChannelCollapsed` / `setChannelVol` / `setChannelPan` / `setChannelLength`. `channelGain`
+  mirrors the drum mute/solo rule.
+- **Per-channel loop + length** — `ch.loop` makes a channel repeat over **its own clip length**
+  (`clipBeats(ch.clip)`), independent of the grid (a 2-bar bass loops twice under a 4-bar grid).
+  `setChannelLength(id, bars)` edits `clip.bars` (1..16) so the loop window is adjustable; the UI reloads
+  the roll (`pr-load`) so its visible grid follows. `schedTick` wraps each channel's notes against
+  `span = ch.loop ? clipBeats(ch.clip) : total`, looping if `ch.loop || loopOn`.
+- **Phrase save/load** — per-channel clip slots in `localStorage["ain-channel-clips"]` (mirrors the drum
+  pattern slots in `SequencerTransport`); load dispatches `pr-load` to refresh the live roll.
+- **Nameable / collapsible / marker** — `renameChannel` (inline edit), `ch.collapsed` folds the
+  `PianoRoll` to a one-line header (controls stay), and `channelPosition(id)` drives a thin imperative
+  position marker (rAF, beats into the channel's loop span) — see
+  [MidiChannels.tsx](components/sequencer/MidiChannels.tsx).
+- **UI** — [MidiChannels.tsx](components/sequencer/MidiChannels.tsx) renders each channel as a lane
+  (instrument selector + name + M/S + remove) with a [PianoRoll.tsx](components/piano-roll/PianoRoll.tsx)
+  bound via its new `channelId` prop (reuses the whole gesture/canvas editor; only the clip
+  read/write endpoints switch from `setActiveClip`/`getClip` to `setChannelClip`/`getChannelClip`).
+- **Live audition + arm** — `noteOn/noteOff/activeNotes` take an optional `channelId`; live voices are
+  keyed `"<channelId|_>:<midi>"` so each channel's keys play its own voice without colliding. The
+  **global keyboard** (no explicit id) follows `armedChannel` — `armChannel(id|null)` arms one channel
+  at a time; the lane shows a lit **ARM** button + accent outline. Disarm reverts to the global voice.
+- **Memory guard** (the explicit constraint): hard cap `MAX_CHANNELS = 8` (add button disabled),
+  soft warning at `SOFT_CHANNELS = 4`, shared per-preset buffer cache, and the scheduler's existing
+  256-voice prune (`_seqVoices`) as the voice ceiling for dense channel×step patterns.
+
 **Loop lanes** (done) — `LoopLanes.tsx`: loopable melodic samples auto-discovered from
 `src/assets/loops/`, each a sustained looped source started bar-aligned, `playbackRate = gridBpm /
 rootBpm` so it locks to tempo; per-loop toggle / level / mute / solo; `setBpm` re-rates live loops.
+- **A→B region** — `LoopState.a/b` (fractions 0..1 of the buffer; absent = whole loop). The source's
+  native `loopStart`/`loopEnd` (buffer seconds, **independent of `playbackRate`**) bound the slice, and
+  it `start()`s at the A offset. `setLoopRegion(id, a, b)` updates state + a live source instantly.
+  The strip is a small waveform canvas (`loopPeaks(id, bins)`, cached per loop, mirrors `getPeaks`)
+  with two pointer-draggable A/B handles that snap to the loop's 1/16 grid (⌘/ctrl = free).
 
-**Not yet wired to UI** (engine seams exist, no callers): `setKit` (multi-kit selector),
-`setSequence` (save/load patterns), `loadReverbIR`/`useSynthReverbIR` (real IR files).
+**Not yet wired to UI** (engine seams exist, no callers): `loadReverbIR`/`useSynthReverbIR`
+(real IR files).
 
 ## Preset sampler
 

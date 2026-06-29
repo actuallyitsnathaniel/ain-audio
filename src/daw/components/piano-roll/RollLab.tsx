@@ -113,6 +113,10 @@ export function RollLab() {
           <span className="text-dim">move around</span> · scroll = pitch · shift+scroll = time · ⌘/ctrl+scroll = zoom ·
           space (or middle-drag) to pan · state shows top-right
         </span>
+        <span>
+          <span className="text-dim">velocity</span> · drag a note's stem in the bottom lane to set its velocity · sweep across
+          notes to paint a ramp
+        </span>
       </div>
     </div>
   );

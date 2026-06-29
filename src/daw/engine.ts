@@ -9,9 +9,9 @@
 
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
-import { clipBeats, type NoteClip } from "./data/clips";
+import { clipBeats, type MidiChannel, type NoteClip } from "./data/clips";
 import { parseMidi } from "./data/midi-file";
-import { DEFAULT_KIT, defaultSequence, LOOPS, type DrumKit, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
+import { DEFAULT_KIT, defaultSequence, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
 
 export type TransportMode = "track" | "sequence";
 
@@ -108,6 +108,16 @@ type VoiceHandle =
   | { kind: "synth"; vg: GainNode; r: number; oscs: OscillatorNode[]; vf: BiquadFilterNode }
   | { kind: "sample"; vg: GainNode; r: number; src: AudioBufferSourceNode };
 
+// A resolved voice selection — which preset (if sampled) and which JS-synth patch
+// to fall back to. The live keyboard + Audio-Lab roll resolve this from global
+// state; beatmaker MIDI channels resolve it per-channel so each channel sounds
+// its own instrument.
+interface VoiceSel {
+  preset?: SampledPreset;
+  patch: string; // PATCHES key
+  dest?: AudioNode; // where the voice connects (a channel's gain node); default n.sum
+}
+
 interface Patch {
   osc: [OscillatorType, number][];
   oct: number;
@@ -192,13 +202,15 @@ class AudioEngine {
   loops: LoopLane[] = LOOPS;
   private _drumBufs: Record<string, AudioBuffer | null> = {}; // laneId → decoded one-shot (null = use synth)
   private _loopBufs: Record<string, AudioBuffer> = {}; // loopId → decoded buffer
+  private _loopPeaks: Record<string, Float32Array> = {}; // loopId → cached waveform peaks
   private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode }> = {}; // live looping voices
+  private _chNodes: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-channel vol/pan strip
 
   private _startCtx = 0;
   private _offset = 0;
   private _peaks: Float32Array | null = null;
   private _srcs: AudioBufferSourceNode[] | null = null;
-  private _liveVoices: Record<number, VoiceHandle> = {};
+  private _liveVoices: Record<string, VoiceHandle> = {}; // key = "<channelId|_>:<midi>"
   // decoded zone buffers per preset id; index parallels preset.zones.
   // an entry of `null` at a slot means that zone failed to decode.
   private _sampleBufs: Record<string, (AudioBuffer | null)[]> = {};
@@ -950,13 +962,18 @@ class AudioEngine {
   // the caller releases via releaseVoice(handle, when). Used directly by the
   // scheduler (which can play the same pitch repeatedly, so it can't key by MIDI);
   // noteOn/noteOff wrap this and key by MIDI for the held-key keyboard.
-  startVoiceAt(midi: number, vel: number, when: number): VoiceHandle {
+  startVoiceAt(midi: number, vel: number, when: number, sel?: VoiceSel): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
     const t = when;
 
+    // resolve which instrument to voice: an explicit per-channel selection, or
+    // the global live-keyboard/Audio-Lab selection when none is passed.
+    const preset = sel ? sel.preset : this.currentPreset();
+    const patchKey = sel ? sel.patch : this.synthPatch;
+    const dest = sel?.dest ?? n.sum; // channel gain node, or straight to the FX rack
+
     // ── sampled-preset path: bufferSource → voice gain (ADSR) → sum (FX rack) ──
-    const preset = this.currentPreset();
     const zone = preset ? this.pickZone(preset, midi) : null;
     if (preset && zone) {
       const env = preset.env;
@@ -974,7 +991,7 @@ class AudioEngine {
         else src.playbackRate.value *= Math.pow(2, cents / 1200);
       }
       src.connect(vg);
-      vg.connect(n.sum);
+      vg.connect(dest);
       const peak = preset.gain * vel;
       vg.gain.setValueAtTime(0, t);
       vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, env.a));
@@ -984,7 +1001,7 @@ class AudioEngine {
     }
 
     // ── JS-synth fallback path ──
-    const p = PATCHES[this.synthPatch];
+    const p = PATCHES[patchKey] || PATCHES[this.synthPatch];
     const f = 440 * Math.pow(2, (midi + p.oct * 12 - 69) / 12);
     const vg = c.createGain();
     vg.gain.value = 0;
@@ -1004,7 +1021,7 @@ class AudioEngine {
       return o;
     });
     vf.connect(vg);
-    vg.connect(n.sum);
+    vg.connect(dest);
     const peak = p.vol * vel;
     vg.gain.setValueAtTime(0, t);
     vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, p.a));
@@ -1046,25 +1063,44 @@ class AudioEngine {
     }, delayMs);
   }
 
-  // ── live keyboard (held notes keyed by MIDI; retrigger replaces) ──
-  noteOn(midi: number, vel?: number) {
+  // ── live keyboard (held notes keyed by channel:midi; retrigger replaces) ──
+  // `channelId` selects a beat-maker MIDI channel's instrument for the audition;
+  // omitted ⇒ the global Audio-Lab/keyboard voice. Voices are keyed per channel so
+  // tapping a channel's keys plays THAT channel's sound and doesn't collide with
+  // the global keyboard or other channels.
+  private liveKey(midi: number, channelId?: string) {
+    return (channelId ?? "_") + ":" + midi;
+  }
+  noteOn(midi: number, vel?: number, channelId?: string) {
     vel = vel == null ? 1 : vel;
     this.ensureCtx();
-    this.noteOff(midi, true);
-    this._liveVoices[midi] = this.startVoiceAt(midi, vel, this.ctx!.currentTime);
+    // no explicit channel ⇒ the global keyboard, which follows the armed channel
+    const cid = channelId ?? this.armedChannel ?? undefined;
+    this.noteOff(midi, true, cid);
+    const ch = cid ? this.sequence.channels.find((c) => c.id === cid) : undefined;
+    const sel = ch ? this.channelVoice(ch) : undefined;
+    this._liveVoices[this.liveKey(midi, cid)] = this.startVoiceAt(midi, vel, this.ctx!.currentTime, sel);
     this.emit("synth");
   }
 
-  noteOff(midi: number, instant?: boolean) {
-    const h = this._liveVoices[midi];
+  noteOff(midi: number, instant?: boolean, channelId?: string) {
+    const cid = channelId ?? this.armedChannel ?? undefined;
+    const key = this.liveKey(midi, cid);
+    // fall back to the global slot in case the note was pressed before arming
+    const h = this._liveVoices[key] ?? this._liveVoices[this.liveKey(midi, undefined)];
     if (!h) return;
-    delete this._liveVoices[midi];
+    delete this._liveVoices[key];
+    delete this._liveVoices[this.liveKey(midi, undefined)];
     this.releaseVoice(h, this.ctx!.currentTime, instant);
     this.emit("synth");
   }
 
-  activeNotes(): number[] {
-    return Object.keys(this._liveVoices).map(Number);
+  // held pitches, optionally scoped to one channel (for that grid's key glow)
+  activeNotes(channelId?: string): number[] {
+    const prefix = (channelId ?? "_") + ":";
+    return Object.keys(this._liveVoices)
+      .filter((k) => k.startsWith(prefix))
+      .map((k) => Number(k.slice(prefix.length)));
   }
 
   // ── beat-maker: drum kit + voices ──
@@ -1106,8 +1142,229 @@ class AudioEngine {
   // Replace the whole step-sequence (used by save/load patterns). Emits clip so
   // the grid re-renders. Callers should pass a copy they own (loads clone first).
   setSequence(seq: SequenceClip) {
+    seq.channels = seq.channels || []; // tolerate patterns saved before channels existed
+    // drop vol/pan strips for channels that no longer exist (avoid node leaks)
+    const live = new Set(seq.channels.map((c) => c.id));
+    for (const id in this._chNodes) {
+      if (!live.has(id)) {
+        try {
+          this._chNodes[id].gain.disconnect();
+          this._chNodes[id].pan.disconnect();
+        } catch {
+          /* fine */
+        }
+        delete this._chNodes[id];
+      }
+    }
     this.sequence = seq;
+    // warm the instruments any restored channels need
+    for (const ch of seq.channels) {
+      if (this.samplePresets.some((pr) => pr.id === ch.presetId)) void this.loadPreset(ch.presetId);
+    }
+    if (this.armedChannel && !live.has(this.armedChannel)) this.armedChannel = null;
     this.emit("clip");
+  }
+
+  // Grow/shrink the step grid (16/32/48/64), preserving existing steps. Resizes
+  // every lane's on/accent row. If playing, re-anchor at "now" so the playhead
+  // doesn't jump and the new length loops cleanly (mirrors setBpm's re-anchor).
+  setStepCount(n: number) {
+    n = STEP_COUNTS.includes(n as (typeof STEP_COUNTS)[number]) ? n : 16;
+    const seq = this.sequence;
+    if (seq.steps === n) return;
+    for (const id in seq.on) seq.on[id] = resizeRow(seq.on[id], n);
+    for (const id in seq.accent) seq.accent[id] = resizeRow(seq.accent[id], n);
+    seq.steps = n;
+    if (this.sequencePlaying && this.ctx) {
+      this._seqAnchorBeat = this.currentBeat();
+      this._seqAnchorTime = this.ctx.currentTime;
+      this._scheduledThrough = this.ctx.currentTime;
+    }
+    this.emit("clip");
+  }
+
+  // ── beat-maker: melodic MIDI channels ──
+  // Each channel is its own instrument + note clip, scheduled on the same clock as
+  // the drums. MAX_CHANNELS is the hard ceiling that keeps a dense pattern from
+  // spawning unbounded voices; SOFT_CHANNELS is where the UI warns weaker machines.
+  static SOFT_CHANNELS = 4;
+  static MAX_CHANNELS = 8;
+  private _chSeq = 0; // monotonic id counter
+  armedChannel: string | null = null; // which channel the keyboard/MIDI plays into
+
+  // Arm a channel for keyboard input (one at a time; null = the global Audio-Lab
+  // voice). Toggling the armed channel off reverts to the global voice.
+  armChannel(id: string | null) {
+    this.armedChannel = id && this.sequence.channels.some((c) => c.id === id) ? id : null;
+    this.emit("clip");
+  }
+
+  // lazily build a channel's vol→pan strip (gain → StereoPanner → n.sum). Persists
+  // for the channel's lifetime; removeChannel tears it down. Returns the gain input
+  // that voices connect to.
+  private channelStrip(ch: MidiChannel): GainNode {
+    const c = this.ensureCtx();
+    const n = this.nodes!;
+    let s = this._chNodes[ch.id];
+    if (!s) {
+      const gain = c.createGain();
+      const pan = c.createStereoPanner();
+      gain.connect(pan);
+      pan.connect(n.sum);
+      s = this._chNodes[ch.id] = { gain, pan };
+    }
+    s.gain.gain.value = (ch.vol ?? 0.8) * this.channelGain(ch); // fold in mute/solo
+    s.pan.pan.value = ch.pan ?? 0;
+    return s.gain;
+  }
+
+  // resolve a channel's instrument to a VoiceSel for the voice factory
+  private channelVoice(ch: MidiChannel): VoiceSel {
+    const preset = this.samplePresets.find((pr) => pr.id === ch.presetId);
+    const patch = PATCHES[ch.presetId] ? ch.presetId : preset?.fallbackPatch && PATCHES[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
+    return { preset, patch, dest: this.channelStrip(ch) };
+  }
+  // Solo is GLOBAL across the beatmaker: soloing any element (drum lane, loop, or
+  // MIDI channel) silences everything not soloed, across all three groups.
+  private anyBeatSolo(): boolean {
+    const mix = this.sequence.laneMix || {};
+    if (Object.values(mix).some((m) => m.solo)) return true;
+    if (Object.values(this.sequence.loops).some((s) => s.solo && s.on)) return true;
+    return this.sequence.channels.some((c) => c.solo);
+  }
+  // 1 normally; 0 if this channel is muted, or a global solo is up and this isn't soloed
+  private channelGain(ch: MidiChannel): number {
+    if (ch.mute) return 0;
+    return this.anyBeatSolo() && !ch.solo ? 0 : 1;
+  }
+
+  addChannel(): MidiChannel | null {
+    const chans = this.sequence.channels;
+    if (chans.length >= AudioEngine.MAX_CHANNELS) return null;
+    const presetId = this.samplePresets[0]?.id || Object.keys(PATCHES)[0];
+    const ch: MidiChannel = {
+      id: "ch" + ++this._chSeq + Date.now().toString(36),
+      name: "channel " + (chans.length + 1),
+      presetId,
+      clip: { bars: Math.max(1, Math.ceil(this.sequence.steps / 16)), beatsPerBar: 4, notes: [] },
+      mute: false,
+      solo: false,
+      loop: true,
+      vol: 0.8,
+      pan: 0,
+    };
+    chans.push(ch);
+    void this.loadPreset(presetId);
+    this.emit("clip");
+    return ch;
+  }
+  removeChannel(id: string) {
+    this.sequence.channels = this.sequence.channels.filter((c) => c.id !== id);
+    if (this.armedChannel === id) this.armedChannel = null;
+    const s = this._chNodes[id]; // tear down its vol/pan strip
+    if (s) {
+      try {
+        s.gain.disconnect();
+        s.pan.disconnect();
+      } catch {
+        /* fine */
+      }
+      delete this._chNodes[id];
+    }
+    this.emit("clip");
+  }
+  setChannelPreset(id: string, presetId: string) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (!ch) return;
+    ch.presetId = presetId;
+    if (this.samplePresets.some((pr) => pr.id === presetId)) void this.loadPreset(presetId);
+    this.emit("clip");
+  }
+  setChannelClip(id: string, clip: NoteClip) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (!ch) return;
+    ch.clip = clip;
+    this.emit("clip");
+  }
+  getChannelClip(id: string): NoteClip | null {
+    return this.sequence.channels.find((c) => c.id === id)?.clip || null;
+  }
+  toggleChannelMute(id: string) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (ch) ch.mute = !ch.mute;
+    this.refreshChannelGains();
+    this.emit("clip");
+  }
+  toggleChannelSolo(id: string) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (ch) ch.solo = !ch.solo;
+    this.refreshBeatGains(); // global solo → refresh loops + channels
+    this.emit("clip");
+  }
+  // push vol×(mute/solo) to every live channel strip (solo is global, so one
+  // toggle can change every channel's effective gain)
+  private refreshChannelGains() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const ch of this.sequence.channels) {
+      const s = this._chNodes[ch.id];
+      if (s) s.gain.gain.setTargetAtTime((ch.vol ?? 0.8) * this.channelGain(ch), t, 0.02);
+    }
+  }
+  // Solo is global, so any solo/mute toggle in any group must re-push live gains
+  // for the groups that hold persistent nodes (loops + channels). Drums re-read
+  // drumGain per scheduled hit, so they need no live refresh.
+  private refreshBeatGains() {
+    this.refreshLoopGains();
+    this.refreshChannelGains();
+  }
+  renameChannel(id: string, name: string) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (ch) ch.name = name;
+    this.emit("clip");
+  }
+  setChannelVol(id: string, vol: number) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (!ch) return;
+    ch.vol = Math.min(1, Math.max(0, vol));
+    const s = this._chNodes[id];
+    if (s && this.ctx) s.gain.gain.setTargetAtTime(ch.vol * this.channelGain(ch), this.ctx.currentTime, 0.02);
+    this.emit("clip");
+  }
+  setChannelPan(id: string, pan: number) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (!ch) return;
+    ch.pan = Math.min(1, Math.max(-1, pan));
+    const s = this._chNodes[id];
+    if (s && this.ctx) s.pan.pan.setTargetAtTime(ch.pan, this.ctx.currentTime, 0.02);
+    this.emit("clip");
+  }
+  toggleChannelLoop(id: string) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (ch) ch.loop = !ch.loop;
+    this.emit("clip");
+  }
+  // set a channel's loop length in bars (independent of the drum grid). Notes keep
+  // their positions; the scheduler wraps at the new length. Clamped to 1..16 bars.
+  setChannelLength(id: string, bars: number) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (!ch) return;
+    ch.clip.bars = Math.min(16, Math.max(1, Math.round(bars)));
+    this.emit("clip");
+  }
+  toggleChannelCollapsed(id: string) {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (ch) ch.collapsed = !ch.collapsed;
+    this.emit("clip");
+  }
+  // current beat position WITHIN a channel's own loop (for its playback marker),
+  // or -1 when not playing. Honors the channel's independent loop length.
+  channelPosition(id: string): number {
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (!ch || !this.sequencePlaying || !this.beatMode) return -1;
+    const span = ch.loop ? clipBeats(ch.clip) : this.activeTotalBeats();
+    if (span <= 0) return -1;
+    return ((this.currentBeat() % span) + span) % span;
   }
 
   // trigger one drum lane at an explicit time: decoded sample if present, else a
@@ -1140,14 +1397,13 @@ class AudioEngine {
     }
   }
 
-  // ── drum lane mute/solo (mirrors loopGain) ──
-  // 1 normally; 0 if this lane is muted, or if any lane is solo'd and this isn't.
+  // ── drum lane mute/solo (solo is global across the beatmaker — see anyBeatSolo) ──
+  // 1 normally; 0 if this lane is muted, or a global solo is up and this isn't soloed.
   private drumGain(laneId: string): number {
     const mix = this.sequence.laneMix || {};
     const st = mix[laneId];
     if (st?.mute) return 0;
-    const anySolo = Object.values(mix).some((m) => m.solo);
-    if (anySolo && !st?.solo) return 0;
+    if (this.anyBeatSolo() && !st?.solo) return 0;
     return 1;
   }
   toggleDrumMute(laneId: string) {
@@ -1160,6 +1416,7 @@ class AudioEngine {
     const mix = (this.sequence.laneMix = this.sequence.laneMix || {});
     const st = (mix[laneId] = mix[laneId] || { mute: false, solo: false });
     st.solo = !st.solo;
+    this.refreshBeatGains(); // global solo → silence loops + channels too
     this.emit("clip");
   }
 
@@ -1318,21 +1575,17 @@ class AudioEngine {
       return null; // not decodable audio
     }
     const stem = file.name.replace(/\.[^.]+$/, "");
-    const bpmTok = /(\d+)\s*bpm/i.exec(stem);
-    const barTok = /(\d+)\s*bar/i.exec(stem);
-    const name = stem
-      .replace(/[-_]?\d+\s*bpm/i, "")
-      .replace(/[-_]?\d+\s*bar/i, "")
-      .replace(/[-_]+/g, " ")
-      .trim();
-    let id = (name || "loop").toLowerCase().replace(/\s+/g, "-");
+    const meta = parseLoopMeta(stem);
+    let id = (meta.name || "loop").toLowerCase().replace(/\s+/g, "-");
     while (this.sequence.loops[id]) id += "-2"; // de-dupe against existing ids
     const lane: LoopLane = {
       id,
-      name: name || id,
+      name: meta.name || id,
       url: "", // in-memory: buffer is pre-stored, never fetched
-      rootBpm: bpmTok ? parseInt(bpmTok[1], 10) : Math.round(this.sequence.bpm),
-      bars: barTok ? parseInt(barTok[1], 10) : 1,
+      rootBpm: meta.bpm ?? Math.round(this.sequence.bpm), // detected, else current grid tempo
+      rootKnown: meta.bpm != null, // detected from filename ⇒ real; else a guess (lock re-bases)
+      bars: meta.bars ?? 1,
+      key: meta.key,
     };
     this._loopBufs[id] = buf;
     this.loops = [...this.loops, lane];
@@ -1354,12 +1607,11 @@ class AudioEngine {
     this.emit("clip");
   }
 
-  // effective gain for a loop: 0 if muted, off, or solo'd-out by another loop.
+  // effective gain for a loop: 0 if muted, off, or solo'd-out by a global solo.
   private loopGain(id: string): number {
     const st = this.sequence.loops[id];
     if (!st || !st.on || st.mute) return 0;
-    const anySolo = Object.values(this.sequence.loops).some((s) => s.solo && s.on);
-    if (anySolo && !st.solo) return 0;
+    if (this.anyBeatSolo() && !st.solo) return 0;
     return st.level;
   }
 
@@ -1367,6 +1619,21 @@ class AudioEngine {
   // play at original recorded speed (1) so changing BPM doesn't touch it.
   private loopRate(l: LoopLane): number {
     return this.sequence.loops[l.id]?.sync ? this.bpm / l.rootBpm : 1;
+  }
+
+  // Apply a loop's A→B region to a source. Region is stored as 0..1 fractions of
+  // the buffer; loopStart/loopEnd are in BUFFER seconds (independent of
+  // playbackRate), so a region survives tempo/sync changes. Returns the buffer
+  // offset to start playback at (A) so the slice begins at its head.
+  private applyLoopRegion(src: AudioBufferSourceNode, id: string): number {
+    const dur = src.buffer!.duration;
+    const st = this.sequence.loops[id];
+    const a = Math.min(0.999, Math.max(0, st?.a ?? 0));
+    const b = Math.max(a + 0.001, Math.min(1, st?.b ?? 1));
+    src.loop = true;
+    src.loopStart = a * dur;
+    src.loopEnd = b * dur;
+    return a * dur;
   }
 
   // start every "on" loop as a sustained looped source, aligned so its loop
@@ -1383,11 +1650,11 @@ class AudioEngine {
       gain.gain.value = this.loopGain(l.id);
       const src = c.createBufferSource();
       src.buffer = buf;
-      src.loop = true;
       src.playbackRate.value = this.loopRate(l); // grid-locked or original speed
+      const offset = this.applyLoopRegion(src, l.id);
       src.connect(gain);
       gain.connect(n.sum);
-      src.start(when);
+      src.start(when, offset);
       this._loopNodes[l.id] = { src, gain };
     }
   }
@@ -1457,11 +1724,11 @@ class AudioEngine {
     gain.gain.value = this.loopGain(id);
     const src = c.createBufferSource();
     src.buffer = buf;
-    src.loop = true;
     src.playbackRate.value = this.loopRate(l);
+    const offset = this.applyLoopRegion(src, id);
     src.connect(gain);
     gain.connect(n.sum);
-    src.start(when);
+    src.start(when, offset);
     this._loopNodes[id] = { src, gain };
   }
 
@@ -1492,19 +1759,94 @@ class AudioEngine {
     const st = this.sequence.loops[id];
     if (!st) return;
     st.solo = !st.solo;
-    this.refreshLoopGains();
+    this.refreshBeatGains(); // global solo → silence drums + channels too
     this.emit("clip");
   }
   // lock/unlock a loop to the grid tempo. Re-rates a live voice immediately so the
   // speed snaps (locked = bpm/rootBpm; unlocked = original speed) without restart.
+  // If the loop's root tempo was only a guess (no filename token), engaging lock
+  // ADOPTS the current tempo as its root — so locking never changes pitch/speed;
+  // only tempo moves made *after* locking warp it. A loop with a known root warps
+  // on lock as intended (that's the point of syncing it to a different tempo).
   toggleLoopSync(id: string) {
     const st = this.sequence.loops[id];
     if (!st) return;
     st.sync = !st.sync;
-    const node = this._loopNodes[id];
     const l = this.loops.find((x) => x.id === id);
+    if (l && st.sync && !l.rootKnown) l.rootBpm = Math.round(this.bpm);
+    const node = this._loopNodes[id];
     if (node && l && this.ctx) node.src.playbackRate.setTargetAtTime(this.loopRate(l), this.ctx.currentTime, 0.02);
     this.emit("clip");
+  }
+  // Set a loop's A→B playback region (fractions 0..1 of the buffer). Re-applies to
+  // a live source immediately (loopStart/loopEnd are dynamically settable); the
+  // playhead stays inside the new window on the next wrap.
+  setLoopRegion(id: string, a: number, b: number) {
+    const st = this.sequence.loops[id];
+    if (!st) return;
+    a = Math.min(0.999, Math.max(0, a));
+    b = Math.max(a + 0.001, Math.min(1, b));
+    st.a = a;
+    st.b = b;
+    const node = this._loopNodes[id];
+    if (node?.src.buffer) {
+      const dur = node.src.buffer.duration;
+      node.src.loopStart = a * dur;
+      node.src.loopEnd = b * dur;
+    }
+    this.emit("clip");
+  }
+
+  // Set a loop's bar length (drives the A/B snap grid + region math). Independent
+  // of rootBpm/sync — corrects a loop whose filename token was wrong/absent so the
+  // gridlines align to the real transients. Clamped 1..16.
+  setLoopBars(id: string, bars: number) {
+    const l = this.loops.find((x) => x.id === id);
+    if (!l) return;
+    l.bars = Math.min(16, Math.max(1, Math.round(bars)));
+    this.emit("clip");
+  }
+  // user-set the loop's root tempo. Becomes authoritative (rootKnown), so a later
+  // lock warps from this value; re-rates a live synced loop immediately.
+  setLoopBpm(id: string, bpm: number) {
+    const l = this.loops.find((x) => x.id === id);
+    if (!l) return;
+    l.rootBpm = Math.min(300, Math.max(40, Math.round(bpm)));
+    l.rootKnown = true;
+    const node = this._loopNodes[id];
+    if (node && this.ctx) node.src.playbackRate.setTargetAtTime(this.loopRate(l), this.ctx.currentTime, 0.02);
+    this.emit("clip");
+  }
+  // user-set the loop's detected key/chord label (free text; "" clears it)
+  setLoopKey(id: string, key: string) {
+    const l = this.loops.find((x) => x.id === id);
+    if (!l) return;
+    l.key = key.trim() || undefined;
+    this.emit("clip");
+  }
+
+  // Decoded waveform peaks for a loop's buffer (for the A/B region strip). Cached
+  // per loop+bin-count; mirrors getPeaks for the main track.
+  loopPeaks(id: string, bins: number): Float32Array | null {
+    const buf = this._loopBufs[id];
+    if (!buf) return null;
+    const cached = this._loopPeaks[id];
+    if (cached && cached.length === bins) return cached;
+    const ch0 = buf.getChannelData(0);
+    const ch1 = buf.numberOfChannels > 1 ? buf.getChannelData(1) : ch0;
+    const per = Math.max(1, Math.floor(ch0.length / bins));
+    const peaks = new Float32Array(bins);
+    for (let b = 0; b < bins; b++) {
+      let max = 0;
+      const start = b * per;
+      for (let i = start; i < start + per && i < ch0.length; i += 8) {
+        const a = Math.abs((ch0[i] + ch1[i]) * 0.5);
+        if (a > max) max = a;
+      }
+      peaks[b] = max;
+    }
+    this._loopPeaks[id] = peaks;
+    return peaks;
   }
 
   // ── sequencer: lookahead scheduler ──
@@ -1714,6 +2056,39 @@ class AudioEngine {
           if (!this.loopOn) break;
         }
       }
+      // melodic MIDI channels share the same clock, voiced with the channel's own
+      // instrument. A channel with `loop` repeats over ITS OWN clip length (so a
+      // 2-bar bass loops twice under a 4-bar grid); otherwise it wraps with the
+      // global transport against the grid total.
+      for (const ch of seq.channels) {
+        if (this.channelGain(ch) <= 0) continue;
+        const sel = this.channelVoice(ch);
+        const span = ch.loop ? clipBeats(ch.clip) : total;
+        const wrap = ch.loop || this.loopOn; // repeat if the channel or transport loops
+        if (span <= 0) continue;
+        for (const note of ch.clip.notes) {
+          let k = Math.floor((fromBeatAbs - note.start) / span);
+          if (!wrap) k = 0;
+          for (; ; k++) {
+            const absBeat = note.start + (wrap ? k * span : 0);
+            if (absBeat >= toBeatAbs) break;
+            if (absBeat < fromBeatAbs) {
+              if (!wrap) break;
+              continue;
+            }
+            const when = whenOf(absBeat);
+            const off = when + Math.max(0.04, note.length * bd);
+            const h = this.startVoiceAt(note.pitch, note.vel, when, sel);
+            this.releaseVoice(h, off);
+            this._seqVoices.push(h);
+            if (!wrap) break;
+          }
+        }
+      }
+      // ponytail: voice ceiling. With 8 channels × 64 steps this prune is what
+      // bounds OscillatorNode/BufferSource accumulation. Upgrade path if it ever
+      // bites: a per-channel polyphony cap before scheduling, not after.
+      if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
       this._scheduledThrough = horizon;
       return;
     }
@@ -1777,13 +2152,17 @@ class AudioEngine {
         scheduler: this._seqVoices.length,
         loops: Object.keys(this._loopNodes).length,
         playingSources: this._srcs?.length ?? 0,
-        activeNotes: Object.keys(this._liveVoices).map(Number),
+        activeNotes: Object.keys(this._liveVoices), // "<channelId|_>:<midi>"
       },
     };
   }
 }
 
 export const engine = new AudioEngine();
+
+// channel-count thresholds surfaced to the UI (soft warn / hard cap)
+export const SOFT_CHANNELS = AudioEngine.SOFT_CHANNELS;
+export const MAX_CHANNELS = AudioEngine.MAX_CHANNELS;
 
 // Dev-only console handle: `engine.debug()` in the browser. Statically false in
 // production builds, so it tree-shakes out. ponytail: drop if it ever ships.

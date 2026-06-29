@@ -4,7 +4,7 @@ import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { Knob } from "../Knob";
 import { abSnap, abSnapActive } from "../../lab-utils";
-import { KITS, type SequenceClip } from "../../data/kits";
+import { KITS, STEP_COUNTS, type SequenceClip } from "../../data/kits";
 
 const SLOTS_KEY = "ain-beats"; // localStorage: { slotName: SequenceClip }
 const selectCls =
@@ -100,6 +100,20 @@ export function SequencerTransport() {
           ))}
         </select>
         <span className="pointer-events-none absolute right-[9px] text-[8px] text-faint">▼</span>
+      </span>
+
+      {/* step-count selector — 16/32/48/64 (whole bars of 1/16s) */}
+      <span className="flex items-center gap-[3px]" aria-label="step count">
+        {STEP_COUNTS.map((n) => (
+          <button
+            key={n}
+            onClick={() => engine.setStepCount(n)}
+            title={`${n} steps (${n / 16} ${n === 16 ? "bar" : "bars"})`}
+            className={(seq.steps === n ? abSnapActive : abSnap) + " px-[9px] py-[6px] text-[10.5px] tabular-nums"}
+          >
+            {n}
+          </button>
+        ))}
       </span>
 
       {/* pattern save / load — localStorage named slots */}
