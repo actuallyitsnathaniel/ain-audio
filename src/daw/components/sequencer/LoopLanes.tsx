@@ -95,6 +95,14 @@ function LoopWave({ loop }: { loop: LoopLane }) {
     g.fillStyle = accent;
     g.fillRect(a * w - 1, 0, 2, h);
     g.fillRect(b * w - 1, 0, 2, h);
+    // playhead — where in the sample we currently are (white line)
+    const pos = engine.loopPosition(loop.id); // 0..1 of the buffer, or -1
+    if (pos >= 0) {
+      g.fillStyle = "#ffffff";
+      g.globalAlpha = 0.9;
+      g.fillRect(pos * w, 0, 1.5, h);
+      g.globalAlpha = 1;
+    }
   });
 
   return (

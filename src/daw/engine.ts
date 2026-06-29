@@ -17,7 +17,7 @@ export type TransportMode = "track" | "sequence";
 
 const STEP_BEATS = 0.25; // one drum step = a 1/16 note
 
-type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip";
+type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi";
 
 export interface Levels {
   rms: number;
@@ -203,7 +203,7 @@ class AudioEngine {
   private _drumBufs: Record<string, AudioBuffer | null> = {}; // laneId → decoded one-shot (null = use synth)
   private _loopBufs: Record<string, AudioBuffer> = {}; // loopId → decoded buffer
   private _loopPeaks: Record<string, Float32Array> = {}; // loopId → cached waveform peaks
-  private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode }> = {}; // live looping voices
+  private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode; startCtx: number; startOff: number }> = {}; // live looping voices
   private _chNodes: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-channel vol/pan strip
 
   private _startCtx = 0;
@@ -1063,6 +1063,53 @@ class AudioEngine {
     }, delayMs);
   }
 
+  // ── Web MIDI (lazy: we DON'T request access on load — the browser permission
+  // prompt only fires when the user first opts in, e.g. arming a channel) ──
+  // status: "idle" (never asked) | "unsupported" | "denied" | "no device" | "N device(s)"
+  midiStatus = "idle";
+  private _midiAccess: MIDIAccess | null = null;
+
+  // Request Web MIDI access and wire every input to the live keyboard. Idempotent:
+  // safe to call repeatedly; once granted it just re-wires. Returns true if access
+  // is (or becomes) granted. Triggers the browser permission prompt on first call.
+  async enableMidi(): Promise<boolean> {
+    if (!navigator.requestMIDIAccess) {
+      this.midiStatus = "unsupported";
+      this.emit("midi");
+      return false;
+    }
+    const wire = () => {
+      let count = 0;
+      this._midiAccess!.inputs.forEach((inp) => {
+        count++;
+        inp.onmidimessage = (msg: MIDIMessageEvent) => {
+          if (!msg.data) return;
+          const st = msg.data[0] & 0xf0;
+          const note = msg.data[1];
+          const vel = msg.data[2];
+          if (st === 144 && vel > 0) this.noteOn(note, vel / 127);
+          else if (st === 128 || (st === 144 && vel === 0)) this.noteOff(note);
+        };
+      });
+      this.midiStatus = count ? count + " device" + (count > 1 ? "s" : "") : "no device";
+      this.emit("midi");
+    };
+    if (this._midiAccess) {
+      wire();
+      return true;
+    }
+    try {
+      this._midiAccess = await navigator.requestMIDIAccess();
+      this._midiAccess.onstatechange = wire;
+      wire();
+      return true;
+    } catch {
+      this.midiStatus = "denied";
+      this.emit("midi");
+      return false;
+    }
+  }
+
   // ── live keyboard (held notes keyed by channel:midi; retrigger replaces) ──
   // `channelId` selects a beat-maker MIDI channel's instrument for the audition;
   // omitted ⇒ the global Audio-Lab/keyboard voice. Voices are keyed per channel so
@@ -1655,7 +1702,7 @@ class AudioEngine {
       src.connect(gain);
       gain.connect(n.sum);
       src.start(when, offset);
-      this._loopNodes[l.id] = { src, gain };
+      this._loopNodes[l.id] = { src, gain, startCtx: when, startOff: offset };
     }
   }
 
@@ -1729,7 +1776,7 @@ class AudioEngine {
     src.connect(gain);
     gain.connect(n.sum);
     src.start(when, offset);
-    this._loopNodes[id] = { src, gain };
+    this._loopNodes[id] = { src, gain, startCtx: when, startOff: offset };
   }
 
   // ── loop control (UI) ──
@@ -1823,6 +1870,23 @@ class AudioEngine {
     if (!l) return;
     l.key = key.trim() || undefined;
     this.emit("clip");
+  }
+
+  // Live playhead position of a looping voice as a 0..1 fraction of its BUFFER
+  // (for the waveform strip), or -1 when not playing. Walks buffer-time from the
+  // recorded start (offset + rate × elapsed) and wraps inside the A→B region.
+  loopPosition(id: string): number {
+    const node = this._loopNodes[id];
+    const buf = this._loopBufs[id];
+    if (!node || !buf || !this.ctx || this.ctx.currentTime < node.startCtx) return -1;
+    const dur = buf.duration;
+    const a = node.src.loopStart || 0;
+    const b = node.src.loopEnd || dur;
+    const region = Math.max(0.0001, b - a);
+    const elapsed = (this.ctx.currentTime - node.startCtx) * node.src.playbackRate.value;
+    // first pass runs startOff→b, then loops a→b; normalise into the region
+    const within = ((node.startOff - a + elapsed) % region + region) % region;
+    return (a + within) / dur;
   }
 
   // Decoded waveform peaks for a loop's buffer (for the A/B region strip). Cached

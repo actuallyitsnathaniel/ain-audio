@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../engine";
 import { useEngine } from "../hooks/useEngine";
+import { requestMidiEnable } from "./midi-gate-bus";
 
 const PL_START = 48; // C3
 const PL_END = 64; // E4
@@ -105,16 +106,19 @@ function PresetKeyboard({ octave, vel }: { octave: number; vel: number }) {
 }
 
 export function PresetLab() {
-  const eng = useEngine(["synth", "preset"]);
-  const [midiStatus, setMidiStatus] = useState("unavailable");
+  const eng = useEngine(["synth", "preset", "midi"]);
+  const midiStatus = eng.midiStatus; // "idle" until the user opts in (e.g. arming a channel)
   // computer-keyboard MIDI state (Ableton convention): Z/X octave, C/V velocity
   const [octave, setOctave] = useState(0); // semitone offset = octave * 12
   const [vel, setVel] = useState(0.85);
-  // refs so the keydown closure always reads the latest octave/velocity
+  // refs so the keydown closure always reads the latest octave/velocity (assigned
+  // in an effect, not during render — react-hooks v7 purity rule)
   const octaveRef = useRef(0);
   const velRef = useRef(0.85);
-  octaveRef.current = octave;
-  velRef.current = vel;
+  useEffect(() => {
+    octaveRef.current = octave;
+    velRef.current = vel;
+  }, [octave, vel]);
 
   // computer keyboard
   useEffect(() => {
@@ -154,37 +158,9 @@ export function PresetLab() {
     };
   }, []);
 
-  // Web MIDI
-  useEffect(() => {
-    if (!navigator.requestMIDIAccess) {
-      setMidiStatus("unsupported");
-      return;
-    }
-    let access: MIDIAccess | null = null;
-    const wire = () => {
-      let count = 0;
-      access!.inputs.forEach((inp) => {
-        count++;
-        inp.onmidimessage = (msg: MIDIMessageEvent) => {
-          if (!msg.data) return;
-          const st = msg.data[0] & 0xf0;
-          const note = msg.data[1];
-          const vel = msg.data[2];
-          if (st === 144 && vel > 0) engine.noteOn(note, vel / 127);
-          else if (st === 128 || (st === 144 && vel === 0)) engine.noteOff(note);
-        };
-      });
-      setMidiStatus(count ? count + " device" + (count > 1 ? "s" : "") : "no device");
-    };
-    navigator.requestMIDIAccess().then(
-      (acc) => {
-        access = acc;
-        wire();
-        acc.onstatechange = wire;
-      },
-      () => setMidiStatus("denied"),
-    );
-  }, []);
+  // Web MIDI is requested lazily (engine.enableMidi), not on load — so the browser
+  // permission prompt only fires when the user opts in (e.g. arming a channel).
+  // This panel just reflects engine.midiStatus; "idle" means not yet requested.
 
   return (
     <div className="flex flex-col gap-[10px] border-t border-line pt-[14px]">
@@ -218,17 +194,21 @@ export function PresetLab() {
           >
             vel <span className="text-accent">{Math.round(vel * 127)}</span>
           </span>
-          <span
+          <button
+            onClick={() => midiStatus === "idle" && requestMidiEnable()}
+            disabled={midiStatus !== "idle"}
             className={
-              "rounded-[3px] border px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap " +
+              "rounded-[3px] border px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap transition-colors " +
               (midiStatus.indexOf("device") > 0
                 ? "border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-accent"
-                : "border-line text-faint")
+                : midiStatus === "idle"
+                  ? "border-line text-faint hover:border-accent hover:text-accent"
+                  : "border-line text-faint")
             }
-            title="plug in a MIDI controller and just play"
+            title={midiStatus === "idle" ? "click to connect a MIDI controller" : "plug in a MIDI controller and just play"}
           >
-            midi: {midiStatus}
-          </span>
+            midi: {midiStatus === "idle" ? "connect" : midiStatus}
+          </button>
         </span>
       </div>
       <PresetKeyboard octave={octave} vel={vel} />
