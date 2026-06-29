@@ -9,7 +9,7 @@
 
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
-import { clipBeats, type MidiChannel, type NoteClip } from "./data/clips";
+import { clipBeats, type MidiChannel, type Note, type NoteClip } from "./data/clips";
 import { parseMidi } from "./data/midi-file";
 import { DEFAULT_KIT, defaultSequence, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
 
@@ -117,6 +117,17 @@ interface VoiceSel {
   preset?: SampledPreset;
   patch: string; // PATCHES key
   dest?: AudioNode; // where the voice connects (a channel's gain node); default n.sum
+}
+
+// A legato voice run: one articulated head note, then 0+ `slide` notes that bend
+// the SAME voice to new pitches (no re-attack). Beats are clip-relative.
+interface NoteRun {
+  startBeat: number;
+  endBeat: number; // end of the last note in the run
+  pitch: number; // head note's articulated pitch
+  vel: number;
+  vibrato?: { rate: number; depth: number };
+  bends: { toMidi: number; atBeat: number }[]; // pitch reached by each slide note's END
 }
 
 interface Patch {
@@ -963,21 +974,35 @@ class AudioEngine {
   // the caller releases via releaseVoice(handle, when). Used directly by the
   // scheduler (which can play the same pitch repeatedly, so it can't key by MIDI);
   // noteOn/noteOff wrap this and key by MIDI for the held-key keyboard.
-  // `slide` (portamento): glide pitch FROM `slide.from` (MIDI) into `midi` over
-  // `slide.durSec`, using native AudioParam ramps on the voice's pitch param.
+  // `bends` (FL portamento): the voice starts at `midi` and ramps to each segment's
+  // pitch by its absolute `at` time — one voice can glide through a whole legato run
+  // of slide notes. Empty/undefined = a plain (non-sliding) note.
   // `vib` (vibrato): a sine LFO (rate Hz) → gain (depth cents) → the voice's detune.
   startVoiceAt(
     midi: number,
     vel: number,
     when: number,
     sel?: VoiceSel,
-    slide?: { from: number; durSec: number },
+    bends?: { toMidi: number; at: number }[],
     vib?: { rate: number; depth: number },
   ): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
     const t = when;
-    const glideEnd = slide ? t + Math.max(0.01, slide.durSec) : t;
+    // schedule the portamento pitch ramps on a pitch param. `mode` picks the unit:
+    // "detune" → cents offset from `midi`; "freq" → absolute Hz; "rate" → playbackRate.
+    const applyBends = (param: AudioParam, mode: "detune" | "freq" | "rate", base = 0) => {
+      if (!bends || !bends.length) return;
+      // base: detune→humanize offset (cents); freq→octave-shift semitones; rate→rootMidi
+      const val = (m: number) =>
+        mode === "detune"
+          ? base + (m - midi) * 100
+          : mode === "freq"
+            ? 440 * Math.pow(2, (m + base - 69) / 12)
+            : Math.pow(2, (m - base) / 12);
+      param.setValueAtTime(val(midi), t);
+      for (const b of bends) param.linearRampToValueAtTime(val(b.toMidi), Math.max(t + 0.005, b.at));
+    };
     // build a vibrato LFO feeding the given detune params; returns the LFO osc
     const addVibrato = (targets: AudioParam[]): OscillatorNode | undefined => {
       if (!vib || vib.depth <= 0) return undefined;
@@ -1015,18 +1040,11 @@ class AudioEngine {
         if (src.detune) src.detune.value = cents;
         else src.playbackRate.value *= Math.pow(2, cents / 1200);
       }
-      // portamento: detune (cents) glides from the source pitch to the target
-      if (slide && src.detune) {
-        const base = src.detune.value; // humanize offset (0 if none)
-        const off = (slide.from - midi) * 100;
-        src.detune.setValueAtTime(base + off, t);
-        src.detune.linearRampToValueAtTime(base, glideEnd);
-      } else if (slide) {
-        // detune unsupported → glide playbackRate instead
-        const fromRate = Math.pow(2, (slide.from - zone.rootMidi) / 12);
-        const toRate = src.playbackRate.value;
-        src.playbackRate.setValueAtTime(fromRate, t);
-        src.playbackRate.linearRampToValueAtTime(toRate, glideEnd);
+      // portamento: glide pitch through the bend segments (cents if detune exists,
+      // else playbackRate). Note: humanize already set a small detune offset above.
+      if (bends && bends.length) {
+        if (src.detune) applyBends(src.detune, "detune", src.detune.value);
+        else applyBends(src.playbackRate, "rate", zone.rootMidi);
       }
       src.connect(vg);
       vg.connect(dest);
@@ -1050,17 +1068,13 @@ class AudioEngine {
     vf.frequency.setValueAtTime(p.cut, t);
     vf.frequency.linearRampToValueAtTime(Math.min(18000, p.cut + p.envAmt), t + Math.max(0.01, p.a));
     vf.frequency.setTargetAtTime(p.cut + p.envAmt * Math.max(0.15, p.s) * 0.5, t + p.a, Math.max(0.05, p.d));
-    const fromF = slide ? 440 * Math.pow(2, (slide.from + p.oct * 12 - 69) / 12) : f;
     const oscs = p.osc.map((cfg) => {
       const o = c.createOscillator();
       o.type = cfg[0];
       o.frequency.value = f;
       o.detune.value = cfg[1];
-      // portamento: glide frequency from the source pitch up/down to the target
-      if (slide) {
-        o.frequency.setValueAtTime(fromF, t);
-        o.frequency.linearRampToValueAtTime(f, glideEnd);
-      }
+      // portamento: glide frequency through the bend segments (oct shift baked in)
+      applyBends(o.frequency, "freq", p.oct * 12);
       o.connect(vf);
       o.start(t);
       return o;
@@ -1323,6 +1337,30 @@ class AudioEngine {
     const preset = this.samplePresets.find((pr) => pr.id === ch.presetId);
     const patch = PATCHES[ch.presetId] ? ch.presetId : preset?.fallbackPatch && PATCHES[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
     return { preset, patch, dest: this.channelStrip(ch) };
+  }
+
+  // Group a clip's notes into FL-style legato voice runs. A `slide` note that is
+  // contiguous with (or overlaps) the currently-open run bends that one voice to a
+  // new pitch (no re-attack); anything else opens a fresh run. An orphan slide (no
+  // open run to continue) articulates normally as its own head. Notes are processed
+  // in start order; this is the monophonic-per-channel rule (chords go on their own
+  // channel, where successive non-slide notes simply each open their own run).
+  private buildRuns(notes: Note[]): NoteRun[] {
+    const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+    const runs: NoteRun[] = [];
+    let open: NoteRun | null = null;
+    const EPS = 1e-4;
+    for (const n of sorted) {
+      // a slide note continues the open run if it starts at/before that run's end
+      if (n.slide && open && n.start <= open.endBeat + EPS) {
+        open.bends.push({ toMidi: n.pitch, atBeat: n.start + n.length });
+        open.endBeat = Math.max(open.endBeat, n.start + n.length);
+      } else {
+        open = { startBeat: n.start, endBeat: n.start + n.length, pitch: n.pitch, vel: n.vel, vibrato: n.vibrato, bends: [] };
+        runs.push(open);
+      }
+    }
+    return runs;
   }
   // Solo is GLOBAL across the beatmaker: soloing any element (drum lane, loop, or
   // MIDI channel) silences everything not soloed, across all three groups.
@@ -2191,20 +2229,25 @@ class AudioEngine {
         const span = ch.loop ? clipBeats(ch.clip) : total;
         const wrap = ch.loop || this.loopOn; // repeat if the channel or transport loops
         if (span <= 0) continue;
-        for (const note of ch.clip.notes) {
-          let k = Math.floor((fromBeatAbs - note.start) / span);
+        // group into legato runs so `slide` notes bend the previous voice (FL-style)
+        // instead of articulating a new one. One voice per run, per wrap pass.
+        for (const run of this.buildRuns(ch.clip.notes)) {
+          let k = Math.floor((fromBeatAbs - run.startBeat) / span);
           if (!wrap) k = 0;
           for (; ; k++) {
-            const absBeat = note.start + (wrap ? k * span : 0);
+            const absBeat = run.startBeat + (wrap ? k * span : 0);
             if (absBeat >= toBeatAbs) break;
             if (absBeat < fromBeatAbs) {
               if (!wrap) break;
               continue;
             }
             const when = whenOf(absBeat);
-            const off = when + Math.max(0.04, note.length * bd);
-            const slide = note.slideFrom != null ? { from: note.slideFrom, durSec: note.length * bd } : undefined;
-            const h = this.startVoiceAt(note.pitch, note.vel, when, sel, slide, note.vibrato);
+            const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
+            // bend points: each slide note's END maps to an absolute ctx time
+            const bends = run.bends.length
+              ? run.bends.map((b) => ({ toMidi: b.toMidi, at: when + (b.atBeat - run.startBeat) * bd }))
+              : undefined;
+            const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, run.vibrato);
             this.releaseVoice(h, off);
             this._seqVoices.push(h);
             if (!wrap) break;
@@ -2225,20 +2268,22 @@ class AudioEngine {
       this._scheduledThrough = horizon;
       return;
     }
-    for (const note of clip.notes) {
-      let k = Math.floor((fromBeatAbs - note.start) / total);
+    for (const run of this.buildRuns(clip.notes)) {
+      let k = Math.floor((fromBeatAbs - run.startBeat) / total);
       if (!this.loopOn) k = 0;
       for (; ; k++) {
-        const absBeat = note.start + (this.loopOn ? k * total : 0);
+        const absBeat = run.startBeat + (this.loopOn ? k * total : 0);
         if (absBeat >= toBeatAbs) break;
         if (absBeat < fromBeatAbs) {
           if (!this.loopOn) break;
           continue;
         }
         const when = whenOf(absBeat);
-        const off = when + Math.max(0.04, note.length * bd);
-        const slide = note.slideFrom != null ? { from: note.slideFrom, durSec: note.length * bd } : undefined;
-        const h = this.startVoiceAt(note.pitch, note.vel, when, undefined, slide, note.vibrato);
+        const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
+        const bends = run.bends.length
+          ? run.bends.map((b) => ({ toMidi: b.toMidi, at: when + (b.atBeat - run.startBeat) * bd }))
+          : undefined;
+        const h = this.startVoiceAt(run.pitch, run.vel, when, undefined, bends, run.vibrato);
         this.releaseVoice(h, off);
         this._seqVoices.push(h);
         if (!this.loopOn) break;

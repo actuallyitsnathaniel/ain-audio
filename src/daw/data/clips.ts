@@ -13,7 +13,11 @@ export interface Note {
   start: number; // beats from clip start
   length: number; // beats
   vel: number; // 0–1
-  slideFrom?: number; // portamento: glide FROM this MIDI pitch into `pitch` over the note's length
+  // portamento (FL-style): a `slide` note does NOT articulate its own voice — it
+  // bends the PREVIOUS note's still-ringing voice up/down to its own pitch over its
+  // length. Chords (un-slide notes) ring independently. A slide note with no note
+  // to bend falls back to articulating normally.
+  slide?: boolean;
   vibrato?: { rate: number; depth: number }; // rate Hz, depth cents — sinusoidal pitch wobble
 }
 

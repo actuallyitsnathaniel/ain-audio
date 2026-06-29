@@ -500,23 +500,24 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     commit();
   };
   // portamento: glide a note from a source pitch into its own. Default source = the
-  // nearest earlier note's pitch (FL-like "slide from the previous note"), else a
-  // major-third below so a lone note still slides audibly.
-  const prevPitch = (n: Note): number => {
-    let best: Note | null = null;
-    notes().forEach((m) => {
-      if (m.id !== n.id && m.start < n.start && (!best || m.start > best.start)) best = m;
-    });
-    return best ? (best as Note).pitch : clamp(n.pitch - 4, LO_MIDI, HI_MIDI);
-  };
-  const setPortamento = (on: boolean) => {
+  // FL-style portamento: flagging a note `slide` makes it bend the PREVIOUS note's
+  // voice to its pitch (no re-attack) instead of articulating. Engine groups the
+  // legato run; here we just toggle the flag.
+  const setSlide = (on: boolean) => {
     if (!sel.current.size) return;
     sel.current.forEach((id) => {
       const n = byId(id);
-      if (!n) return;
-      n.slideFrom = on ? prevPitch(n) : undefined;
+      if (n) n.slide = on || undefined;
     });
     commit();
+  };
+  // the note immediately preceding `n` in time (for drawing the slide lead-in)
+  const prevNote = (n: Note): Note | null => {
+    let best: Note | null = null;
+    notes().forEach((m) => {
+      if (m.id !== n.id && m.start < n.start && (!best || m.start > (best as Note).start)) best = m;
+    });
+    return best;
   };
   // vibrato: a sine pitch wobble. `depth` in cents (0 clears it); rate ~5.5 Hz.
   const setVibrato = (depth: number) => {
