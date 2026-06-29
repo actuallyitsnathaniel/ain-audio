@@ -24,6 +24,7 @@
 import { useEffect, useRef } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../../engine";
+import { openContextMenu, type MenuItem } from "../context-menu-bus";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { cloneClip, clipBeats, newNoteId, type Note, type NoteClip } from "../../data/clips";
 
@@ -250,11 +251,8 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     }
 
     const hit = hitNote(x, y);
-    // right-click / alt(without a note-duplicate intent) → delete
-    if (e.button === 2) {
-      if (hit) deleteNotes([hit.note.id]);
-      return;
-    }
+    // right-click is handled by onContextMenu (custom menu); ignore the pointerdown
+    if (e.button === 2) return;
 
     if (hit) {
       const id = hit.note.id;
@@ -473,6 +471,73 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
       n.vel = clamp(Math.round((n.vel + dV) * 100) / 100, 0.05, 1);
     });
     commit();
+  };
+
+  // ── context-menu action helpers (also reused by the right-click menu) ──
+  const setVelSel = (v: number) => {
+    if (!sel.current.size) return;
+    sel.current.forEach((id) => {
+      const n = byId(id);
+      if (n) n.vel = clamp(v, 0.05, 1);
+    });
+    commit();
+  };
+  const quantizeSel = () => {
+    const ids = sel.current.size ? [...sel.current] : notes().map((n) => n.id);
+    ids.forEach((id) => {
+      const n = byId(id);
+      if (n) n.start = snapTo(n.start);
+    });
+    commit();
+  };
+  const selectAll = () => {
+    sel.current = new Set(notes().map((n) => n.id));
+  };
+  const clearClip = () => {
+    if (!clipRef.current) return;
+    clipRef.current.notes = [];
+    sel.current = new Set();
+    commit();
+  };
+
+  // Right-click → custom menu (Shift+right-click falls through to the browser's).
+  // Items adapt: a note under the cursor gets note/velocity actions; the clip-wide
+  // actions are always present.
+  const onContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.shiftKey) return; // escape hatch → native menu
+    e.preventDefault();
+    const rect = ref.current!.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const hit = hitNote(x, y);
+    // right-clicking a note that isn't selected makes it the selection
+    if (hit && !sel.current.has(hit.note.id)) sel.current = new Set([hit.note.id]);
+    const selCount = sel.current.size;
+    const items: MenuItem[] = [];
+    if (hit || selCount) {
+      const n = selCount === 1 ? byId([...sel.current][0]) : null;
+      items.push(
+        { label: selCount > 1 ? `delete ${selCount} notes` : "delete note", danger: true, onClick: () => deleteNotes([...sel.current]) },
+        { label: "duplicate", hint: "⌘D", onClick: () => duplicateSelection(1, 0) },
+        { separator: true },
+        { label: "velocity 100%", onClick: () => setVelSel(1) },
+        { label: "velocity 75%", onClick: () => setVelSel(0.75) },
+        { label: "velocity 50%", onClick: () => setVelSel(0.5) },
+        { separator: true },
+        { label: "octave up", hint: "⇧↑", onClick: () => nudge(0, 12, false) },
+        { label: "octave down", hint: "⇧↓", onClick: () => nudge(0, -12, false) },
+        { label: "quantize to grid", onClick: quantizeSel },
+        { separator: true },
+      );
+      void n; // (kept for future per-note readouts)
+    }
+    items.push(
+      { label: "select all", hint: "⌘A", onClick: selectAll },
+      { label: "clear clip", danger: true, disabled: !notes().length, onClick: clearClip },
+      { separator: true },
+      { label: "browser menu", hint: "⇧right-click", disabled: true },
+    );
+    openContextMenu({ x: e.clientX, y: e.clientY, title: channelId ? "midi notes" : "piano roll", items });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
@@ -767,7 +832,7 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
-      onContextMenu={(e) => e.preventDefault()}
+      onContextMenu={onContextMenu}
     />
   );
 }

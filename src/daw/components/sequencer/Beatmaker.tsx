@@ -45,7 +45,7 @@ export function Beatmaker() {
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>click a step to toggle · shift-click for accent · synth drums until i bounce a real kit.</span>
+          <span>click a step to toggle · shift-click for accent · right-click anything for actions (⇧right-click = browser menu) · synth drums until i bounce a real kit.</span>
         </div>
       </TrackSection>
     </main>

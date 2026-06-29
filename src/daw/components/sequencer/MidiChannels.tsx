@@ -15,6 +15,7 @@ import { cloneClip, clipBeats, type MidiChannel, type NoteClip } from "../../dat
 import { PianoRoll } from "../piano-roll/PianoRoll";
 import { Knob } from "../Knob";
 import { requestMidiEnable } from "../midi-gate-bus";
+import { openContextMenu } from "../context-menu-bus";
 
 const CLIP_SLOTS_KEY = "ain-channel-clips"; // localStorage: { slotName: NoteClip }
 const readClipSlots = (): Record<string, NoteClip> => {
@@ -142,6 +143,31 @@ function ChannelRow({ ch, armed, onArm }: { ch: MidiChannel; armed: boolean; onA
     if (clip) canvasEl()?.dispatchEvent(new CustomEvent("pr-load", { detail: cloneClip(clip) }));
   };
 
+  // right-click the channel header → lane actions (the inner piano roll has its
+  // own note menu). Shift+right-click falls through to the browser menu.
+  const headerMenu = (e: React.MouseEvent) => {
+    if (e.shiftKey) return;
+    e.preventDefault();
+    openContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      title: "channel: " + ch.name,
+      items: [
+        { label: armed ? "disarm" : "arm for keyboard", onClick: () => onArm(armed ? null : ch.id) },
+        { label: ch.mute ? "unmute" : "mute", onClick: () => engine.toggleChannelMute(ch.id) },
+        { label: ch.solo ? "unsolo" : "solo", onClick: () => engine.toggleChannelSolo(ch.id) },
+        { separator: true },
+        { label: ch.loop ? "loop off" : "loop on", onClick: () => engine.toggleChannelLoop(ch.id) },
+        { label: collapsed ? "expand" : "collapse", onClick: () => engine.toggleChannelCollapsed(ch.id) },
+        { label: "rename…", onClick: () => setEditing(true) },
+        { separator: true },
+        { label: "remove channel", danger: true, onClick: () => engine.removeChannel(ch.id) },
+        { separator: true },
+        { label: "browser menu", hint: "⇧right-click", disabled: true },
+      ],
+    });
+  };
+
   return (
     <div
       className={
@@ -149,7 +175,7 @@ function ChannelRow({ ch, armed, onArm }: { ch: MidiChannel; armed: boolean; onA
         (armed ? "border-[color-mix(in_srgb,var(--accent)_70%,transparent)]" : "border-line")
       }
     >
-      <div className="flex flex-wrap items-center gap-[8px]">
+      <div className="flex flex-wrap items-center gap-[8px]" onContextMenu={headerMenu}>
         <button
           onClick={() => engine.toggleChannelCollapsed(ch.id)}
           title={collapsed ? "expand" : "collapse"}
