@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Project } from "./data/projects";
 import { projects } from "./data/projects";
@@ -80,16 +80,25 @@ function DetailBody({ p, onAction }: { p: Project; onAction?: () => void }) {
   );
 }
 
-// Desktop: detail panel inline below the grid (art rail + body).
-function DetailPanel({ p }: { p: Project }) {
+// Desktop: detail panel injected as a full-width grid row right under the clicked
+// card (col-span-full → CSS grid auto-placement starts it on a fresh row and reflows
+// the cards after it, no column math). No cover art — the card above already shows
+// it; this reads as that card unfolding into a detail strip.
+function DetailPanel({ p, onClose }: { p: Project; onClose: () => void }) {
   return (
     <div
-      className="mt-[14px] grid grid-cols-[6px_168px_1fr] overflow-hidden rounded-[4px] border border-line bg-panel"
+      className="mt-1 mb-[6px] grid grid-cols-[6px_1fr] overflow-hidden rounded-[4px] border border-[var(--clip)] bg-panel shadow-[0_8px_28px_-14px_color-mix(in_srgb,var(--clip)_55%,transparent)] motion-safe:animate-[fade-in_.18s_ease]"
       style={{ "--clip": p.color } as React.CSSProperties}
     >
       <div className="bg-[var(--clip)]" />
-      <img className="h-full min-h-[168px] w-[168px] border-r border-line object-cover" src={p.art} alt={p.artist} />
-      <div className="min-w-0 px-[22px] py-[18px]">
+      <div className="relative min-w-0 px-[26px] py-[22px]">
+        <button
+          className="absolute top-[14px] right-[14px] flex h-7 w-7 items-center justify-center rounded-[4px] border border-line2 text-dim transition-colors hover:border-dim hover:text-daw-text"
+          aria-label="close detail"
+          onClick={onClose}
+        >
+          ✕
+        </button>
         <DetailBody p={p} />
       </div>
     </div>
@@ -153,32 +162,66 @@ function DetailSheet({ p, onClose }: { p: Project; onClose: () => void }) {
 }
 
 export function ProjectsSection() {
-  const [sel, setSel] = useState(projects[0].id);
+  // sel is nullable now: clicking the open card collapses it (accordion). On
+  // mobile the sheet opens instead of the inline row.
+  const [sel, setSel] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const isMobile = useMediaQuery("(max-width: 767px)");
-  const p = projects.find((x) => x.id === sel)!;
+  const selProject = projects.find((x) => x.id === sel) || null;
+  const selIdx = projects.findIndex((x) => x.id === sel); // -1 when none
+
+  // Live column count of the auto-fill grid. The inline detail panel spans the
+  // full width, so to keep the selected card's row intact we inject it after the
+  // LAST card of that row (not after the card itself) — that needs the column
+  // count, which changes as the grid reflows. Read it off the computed
+  // grid-template-columns and keep it current with a ResizeObserver.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(1);
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const measure = () => {
+      const tpl = getComputedStyle(el).gridTemplateColumns;
+      setCols(tpl ? tpl.split(" ").length : 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // index of the last card in the selected card's row (desktop accordion anchor)
+  const rowEndIdx = selIdx < 0 ? -1 : Math.min(projects.length - 1, Math.floor(selIdx / cols) * cols + cols - 1);
 
   const onSelect = (id: string) => {
-    setSel(id);
-    if (isMobile) setSheetOpen(true);
+    if (isMobile) {
+      setSel(id);
+      setSheetOpen(true);
+      return;
+    }
+    setSel((cur) => (cur === id ? null : id)); // toggle on desktop
   };
 
   return (
     <TrackSection id="projects" label="projects" rail="01">
       <SectionHead num="01" title="projects" sub={projects.length + " clips · tap to load"} />
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-[10px] max-[767px]:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] max-[767px]:gap-[7px]">
-        {projects.map((proj) => (
-          <ClipCard key={proj.id} p={proj} active={proj.id === sel} onClick={() => onSelect(proj.id)} />
+      <div ref={gridRef} className="grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-[10px] max-[767px]:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] max-[767px]:gap-[7px]">
+        {projects.map((proj, i) => (
+          <Fragment key={proj.id}>
+            <ClipCard p={proj} active={proj.id === sel} onClick={() => onSelect(proj.id)} />
+            {/* desktop: inline detail injected after the LAST card of the selected
+                row so that row stays full and the rest reflow below the panel */}
+            {selProject && i === rowEndIdx ? (
+              <div className="col-span-full max-[767px]:hidden">
+                <DetailPanel p={selProject} onClose={() => setSel(null)} />
+              </div>
+            ) : null}
+          </Fragment>
         ))}
       </div>
 
-      {/* desktop inline panel */}
-      <div className="max-[767px]:hidden">
-        <DetailPanel p={p} />
-      </div>
-
       {/* mobile sheet */}
-      {isMobile && sheetOpen ? <DetailSheet p={p} onClose={() => setSheetOpen(false)} /> : null}
+      {isMobile && sheetOpen && selProject ? <DetailSheet p={selProject} onClose={() => setSheetOpen(false)} /> : null}
     </TrackSection>
   );
 }
