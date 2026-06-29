@@ -5,6 +5,8 @@
 // beat-maker works immediately. The SequenceClip is the 16-step grid the
 // scheduler walks, sharing the Phase-2 clock.
 
+import type { MidiChannel } from "./clips";
+
 export type DrumSynth = "kick" | "snare" | "hat" | "clap" | "tom" | "rim";
 
 export interface DrumLane {
@@ -27,7 +29,62 @@ export interface LoopLane {
   name: string; // display label (prettified id)
   url: string; // resolved sample URL
   rootBpm: number; // tempo the loop was recorded at (for playbackRate match)
+  rootKnown?: boolean; // true if rootBpm is a REAL known tempo (filename token / disk).
+  // false/undefined = a guess (load-time grid tempo); locking adopts the current tempo
+  // as the root so the lock itself is pitch-neutral and only later tempo moves warp it.
   bars: number; // its length in bars
+  key?: string; // detected musical key / chord (e.g. "Am", "F#", "Cmaj7"), user-editable
+}
+
+// ── filename metadata parser (shared by build-time LOOPS + runtime addLoop) ──
+// Pulls tempo / bar-count / key out of a filename stem and returns a cleaned name.
+// Tokens are bounded by separators (start/end or space . _ -) so we don't grab the
+// "A" inside a word or the "90" inside "90s".
+//   tempo: explicit "128bpm" (high confidence), else a bare 2–3 digit run in 40–300
+//   key:   root + optional accidental + optional quality (Am, F#m, Cmaj7, Bbsus2…)
+//   bars:  "<n>bar"/"<n>bars"
+const SEP = "(?:^|[\\s._-])"; // a leading separator
+const SEPE = "(?=$|[\\s._-])"; // a trailing separator (lookahead, non-consuming)
+const KEY_RE = new RegExp(SEP + "([A-G])([#b♯♭]?)(maj7|maj|min|m|aug|dim|sus2|sus4|sus|add\\d|°)?(\\d{0,2})" + SEPE);
+export interface LoopMeta {
+  name: string;
+  bpm?: number; // undefined when nothing plausible was found
+  bars?: number;
+  key?: string;
+}
+export function parseLoopMeta(stem: string): LoopMeta {
+  const bpmExplicit = /(\d{2,3})\s*bpm/i.exec(stem);
+  const barTok = new RegExp("(\\d{1,2})\\s*bars?" + SEPE, "i").exec(stem);
+  // bare-number bpm fallback: a separator-bounded 2–3 digit run in a musical range
+  let bpmBare: number | undefined;
+  if (!bpmExplicit) {
+    const re = new RegExp(SEP + "(\\d{2,3})(?![\\d]|\\s*(?:bars?|bit|khz|hz))" + SEPE, "gi");
+    for (let m = re.exec(stem); m; m = re.exec(stem)) {
+      const n = parseInt(m[1], 10);
+      if (n >= 40 && n <= 300) {
+        bpmBare = n;
+        break;
+      }
+    }
+  }
+  const bpm = bpmExplicit ? parseInt(bpmExplicit[1], 10) : bpmBare;
+
+  const keyM = KEY_RE.exec(stem);
+  let key: string | undefined;
+  if (keyM) {
+    const qual = keyM[3] === "m" ? "m" : keyM[3] || "";
+    key = keyM[1] + (keyM[2] || "").replace("♯", "#").replace("♭", "b") + qual + (keyM[4] || "");
+  }
+
+  // strip the recognised tokens from the display name
+  let name = stem;
+  if (bpmExplicit) name = name.replace(bpmExplicit[0], " ");
+  else if (bpmBare != null) name = name.replace(new RegExp(SEP + bpmBare + SEPE, "i"), " ");
+  if (barTok) name = name.replace(barTok[0], " ");
+  if (key && keyM) name = name.replace(keyM[0], " ");
+  name = name.replace(/[-_.]+/g, " ").replace(/\s+/g, " ").trim();
+
+  return { name, bpm, bars: barTok ? parseInt(barTok[1], 10) : undefined, key };
 }
 
 // per-loop mixer state, keyed by loop id.
@@ -37,6 +94,8 @@ export interface LoopState {
   mute: boolean;
   solo: boolean;
   sync?: boolean; // locked to grid tempo (playbackRate = bpm/rootBpm)? off = original speed
+  a?: number; // loop region start, fraction 0..1 of the buffer (default 0 = whole loop)
+  b?: number; // loop region end, fraction 0..1 of the buffer (default 1)
 }
 
 // per-lane step arrays live in SequenceClip keyed by lane id.
@@ -49,6 +108,7 @@ export interface SequenceClip {
   accent: Record<string, boolean[]>; // laneId → per-step accent (louder hit)
   loops: Record<string, LoopState>; // loopId → mixer state
   laneMix: Record<string, { mute: boolean; solo: boolean }>; // drum laneId → mute/solo
+  channels: MidiChannel[]; // melodic MIDI channels, played on the same clock
 }
 
 // ── lane definitions for the default kit ──
@@ -124,32 +184,28 @@ interface LoopOverride {
   name?: string;
   rootBpm?: number;
   bars?: number;
+  key?: string;
 }
 const LOOP_OVERRIDES: Record<string, LoopOverride> = {
-  // "dusty-keys": { name: "dusty keys", rootBpm: 120, bars: 2 },
+  // "dusty-keys": { name: "dusty keys", rootBpm: 120, bars: 2, key: "Am" },
 };
-
-const loopPretty = (id: string) => id.replace(/[-_]+/g, " ").trim();
 
 export const LOOPS: LoopLane[] = Object.keys(LOOP_FILES)
   .map((path) => {
     const file = path.split("/").pop()!;
     const stem = file.replace(KIT_EXT_RE, "");
-    const bpmTok = /(\d+)\s*bpm/i.exec(stem);
-    const barTok = /(\d+)\s*bar/i.exec(stem);
-    // id = stem with the bpm/bar tokens stripped
-    const id = stem
-      .replace(/[-_]?\d+\s*bpm/i, "")
-      .replace(/[-_]?\d+\s*bar/i, "")
-      .replace(/[-_]+$/g, "")
-      .trim();
+    const meta = parseLoopMeta(stem);
+    const id = (meta.name || "loop").toLowerCase().replace(/\s+/g, "-");
     const ov = LOOP_OVERRIDES[id] || {};
+    const bpm = ov.rootBpm ?? meta.bpm;
     return {
       id,
-      name: ov.name || loopPretty(id),
+      name: ov.name || meta.name || id,
       url: LOOP_FILES[path],
-      rootBpm: ov.rootBpm ?? (bpmTok ? parseInt(bpmTok[1], 10) : 120),
-      bars: ov.bars ?? (barTok ? parseInt(barTok[1], 10) : 1),
+      rootBpm: bpm ?? 120, // last-resort default; rootKnown stays false so lock re-bases
+      rootKnown: ov.rootBpm != null || meta.bpm != null, // a real tempo from override/filename
+      bars: ov.bars ?? meta.bars ?? 1,
+      key: ov.key ?? meta.key,
     };
   })
   .sort((a, b) => a.name.localeCompare(b.name));
@@ -169,10 +225,12 @@ export interface ReverbIR {
   url: string;
 }
 
+const prettyId = (id: string) => id.replace(/[-_]+/g, " ").trim();
+
 export const IRS: ReverbIR[] = Object.keys(IR_FILES)
   .map((path) => {
     const stem = path.split("/").pop()!.replace(KIT_EXT_RE, "");
-    return { id: stem, name: loopPretty(stem), url: IR_FILES[path] };
+    return { id: stem, name: prettyId(stem), url: IR_FILES[path] };
   })
   .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -184,6 +242,16 @@ const row = (...idx: number[]) => {
   return a;
 };
 const empty = () => new Array(STEPS).fill(false);
+
+// allowed grid lengths — multiples of 16 so each block is a whole bar of 1/16s
+export const STEP_COUNTS = [16, 32, 48, 64] as const;
+
+// grow with `false` / shrink by slice, preserving existing steps
+export const resizeRow = (arr: boolean[] | undefined, n: number): boolean[] => {
+  const a = (arr || []).slice(0, n);
+  while (a.length < n) a.push(false);
+  return a;
+};
 
 export function defaultSequence(kit: DrumKit = DEFAULT_KIT): SequenceClip {
   const on: Record<string, boolean[]> = {};
@@ -204,5 +272,5 @@ export function defaultSequence(kit: DrumKit = DEFAULT_KIT): SequenceClip {
   // loop mixer state — off by default, unity level
   const loops: Record<string, LoopState> = {};
   LOOPS.forEach((l) => (loops[l.id] = { on: false, level: 0.8, mute: false, solo: false }));
-  return { steps: STEPS, beatsPerBar: 4, bpm: 120, swing: 0, on, accent, loops, laneMix };
+  return { steps: STEPS, beatsPerBar: 4, bpm: 120, swing: 0, on, accent, loops, laneMix, channels: [] };
 }

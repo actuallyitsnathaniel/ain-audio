@@ -14,6 +14,9 @@
 //   ⌘/ctrl+D duplicate · esc deselect
 // Navigate:
 //   wheel → pitch · shift+wheel → time · ⌘/ctrl+wheel → zoom · space/middle-drag → pan
+// Velocity lane (docked bottom band):
+//   drag a note's stem up/down → set its velocity · sweep across notes → paint a ramp ·
+//   (with a multi-note selection, dragging any selected note's stem sets the whole selection)
 //
 // The working clip lives in a ref (mutated during drag for perf) and is pushed
 // to engine.setActiveClip; the lookahead scheduler plays from there.
@@ -34,6 +37,7 @@ const FULL_H = (PITCH_SPAN + 1) * ROW_H;
 const MIN_PPB = 28;
 const MAX_PPB = 220;
 const DRAG_SLOP = 3; // px before a press becomes a drag
+const VEL_H = 46; // velocity lane height (px) docked at the canvas bottom
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const noteName = (m: number) => NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
@@ -52,6 +56,7 @@ type Drag =
   | { mode: "marquee"; x0: number; y0: number; x1: number; y1: number; add: Set<string> }
   | { mode: "pan"; startX: number; startY: number; baseX: number; baseY: number }
   | { mode: "play" }
+  | { mode: "vel" } // drag in the velocity lane; sweeping paints a ramp
   | null;
 
 interface View {
@@ -60,7 +65,9 @@ interface View {
   ppb: number;
 }
 
-export function PianoRoll({ height = 280 }: { height?: number }) {
+// `channelId` binds the roll to a beat-maker MIDI channel's clip instead of the
+// global Audio-Lab clip; everything else (gestures, render, playhead) is identical.
+export function PianoRoll({ height = 280, channelId }: { height?: number; channelId?: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const clipRef = useRef<NoteClip | null>(null);
   const sel = useRef<Set<string>>(new Set()); // selected note ids
@@ -71,12 +78,13 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
   const view = useRef<View>({ scrollX: 0, scrollY: 0, ppb: 64 });
 
   const commit = () => {
-    if (clipRef.current) engine.setActiveClip(clipRef.current);
+    if (!clipRef.current) return;
+    if (channelId) engine.setChannelClip(channelId, clipRef.current);
+    else engine.setActiveClip(clipRef.current);
   };
 
   const centerOn = (clip: NoteClip) => {
-    const cv = ref.current;
-    const h = cv ? cv.clientHeight : height;
+    const h = gridH();
     let mid = 60;
     if (clip.notes.length) {
       let lo = Infinity,
@@ -99,7 +107,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
   };
 
   useEffect(() => {
-    loadClip(engine.getClip() || engine.samplePresets[0].defaultPhrase);
+    loadClip(channelId ? engine.getChannelClip(channelId) || { bars: 1, beatsPerBar: 4, notes: [] } : engine.getClip() || engine.samplePresets[0].defaultPhrase);
     const el = ref.current;
     if (!el) return;
     const onLoad = (e: Event) => loadClip((e as CustomEvent<NoteClip>).detail);
@@ -126,6 +134,8 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
   }, []);
 
   // ── coordinate system ──
+  // the pitch grid occupies the canvas above the docked velocity lane
+  const gridH = () => Math.max(0, (ref.current?.clientHeight ?? height) - VEL_H);
   const totalBeats = () => (clipRef.current ? clipBeats(clipRef.current) : 4);
   const maxScrollX = (w: number) => Math.max(0, totalBeats() * view.current.ppb - (w - KEY_W));
   const beatToX = (b: number) => KEY_W + b * view.current.ppb - view.current.scrollX;
@@ -156,20 +166,20 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
   };
 
   const blip = (pitch: number) => {
-    engine.noteOn(pitch, 0.85);
-    setTimeout(() => engine.noteOff(pitch), 140);
+    engine.noteOn(pitch, 0.85, channelId);
+    setTimeout(() => engine.noteOff(pitch, false, channelId), 140);
   };
 
   // ── gutter keyboard ──
   const gutterOn = (pitch: number) => {
     if (gutterKey.current === pitch) return;
-    if (gutterKey.current !== null) engine.noteOff(gutterKey.current);
+    if (gutterKey.current !== null) engine.noteOff(gutterKey.current, false, channelId);
     gutterKey.current = pitch;
-    engine.noteOn(pitch, 0.9);
+    engine.noteOn(pitch, 0.9, channelId);
   };
   const gutterOff = () => {
     if (gutterKey.current === null) return;
-    engine.noteOff(gutterKey.current);
+    engine.noteOff(gutterKey.current, false, channelId);
     gutterKey.current = null;
   };
 
@@ -179,6 +189,33 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     if (!ids.length) return;
     const allSel = ids.every((id) => sel.current.has(id));
     ids.forEach((id) => (allSel ? sel.current.delete(id) : sel.current.add(id)));
+  };
+
+  // velocity from a y inside the lane: lane top = 1.0, lane bottom = 0.0
+  const velFromY = (y: number) => {
+    const gh = gridH();
+    const laneH = (ref.current?.clientHeight ?? height) - gh;
+    return clamp(1 - (y - gh) / Math.max(1, laneH), 0, 1);
+  };
+  // set velocity of the note whose stem is nearest x (within ~6px). If a selection
+  // exists and the hit note is in it, set the whole selection (Live's behavior).
+  const applyVel = (x: number, y: number) => {
+    if (!clipRef.current) return;
+    const vel = Math.round(velFromY(y) * 100) / 100;
+    let nearest: Note | null = null;
+    let best = 7; // px tolerance
+    notes().forEach((n) => {
+      const d = Math.abs(beatToX(n.start) - x);
+      if (d < best) {
+        best = d;
+        nearest = n;
+      }
+    });
+    if (!nearest) return;
+    const hit: Note = nearest;
+    const targets = sel.current.has(hit.id) && sel.current.size > 1 ? [...sel.current].map(byId).filter(Boolean) as Note[] : [hit];
+    targets.forEach((n) => (n.vel = vel));
+    commit();
   };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -201,6 +238,14 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
         drag.current = { mode: "play" };
         gutterOn(clamp(yToPitch(y), LO_MIDI, HI_MIDI));
       }
+      return;
+    }
+
+    // velocity lane (bottom band): set velocity from the y position. Plain drag =
+    // paint each note's velocity as you pass over it; ⌘/ctrl = draw a straight ramp.
+    if (y >= gridH()) {
+      drag.current = { mode: "vel" };
+      applyVel(x, y);
       return;
     }
 
@@ -253,12 +298,17 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
 
     if (d.mode === "pan") {
       view.current.scrollX = clamp(d.baseX - (e.clientX - d.startX), 0, maxScrollX(cv.clientWidth));
-      view.current.scrollY = clamp(d.baseY - (e.clientY - d.startY), 0, Math.max(0, FULL_H - cv.clientHeight));
+      view.current.scrollY = clamp(d.baseY - (e.clientY - d.startY), 0, Math.max(0, FULL_H - gridH()));
       return;
     }
     if (d.mode === "play") {
       if (x < KEY_W) gutterOn(clamp(yToPitch(y), LO_MIDI, HI_MIDI));
       else gutterOff();
+      return;
+    }
+    if (d.mode === "vel") {
+      // sweeping with y tracking the pointer paints a ramp across notes naturally
+      applyVel(x, y);
       return;
     }
     if (!clipRef.current) return;
@@ -482,8 +532,47 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     } else if (e.shiftKey) {
       v.scrollX = clamp(v.scrollX + (e.deltaY || e.deltaX), 0, maxScrollX(cv.clientWidth));
     } else {
-      v.scrollY = clamp(v.scrollY + e.deltaY, 0, Math.max(0, FULL_H - cv.clientHeight));
+      v.scrollY = clamp(v.scrollY + e.deltaY, 0, Math.max(0, FULL_H - gridH()));
     }
+  };
+
+  // velocity lane: a stem+cap per note in the bottom band, height ∝ velocity.
+  // Selected notes draw in white; a note under the playhead lights to accent.
+  const drawVelLane = (
+    g: CanvasRenderingContext2D,
+    w: number,
+    gh: number,
+    h: number,
+    ac: string,
+    pos: { playing: boolean; beat: number },
+  ) => {
+    const top = gh + 1;
+    const laneH = h - top;
+    g.fillStyle = "#0a0a0d";
+    g.fillRect(0, gh, w, h - gh);
+    g.fillStyle = "rgba(255,255,255,0.12)";
+    g.fillRect(0, gh, w, 1); // divider
+    g.fillStyle = "#3a3a40";
+    g.font = "8px ui-monospace, monospace";
+    g.fillText("vel", 4, gh + 11);
+    g.save();
+    g.beginPath();
+    g.rect(KEY_W, top, w - KEY_W, laneH);
+    g.clip();
+    notes().forEach((n) => {
+      const x = beatToX(n.start);
+      if (x < KEY_W - 2 || x > w) return;
+      const barH = Math.max(2, n.vel * (laneH - 6));
+      const y = h - 3 - barH;
+      const selected = sel.current.has(n.id);
+      const playing = pos.playing && pos.beat >= n.start && pos.beat < n.start + n.length;
+      g.fillStyle = selected ? "#ffffff" : playing ? ac : "rgba(84,173,189,0.7)";
+      g.fillRect(x, y, 2, barH);
+      g.beginPath(); // cap handle
+      g.arc(x + 1, y, 2.5, 0, Math.PI * 2);
+      g.fill();
+    });
+    g.restore();
   };
 
   // ── render ──
@@ -505,9 +594,10 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     g.fillRect(0, 0, w, h);
 
     const v = view.current;
+    const gh = h - VEL_H; // pitch-grid height; velocity lane occupies the rest
     const tb = totalBeats();
     const bpb = clipRef.current?.beatsPerBar || 4;
-    const firstP = clamp(yToPitch(h), LO_MIDI, HI_MIDI);
+    const firstP = clamp(yToPitch(gh), LO_MIDI, HI_MIDI);
     const lastP = clamp(yToPitch(0), LO_MIDI, HI_MIDI);
 
     for (let p = firstP; p <= lastP; p++) {
@@ -522,7 +612,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       if (x < KEY_W - 1 || x > w) continue;
       const bar = b % bpb === 0;
       g.fillStyle = bar ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.07)";
-      g.fillRect(x, 0, bar ? 1.5 : 1, h);
+      g.fillRect(x, 0, bar ? 1.5 : 1, gh);
     }
     if (v.ppb >= 90) {
       for (let b = 0; b <= tb; b += SNAP) {
@@ -530,7 +620,7 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
         const x = beatToX(b);
         if (x < KEY_W || x > w) continue;
         g.fillStyle = "rgba(255,255,255,0.035)";
-        g.fillRect(x, 0, 1, h);
+        g.fillRect(x, 0, 1, gh);
       }
     }
 
@@ -538,12 +628,12 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
     const pos = engine.getSequencePosition();
     g.save();
     g.beginPath();
-    g.rect(KEY_W, 0, w - KEY_W, h);
+    g.rect(KEY_W, 0, w - KEY_W, gh);
     g.clip();
     notes().forEach((n) => {
       const x = beatToX(n.start);
       const y = pitchToY(n.pitch);
-      if (y < -ROW_H || y > h) return;
+      if (y < -ROW_H || y > gh) return;
       const wn = Math.max(3, n.length * v.ppb - 1.5);
       if (x + wn < KEY_W || x > w) return;
       const playing = pos.playing && pos.beat >= n.start && pos.beat < n.start + n.length;
@@ -582,16 +672,20 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
       const px = beatToX(pos.beat);
       g.fillStyle = "#ffffff";
       g.globalAlpha = 0.85;
-      g.fillRect(px, 0, 1.5, h);
+      g.fillRect(px, 0, 1.5, gh);
       g.globalAlpha = 1;
     }
     g.restore();
 
-    // gutter keyboard
+    // gutter keyboard (pitch area only)
     const held = gutterKey.current;
-    const sounding = new Set(engine.activeNotes());
+    const sounding = new Set(engine.activeNotes(channelId));
+    g.save();
+    g.beginPath();
+    g.rect(0, 0, KEY_W, gh);
+    g.clip();
     g.fillStyle = "#0c0c0e";
-    g.fillRect(0, 0, KEY_W, h);
+    g.fillRect(0, 0, KEY_W, gh);
     for (let p = firstP; p <= lastP; p++) {
       const y = pitchToY(p);
       const lit = p === held || sounding.has(p);
@@ -603,8 +697,12 @@ export function PianoRoll({ height = 280 }: { height?: number }) {
         g.fillText("C" + (Math.floor(p / 12) - 1), 3, y + ROW_H - 4);
       }
     }
+    g.restore();
     g.fillStyle = "rgba(255,255,255,0.12)";
-    g.fillRect(KEY_W - 1, 0, 1, h);
+    g.fillRect(KEY_W - 1, 0, 1, gh);
+
+    // ── velocity lane (docked at the bottom; shares the time axis) ──
+    drawVelLane(g, w, gh, h, ac, pos);
 
     // ── HUD readout (top-right): live state of the selection's params ──
     const ids = [...sel.current];
