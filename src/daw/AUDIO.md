@@ -129,6 +129,16 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
   draws a stem+cap with height ∝ velocity; drag a stem up/down to set velocity, sweep across notes to
   paint a ramp (a multi-note selection sets together). The pitch grid renders into `gridH = h - VEL_H`;
   pointer presses with `y ≥ gridH` are velocity edits (`Drag` mode `"vel"`).
+- **Per-note pitch modulation** (right-click a note → menu). Both are native AudioParam automation in
+  `startVoiceAt`, no DSP: **portamento** (`Note.slideFrom`, a MIDI pitch) glides the voice's pitch from
+  that source into the note's own pitch over the note's length — sample path ramps `src.detune` (cents),
+  synth path ramps `osc.frequency`; drawn as an amber diagonal lead-in. **vibrato** (`Note.vibrato =
+  {rate Hz, depth cents}`) adds a sine LFO → gain → the voice's `detune` (stopped with the voice in
+  `releaseVoice`); drawn as a violet squiggle whose amplitude tracks depth. Menu presets set
+  light/medium/heavy depth; "clear" removes them.
+- **Right-click menu** (`context-menu-bus` + `<ContextMenu/>` host in DawShell): note/velocity/portamento/
+  vibrato/clip actions in the roll, channel/lane/loop actions elsewhere on the beat page. Shift+right-click
+  bypasses to the native browser menu.
 - **Gutter keyboard:** the left key column is tap-to-play — pointer-down auditions the pitch
   (`engine.noteOn`), sliding up/down retriggers, releasing/leaving the gutter stops. Held + sounding
   pitches glow (reads `engine.activeNotes(channelId)` each frame).

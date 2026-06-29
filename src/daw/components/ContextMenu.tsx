@@ -23,14 +23,19 @@ export function ContextMenu() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();
     };
-    // a pointerdown anywhere closes (the menu's own items handle their click first)
-    window.addEventListener("pointerdown", close, true);
+    // close on a pointerdown OUTSIDE the menu. We must NOT close on a pointerdown
+    // inside it — this listener runs in the capture phase (before the item's React
+    // onClick), so closing here would unmount the button before its click fires.
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) close();
+    };
+    window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", close, true);
       window.removeEventListener("resize", close);
@@ -55,8 +60,6 @@ export function ContextMenu() {
   return (
     <div
       ref={ref}
-      // stop the closing pointerdown from also firing on items below us
-      onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
       style={{ left: pos.x, top: pos.y }}
       className="fixed z-[70] min-w-[176px] overflow-hidden rounded-[5px] border border-line2 bg-panel py-[4px] shadow-[0_14px_44px_rgba(0,0,0,0.55)]"

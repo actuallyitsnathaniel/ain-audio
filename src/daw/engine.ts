@@ -104,9 +104,10 @@ interface FxState {
 // A live voice handle returned by startVoiceAt. The voice gain `vg` carries the
 // amp ADSR; `r` is the release time. Discriminated by source kind so releaseVoice
 // can stop the right nodes.
-type VoiceHandle =
+type VoiceHandle = (
   | { kind: "synth"; vg: GainNode; r: number; oscs: OscillatorNode[]; vf: BiquadFilterNode }
-  | { kind: "sample"; vg: GainNode; r: number; src: AudioBufferSourceNode };
+  | { kind: "sample"; vg: GainNode; r: number; src: AudioBufferSourceNode }
+) & { lfo?: OscillatorNode }; // vibrato LFO, stopped with the voice
 
 // A resolved voice selection — which preset (if sampled) and which JS-synth patch
 // to fall back to. The live keyboard + Audio-Lab roll resolve this from global
@@ -964,11 +965,32 @@ class AudioEngine {
   // noteOn/noteOff wrap this and key by MIDI for the held-key keyboard.
   // `slide` (portamento): glide pitch FROM `slide.from` (MIDI) into `midi` over
   // `slide.durSec`, using native AudioParam ramps on the voice's pitch param.
-  startVoiceAt(midi: number, vel: number, when: number, sel?: VoiceSel, slide?: { from: number; durSec: number }): VoiceHandle {
+  // `vib` (vibrato): a sine LFO (rate Hz) → gain (depth cents) → the voice's detune.
+  startVoiceAt(
+    midi: number,
+    vel: number,
+    when: number,
+    sel?: VoiceSel,
+    slide?: { from: number; durSec: number },
+    vib?: { rate: number; depth: number },
+  ): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
     const t = when;
     const glideEnd = slide ? t + Math.max(0.01, slide.durSec) : t;
+    // build a vibrato LFO feeding the given detune params; returns the LFO osc
+    const addVibrato = (targets: AudioParam[]): OscillatorNode | undefined => {
+      if (!vib || vib.depth <= 0) return undefined;
+      const lfo = c.createOscillator();
+      lfo.type = "sine";
+      lfo.frequency.value = vib.rate;
+      const depth = c.createGain();
+      depth.gain.value = vib.depth; // cents
+      lfo.connect(depth);
+      targets.forEach((p) => depth.connect(p));
+      lfo.start(t);
+      return lfo;
+    };
 
     // resolve which instrument to voice: an explicit per-channel selection, or
     // the global live-keyboard/Audio-Lab selection when none is passed.
@@ -993,11 +1015,12 @@ class AudioEngine {
         if (src.detune) src.detune.value = cents;
         else src.playbackRate.value *= Math.pow(2, cents / 1200);
       }
-      // portamento: detune (cents) glides from the source pitch up/down to 0 (target)
+      // portamento: detune (cents) glides from the source pitch to the target
       if (slide && src.detune) {
+        const base = src.detune.value; // humanize offset (0 if none)
         const off = (slide.from - midi) * 100;
-        src.detune.setValueAtTime(src.detune.value + off, t);
-        src.detune.linearRampToValueAtTime(src.detune.value, glideEnd);
+        src.detune.setValueAtTime(base + off, t);
+        src.detune.linearRampToValueAtTime(base, glideEnd);
       } else if (slide) {
         // detune unsupported → glide playbackRate instead
         const fromRate = Math.pow(2, (slide.from - zone.rootMidi) / 12);
@@ -1012,7 +1035,8 @@ class AudioEngine {
       vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, env.a));
       vg.gain.setTargetAtTime(peak * env.s, t + env.a, Math.max(0.03, env.d));
       src.start(t);
-      return { kind: "sample", vg, r: env.r, src };
+      const lfo = src.detune ? addVibrato([src.detune]) : undefined;
+      return { kind: "sample", vg, r: env.r, src, lfo };
     }
 
     // ── JS-synth fallback path ──
@@ -1026,11 +1050,17 @@ class AudioEngine {
     vf.frequency.setValueAtTime(p.cut, t);
     vf.frequency.linearRampToValueAtTime(Math.min(18000, p.cut + p.envAmt), t + Math.max(0.01, p.a));
     vf.frequency.setTargetAtTime(p.cut + p.envAmt * Math.max(0.15, p.s) * 0.5, t + p.a, Math.max(0.05, p.d));
+    const fromF = slide ? 440 * Math.pow(2, (slide.from + p.oct * 12 - 69) / 12) : f;
     const oscs = p.osc.map((cfg) => {
       const o = c.createOscillator();
       o.type = cfg[0];
       o.frequency.value = f;
       o.detune.value = cfg[1];
+      // portamento: glide frequency from the source pitch up/down to the target
+      if (slide) {
+        o.frequency.setValueAtTime(fromF, t);
+        o.frequency.linearRampToValueAtTime(f, glideEnd);
+      }
       o.connect(vf);
       o.start(t);
       return o;
@@ -1041,7 +1071,8 @@ class AudioEngine {
     vg.gain.setValueAtTime(0, t);
     vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, p.a));
     vg.gain.setTargetAtTime(peak * p.s, t + p.a, Math.max(0.03, p.d));
-    return { kind: "synth", vg, r: p.r, oscs, vf };
+    const lfo = addVibrato(oscs.map((o) => o.detune));
+    return { kind: "synth", vg, r: p.r, oscs, vf, lfo };
   }
 
   // Release a voice handle at an explicit time. `instant` skips the patch release.
@@ -1067,6 +1098,13 @@ class AudioEngine {
           /* already stopped */
         }
       });
+    }
+    if (h.lfo) {
+      try {
+        h.lfo.stop(stopAt); // stop the vibrato LFO with the voice
+      } catch {
+        /* already stopped */
+      }
     }
     const delayMs = (Math.max(0, stopAt - c.currentTime) + 0.1) * 1000;
     setTimeout(() => {
@@ -2165,7 +2203,8 @@ class AudioEngine {
             }
             const when = whenOf(absBeat);
             const off = when + Math.max(0.04, note.length * bd);
-            const h = this.startVoiceAt(note.pitch, note.vel, when, sel);
+            const slide = note.slideFrom != null ? { from: note.slideFrom, durSec: note.length * bd } : undefined;
+            const h = this.startVoiceAt(note.pitch, note.vel, when, sel, slide, note.vibrato);
             this.releaseVoice(h, off);
             this._seqVoices.push(h);
             if (!wrap) break;
@@ -2198,7 +2237,8 @@ class AudioEngine {
         }
         const when = whenOf(absBeat);
         const off = when + Math.max(0.04, note.length * bd);
-        const h = this.startVoiceAt(note.pitch, note.vel, when);
+        const slide = note.slideFrom != null ? { from: note.slideFrom, durSec: note.length * bd } : undefined;
+        const h = this.startVoiceAt(note.pitch, note.vel, when, undefined, slide, note.vibrato);
         this.releaseVoice(h, off);
         this._seqVoices.push(h);
         if (!this.loopOn) break;
