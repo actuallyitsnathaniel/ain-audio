@@ -281,7 +281,6 @@ export function LoopLanes() {
   return (
     <div {...dropProps} className={"flex flex-col gap-[6px] rounded-[4px] border border-transparent p-[2px] transition-colors" + ring}>
       <div className="flex items-center gap-[10px]">
-        <span className="font-mono text-[10px] tracking-[0.08em] text-faint">LOOP LANES</span>
         {pickButton}
         {hiddenInput}
         <span className="font-mono text-[9px] tracking-[0.03em] text-faint">drop audio to add</span>

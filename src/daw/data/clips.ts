@@ -18,13 +18,26 @@ export interface Note {
   // length. Chords (un-slide notes) ring independently. A slide note with no note
   // to bend falls back to articulating normally.
   slide?: boolean;
-  vibrato?: { rate: number; depth: number }; // rate Hz, depth cents — sinusoidal pitch wobble
+}
+
+// A clip-global automation lane: a free-draw curve over the timeline that modulates
+// a target. Points are sorted by beat; the curve between them is piecewise-linear.
+// `value` is normalized 0..1 — each target maps it to real units (vibrato → cents).
+// `target` is a union so more destinations (cutoff, pan…) can be added later.
+export interface AutoPoint {
+  beat: number; // beats from clip start
+  value: number; // 0..1
+}
+export interface AutoLane {
+  target: "vibrato";
+  points: AutoPoint[];
 }
 
 export interface NoteClip {
   bars: number; // clip length in bars
   beatsPerBar: number; // 4 = 4/4
   notes: Note[];
+  autos?: AutoLane[]; // clip-global automation curves (vibrato, …)
 }
 
 // A melodic MIDI channel in the beat-maker: its own instrument (preset/patch) and
@@ -46,6 +59,28 @@ export interface MidiChannel {
 // total clip length in beats
 export const clipBeats = (clip: NoteClip) => clip.bars * clip.beatsPerBar;
 
+// vibrato depth (cents) at full automation value
+export const VIB_MAX_CENTS = 120;
+
+// sample an automation curve at `beat` (piecewise-linear, clamped to the ends).
+// Empty lane → 0. Points are assumed sorted by beat (the editor keeps them sorted).
+export function sampleAuto(points: AutoPoint[], beat: number): number {
+  const n = points.length;
+  if (n === 0) return 0;
+  if (beat <= points[0].beat) return points[0].value;
+  if (beat >= points[n - 1].beat) return points[n - 1].value;
+  for (let i = 1; i < n; i++) {
+    const b = points[i];
+    if (beat <= b.beat) {
+      const a = points[i - 1];
+      const span = b.beat - a.beat;
+      const f = span <= 0 ? 0 : (beat - a.beat) / span;
+      return a.value + (b.value - a.value) * f;
+    }
+  }
+  return points[n - 1].value;
+}
+
 // monotonic-ish id for new notes drawn in the editor
 let _nid = 0;
 export const newNoteId = () => "n" + (_nid++).toString(36) + Date.now().toString(36);
@@ -55,6 +90,7 @@ export const cloneClip = (clip: NoteClip): NoteClip => ({
   bars: clip.bars,
   beatsPerBar: clip.beatsPerBar,
   notes: clip.notes.map((n) => ({ ...n })),
+  autos: clip.autos?.map((a) => ({ target: a.target, points: a.points.map((p) => ({ ...p })) })),
 });
 
 // ── default-phrase authoring helper ───────────────────────────────────────

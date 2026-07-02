@@ -9,6 +9,7 @@ import { engine } from "../../engine";
 import { SectionHead } from "../SectionHead";
 import { TrackSection } from "../TrackSection";
 import { FxRack } from "../audio-lab/FxRack";
+import { LabPanel } from "../audio-lab/LabPanel";
 import { SequencerTransport } from "./SequencerTransport";
 import { StepGrid } from "./StepGrid";
 import { MidiChannels } from "./MidiChannels";
@@ -30,15 +31,25 @@ export function Beatmaker() {
         <SectionHead num="05" title="beat maker" sub="step sequencer + melodic midi channels · runs through the fx rack" />
 
         <div className="flex flex-col gap-[16px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]">
-          <SequencerTransport />
-          <div className="overflow-x-auto">
-            <div className="min-w-[580px]">
-              <StepGrid />
+          <LabPanel title="TRANSPORT">
+            <SequencerTransport />
+          </LabPanel>
+          <LabPanel title="STEP GRID">
+            <div className="overflow-x-auto">
+              <div className="min-w-[580px]">
+                <StepGrid />
+              </div>
             </div>
-          </div>
-          <MidiChannels />
-          <LoopLanes />
-          <FxRack />
+          </LabPanel>
+          <LabPanel title="MIDI CHANNELS">
+            <MidiChannels />
+          </LabPanel>
+          <LabPanel title="LOOP LANES">
+            <LoopLanes />
+          </LabPanel>
+          <LabPanel title="FX RACK">
+            <FxRack />
+          </LabPanel>
         </div>
 
         <div className="mt-[14px] flex items-center gap-3 font-mono text-[10.5px] tracking-[0.03em] text-faint">

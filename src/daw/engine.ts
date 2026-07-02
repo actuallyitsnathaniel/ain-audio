@@ -9,7 +9,8 @@
 
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
-import { clipBeats, type MidiChannel, type Note, type NoteClip } from "./data/clips";
+import { clipBeats, sampleAuto, VIB_MAX_CENTS, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
+import { BUILTIN_PATCHES, type SynthPatch } from "./data/patches";
 import { parseMidi } from "./data/midi-file";
 import { DEFAULT_KIT, defaultSequence, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
 
@@ -17,7 +18,7 @@ export type TransportMode = "track" | "sequence";
 
 const STEP_BEATS = 0.25; // one drum step = a 1/16 note
 
-type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi";
+type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi" | "patch";
 
 export interface Levels {
   rms: number;
@@ -105,9 +106,9 @@ interface FxState {
 // amp ADSR; `r` is the release time. Discriminated by source kind so releaseVoice
 // can stop the right nodes.
 type VoiceHandle = (
-  | { kind: "synth"; vg: GainNode; r: number; oscs: OscillatorNode[]; vf: BiquadFilterNode }
+  | { kind: "synth"; vg: GainNode; r: number; oscs: OscillatorNode[]; vf: BiquadFilterNode; noiseSrc?: AudioBufferSourceNode }
   | { kind: "sample"; vg: GainNode; r: number; src: AudioBufferSourceNode }
-) & { lfo?: OscillatorNode }; // vibrato LFO, stopped with the voice
+) & { lfos?: OscillatorNode[] }; // vibrato + patch LFOs, stopped with the voice
 
 // A resolved voice selection — which preset (if sampled) and which JS-synth patch
 // to fall back to. The live keyboard + Audio-Lab roll resolve this from global
@@ -115,7 +116,7 @@ type VoiceHandle = (
 // its own instrument.
 interface VoiceSel {
   preset?: SampledPreset;
-  patch: string; // PATCHES key
+  patch: string; // synth patch id (key into engine.patches)
   dest?: AudioNode; // where the voice connects (a channel's gain node); default n.sum
 }
 
@@ -126,35 +127,39 @@ interface NoteRun {
   endBeat: number; // end of the last note in the run
   pitch: number; // head note's articulated pitch
   vel: number;
-  vibrato?: { rate: number; depth: number };
-  bends: { toMidi: number; atBeat: number }[]; // pitch reached by each slide note's END
-}
-
-interface Patch {
-  osc: [OscillatorType, number][];
-  oct: number;
-  cut: number;
-  envAmt: number;
-  q: number;
-  a: number;
-  d: number;
-  s: number;
-  r: number;
-  vol: number;
+  // each slide note: hold the previous pitch until `fromBeat` (its start), then
+  // glide to `toMidi`, reaching it at `atBeat` (its end).
+  bends: { toMidi: number; fromBeat: number; atBeat: number }[];
 }
 
 const LS_WET = "ain-masterlab-wet";
+const LS_PATCHES = "ain-synth-patches"; // user-designed patches: { name: SynthPatch }
 const posKey = (id: string) => "ain-pos:" + id;
 const db2lin = (db: number) => Math.pow(10, db / 20);
 
-// ── preset synth patches (Splice-style preset showcase) ──
-// Demo web-synth patches stand in for real preset one-shots; voices route
-// into the sum node so they run through the visitor FX chain.
-const PATCHES: Record<string, Patch> = {
-  "glass pad": { osc: [["sawtooth", -7], ["sawtooth", 7]], oct: 0, cut: 900, envAmt: 900, q: 0.9, a: 0.16, d: 0.4, s: 0.7, r: 0.9, vol: 0.13 },
-  "neon pluck": { osc: [["square", -4], ["sawtooth", 4]], oct: 0, cut: 500, envAmt: 2600, q: 2.4, a: 0.004, d: 0.28, s: 0.0, r: 0.28, vol: 0.16 },
-  "sub bass": { osc: [["sine", 0], ["triangle", 2]], oct: -1, cut: 420, envAmt: 160, q: 0.7, a: 0.006, d: 0.12, s: 0.9, r: 0.16, vol: 0.24 },
-};
+function loadUserPatches(): Record<string, SynthPatch> {
+  try {
+    return JSON.parse(localStorage.getItem(LS_PATCHES) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+// shallow-recursive partial + merge for editing a patch (its nesting is one level:
+// osc1/osc2/sub/noise/filter/filtEnv/ampEnv/lfo are flat objects of primitives).
+type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
+function deepMerge<T extends object>(base: T, patch: DeepPartial<T>): T {
+  const out = { ...base } as T;
+  for (const k in patch) {
+    const v = patch[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      out[k] = { ...(base[k] as object), ...(v as object) } as T[Extract<keyof T, string>];
+    } else if (v !== undefined) {
+      out[k] = v as T[Extract<keyof T, string>];
+    }
+  }
+  return out;
+}
 
 class AudioEngine {
   ctx: AudioContext | null = null;
@@ -184,8 +189,67 @@ class AudioEngine {
   // current reverb IR for the UI selector: "synth" or a loaded IR url
   reverbIR = "synth";
 
-  synthPatch = "glass pad";
-  synthPatches = Object.keys(PATCHES);
+  synthPatch = "glass pad"; // active synth patch id
+  // merged patch store: built-ins + user patches (loaded from localStorage at boot).
+  // Built-ins can be edited live for the session but are NOT persisted — they reset
+  // to factory on reload; `saveUserPatch` captures the working sound as a user patch.
+  patches: Record<string, SynthPatch> = { ...structuredClone(BUILTIN_PATCHES), ...loadUserPatches() };
+  get synthPatches(): string[] {
+    return Object.keys(this.patches);
+  }
+  currentPatch(): SynthPatch {
+    return this.patches[this.synthPatch] || BUILTIN_PATCHES["glass pad"];
+  }
+  isBuiltinPatch(id: string): boolean {
+    return id in BUILTIN_PATCHES;
+  }
+
+  // ── synth patch editing + save/recall (live; the SynthEditor calls these) ──
+  // Deep-merge a partial into the ACTIVE patch. Voices pick it up on the next note
+  // (no live re-voicing of held notes — matches how a hardware synth latches per
+  // note). Persists if the active patch is a user patch. Emits `patch`.
+  updateActivePatch(partial: DeepPartial<SynthPatch>) {
+    const cur = this.patches[this.synthPatch];
+    if (!cur) return;
+    this.patches[this.synthPatch] = deepMerge(cur, partial);
+    if (!this.isBuiltinPatch(this.synthPatch)) this.persistUserPatches();
+    this.emit("patch");
+  }
+  // Save the active patch's current sound under `name` as a user patch, select it.
+  // Saving over a built-in name is disallowed (keeps factory presets pristine).
+  saveUserPatch(name: string): boolean {
+    name = name.trim();
+    if (!name || name in BUILTIN_PATCHES) return false;
+    this.patches[name] = structuredClone(this.currentPatch());
+    this.synthPatch = name;
+    this.persistUserPatches();
+    this.emit("patch");
+    this.emit("synth");
+    return true;
+  }
+  deleteUserPatch(name: string) {
+    if (this.isBuiltinPatch(name) || !(name in this.patches)) return;
+    delete this.patches[name];
+    if (this.synthPatch === name) this.synthPatch = Object.keys(BUILTIN_PATCHES)[0];
+    this.persistUserPatches();
+    this.emit("patch");
+    this.emit("synth");
+  }
+  // restore a built-in to its factory sound (undo live edits this session)
+  revertPatch(id: string) {
+    if (!this.isBuiltinPatch(id)) return;
+    this.patches[id] = structuredClone(BUILTIN_PATCHES[id]);
+    this.emit("patch");
+  }
+  private persistUserPatches() {
+    const user: Record<string, SynthPatch> = {};
+    for (const id in this.patches) if (!this.isBuiltinPatch(id)) user[id] = this.patches[id];
+    try {
+      localStorage.setItem(LS_PATCHES, JSON.stringify(user));
+    } catch {
+      /* storage full / unavailable — session-only is acceptable */
+    }
+  }
 
   // ── sampled presets (real bounced one-shots; JS synth is the fallback) ──
   samplePresets: SampledPreset[] = PRESETS;
@@ -204,6 +268,11 @@ class AudioEngine {
   private _seqVoices: VoiceHandle[] = []; // voices started by the scheduler
   private static SCHED_INTERVAL = 25; // ms — clock tick
   private static SCHED_AHEAD = 0.12; // s — schedule this far ahead of currentTime
+  private static VIB_RATE = 5.5; // Hz — vibrato LFO rate (depth is automated)
+  // "tiny fade at play and stop" (REAPER-style): a short gain ramp on every source
+  // start/stop so the transport never hard-cuts a buffer mid-cycle (which clicks).
+  // ≤15 ms keeps the stop tight/performative (below the ~20 ms perceptual threshold).
+  private static DECLICK = 0.012; // s
 
   // ── beat-maker (drum step sequencer; shares the clock above) ──
   // beatMode switches the scheduler between the piano-roll note clip and the
@@ -213,6 +282,7 @@ class AudioEngine {
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   loops: LoopLane[] = LOOPS;
   private _drumBufs: Record<string, AudioBuffer | null> = {}; // laneId → decoded one-shot (null = use synth)
+  private _noiseBufs: Partial<Record<"white" | "pink", AudioBuffer>> = {}; // synth noise sources, built once
   private _loopBufs: Record<string, AudioBuffer> = {}; // loopId → decoded buffer
   private _loopPeaks: Record<string, Float32Array> = {}; // loopId → cached waveform peaks
   private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode; startCtx: number; startOff: number }> = {}; // live looping voices
@@ -677,20 +747,61 @@ class AudioEngine {
     sMaster.connect(n.tapMaster);
     sMaster.start(when, offset);
     srcs.push(sMaster);
+    // declick: fade the tap gains 0→1 over DECLICK from the sources' start sample, so
+    // a buffer that starts mid-cycle doesn't pop. tapMix/tapMaster carry ONLY the
+    // track (not the beat), and gain-only ramps don't touch source timing → phase
+    // lock is preserved.
+    const d = AudioEngine.DECLICK;
+    for (const g of [n.tapMix.gain, n.tapMaster.gain]) {
+      g.cancelScheduledValues(when);
+      g.setValueAtTime(0, when);
+      g.linearRampToValueAtTime(1, when + d);
+    }
     this._srcs = srcs;
     this._startCtx = when;
   }
 
   private stopSources() {
-    (this._srcs || []).forEach((s) => {
+    const srcs = this._srcs;
+    this._srcs = null;
+    if (!srcs || !this.ctx) {
+      srcs?.forEach((s) => {
+        try {
+          s.stop();
+          s.disconnect();
+        } catch {
+          /* already stopped */
+        }
+      });
+      return;
+    }
+    // declick: fade the tap gains to 0 over DECLICK, then stop just after the fade
+    // completes (a bare stop() would cut the buffer mid-cycle and click).
+    const c = this.ctx;
+    const t = c.currentTime;
+    const d = AudioEngine.DECLICK;
+    const n = this.nodes!;
+    for (const g of [n.tapMix.gain, n.tapMaster.gain]) {
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(g.value, t);
+      g.linearRampToValueAtTime(0, t + d);
+    }
+    const stopAt = t + d + 0.005;
+    srcs.forEach((s) => {
       try {
-        s.stop();
-        s.disconnect();
+        s.stop(stopAt);
       } catch {
         /* already stopped */
       }
     });
-    this._srcs = null;
+    // disconnect after the fade+stop; leave the tap gains at 0 (next start re-ramps them)
+    setTimeout(() => srcs.forEach((s) => {
+      try {
+        s.disconnect();
+      } catch {
+        /* fine */
+      }
+    }), (d + 0.02) * 1000);
   }
 
   async play() {
@@ -872,12 +983,12 @@ class AudioEngine {
     const preset = this.samplePresets.find((pr) => pr.id === name);
     if (preset) {
       this.samplePreset = preset.id;
-      this.synthPatch = preset.fallbackPatch && PATCHES[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
+      this.synthPatch = preset.fallbackPatch && this.patches[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
       void this.loadPreset(preset.id);
       this.emit("synth");
       return;
     }
-    if (PATCHES[name]) {
+    if (this.patches[name]) {
       this.synthPatch = name;
       this.emit("synth");
     }
@@ -969,6 +1080,35 @@ class AudioEngine {
     return { buf: bufs[idx]!, rootMidi: effRoot };
   }
 
+  // a 2-second looping noise buffer (white or pink), built once and reused by every
+  // voice's noise source. Pink uses the cheap Paul Kellet approximation.
+  private noiseBuf(type: "white" | "pink"): AudioBuffer {
+    const cached = this._noiseBufs[type];
+    if (cached) return cached;
+    const c = this.ensureCtx();
+    const len = c.sampleRate * 2;
+    const buf = c.createBuffer(1, len, c.sampleRate);
+    const d = buf.getChannelData(0);
+    if (type === "white") {
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    } else {
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < len; i++) {
+        const w = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + w * 0.0555179;
+        b1 = 0.99332 * b1 + w * 0.0750759;
+        b2 = 0.969 * b2 + w * 0.153852;
+        b3 = 0.8665 * b3 + w * 0.3104856;
+        b4 = 0.55 * b4 + w * 0.5329522;
+        b5 = -0.7616 * b5 - w * 0.016898;
+        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
+        b6 = w * 0.115926;
+      }
+    }
+    this._noiseBufs[type] = buf;
+    return buf;
+  }
+
   // ── voice factory (shared by live keyboard + sequencer scheduler) ──
   // Build and start a voice at an explicit context time `when`. Returns a handle
   // the caller releases via releaseVoice(handle, when). Used directly by the
@@ -983,8 +1123,10 @@ class AudioEngine {
     vel: number,
     when: number,
     sel?: VoiceSel,
-    bends?: { toMidi: number; at: number }[],
-    vib?: { rate: number; depth: number },
+    bends?: { toMidi: number; from: number; at: number }[], // hold until `from`, glide to `toMidi` by `at`
+    // vibrato: depth follows a clip-global automation curve over the note's window.
+    // `whenOfBeat(absClipBeat)` maps a clip beat to absolute ctx time.
+    autoVib?: { points: AutoPoint[]; startBeat: number; endBeat: number; whenOfBeat: (b: number) => number },
   ): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
@@ -1001,16 +1143,35 @@ class AudioEngine {
             ? 440 * Math.pow(2, (m + base - 69) / 12)
             : Math.pow(2, (m - base) / 12);
       param.setValueAtTime(val(midi), t);
-      for (const b of bends) param.linearRampToValueAtTime(val(b.toMidi), Math.max(t + 0.005, b.at));
+      let prevPitch = midi;
+      for (const b of bends) {
+        // hold the current pitch until the slide note begins, THEN glide to it,
+        // so the bend happens during the slide note (not from the head's start)
+        param.setValueAtTime(val(prevPitch), Math.max(t, b.from));
+        param.linearRampToValueAtTime(val(b.toMidi), Math.max(b.from + 0.005, b.at));
+        prevPitch = b.toMidi;
+      }
     };
-    // build a vibrato LFO feeding the given detune params; returns the LFO osc
+    // build a vibrato LFO whose DEPTH follows the clip-global automation curve over
+    // the note's window. Sine LFO at a fixed rate → depth gain (scheduled along the
+    // curve, cents) → the detune targets. No curve / all-zero ⇒ no LFO.
     const addVibrato = (targets: AudioParam[]): OscillatorNode | undefined => {
-      if (!vib || vib.depth <= 0) return undefined;
+      if (!autoVib || !autoVib.points.length) return undefined;
+      const { points, startBeat, endBeat, whenOfBeat } = autoVib;
+      // breakpoints inside the note's window, plus the window edges, give the ramp set
+      const edges = [startBeat, ...points.map((p) => p.beat).filter((b) => b > startBeat && b < endBeat), endBeat];
+      let anyDepth = false;
+      const depth = c.createGain();
+      depth.gain.setValueAtTime(sampleAuto(points, startBeat) * VIB_MAX_CENTS, t);
+      for (const b of edges) {
+        const cents = sampleAuto(points, b) * VIB_MAX_CENTS;
+        if (cents > 0.01) anyDepth = true;
+        depth.gain.linearRampToValueAtTime(cents, Math.max(t, whenOfBeat(b)));
+      }
+      if (!anyDepth) return undefined; // curve is flat-zero over this note → skip
       const lfo = c.createOscillator();
       lfo.type = "sine";
-      lfo.frequency.value = vib.rate;
-      const depth = c.createGain();
-      depth.gain.value = vib.depth; // cents
+      lfo.frequency.value = AudioEngine.VIB_RATE;
       lfo.connect(depth);
       targets.forEach((p) => depth.connect(p));
       lfo.start(t);
@@ -1053,51 +1214,113 @@ class AudioEngine {
       vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, env.a));
       vg.gain.setTargetAtTime(peak * env.s, t + env.a, Math.max(0.03, env.d));
       src.start(t);
-      const lfo = src.detune ? addVibrato([src.detune]) : undefined;
-      return { kind: "sample", vg, r: env.r, src, lfo };
+      const vibLfo = src.detune ? addVibrato([src.detune]) : undefined;
+      return { kind: "sample", vg, r: env.r, src, lfos: vibLfo ? [vibLfo] : undefined };
     }
 
-    // ── JS-synth fallback path ──
-    const p = PATCHES[patchKey] || PATCHES[this.synthPatch];
-    const f = 440 * Math.pow(2, (midi + p.oct * 12 - 69) / 12);
-    const vg = c.createGain();
+    // ── subtractive synth path ──
+    // osc1 + osc2 + sub + noise → (per-source level gain) → filter → amp gain → dest
+    const p = this.patches[patchKey] || this.currentPatch();
+    const freqOf = (semi: number) => 440 * Math.pow(2, (midi + semi - 69) / 12);
+    const vg = c.createGain(); // amp
     vg.gain.value = 0;
     const vf = c.createBiquadFilter();
-    vf.type = "lowpass";
-    vf.Q.value = p.q;
-    vf.frequency.setValueAtTime(p.cut, t);
-    vf.frequency.linearRampToValueAtTime(Math.min(18000, p.cut + p.envAmt), t + Math.max(0.01, p.a));
-    vf.frequency.setTargetAtTime(p.cut + p.envAmt * Math.max(0.15, p.s) * 0.5, t + p.a, Math.max(0.05, p.d));
-    const oscs = p.osc.map((cfg) => {
-      const o = c.createOscillator();
-      o.type = cfg[0];
-      o.frequency.value = f;
-      o.detune.value = cfg[1];
-      // portamento: glide frequency through the bend segments (oct shift baked in)
-      applyBends(o.frequency, "freq", p.oct * 12);
-      o.connect(vf);
-      o.start(t);
-      return o;
-    });
+    vf.type = p.filter.type;
+    vf.Q.value = p.filter.q;
+    // key-tracking: cutoff scales with how far the note is from C4
+    const cutBase = Math.min(18000, p.filter.cut * Math.pow(2, (p.filter.keyTrack * (midi - 60)) / 12));
+    // filter envelope (ADSR) on cutoff, peaking at cutBase + amt
+    const fe = p.filtEnv;
+    const cutPeak = Math.max(20, Math.min(18000, cutBase + fe.amt));
+    const cutSus = Math.max(20, Math.min(18000, cutBase + fe.amt * fe.s));
+    vf.frequency.setValueAtTime(cutBase, t);
+    vf.frequency.linearRampToValueAtTime(cutPeak, t + Math.max(0.005, fe.a));
+    vf.frequency.setTargetAtTime(cutSus, t + fe.a, Math.max(0.03, fe.d));
     vf.connect(vg);
     vg.connect(dest);
+
+    const oscs: OscillatorNode[] = [];
+    // a pitched oscillator at `semi` offset, mixed at `level`, with portamento bends
+    const addOsc = (wave: OscillatorType, semi: number, cents: number, level: number) => {
+      if (level <= 0) return;
+      const o = c.createOscillator();
+      o.type = wave;
+      o.frequency.value = freqOf(semi);
+      o.detune.value = cents;
+      applyBends(o.frequency, "freq", semi); // glide this osc's own pitch line
+      const g = c.createGain();
+      g.gain.value = level;
+      o.connect(g);
+      g.connect(vf);
+      o.start(t);
+      oscs.push(o);
+    };
+    addOsc(p.osc1.wave, p.osc1.semi, p.osc1.cents, p.osc1.level);
+    if (p.osc2On) addOsc(p.osc2.wave, p.osc2.semi, p.osc2.cents, p.osc2.level);
+    if (p.sub.level > 0) addOsc(p.sub.wave, p.sub.oct * 12, 0, p.sub.level);
+
+    // noise source (unpitched) → its own level gain → filter
+    let noiseSrc: AudioBufferSourceNode | undefined;
+    if (p.noise.level > 0) {
+      noiseSrc = c.createBufferSource();
+      noiseSrc.buffer = this.noiseBuf(p.noise.type);
+      noiseSrc.loop = true;
+      const ng = c.createGain();
+      ng.gain.value = p.noise.level;
+      noiseSrc.connect(ng);
+      ng.connect(vf);
+      noiseSrc.start(t);
+    }
+
+    // amp envelope
+    const ae = p.ampEnv;
     const peak = p.vol * vel;
     vg.gain.setValueAtTime(0, t);
-    vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, p.a));
-    vg.gain.setTargetAtTime(peak * p.s, t + p.a, Math.max(0.03, p.d));
-    const lfo = addVibrato(oscs.map((o) => o.detune));
-    return { kind: "synth", vg, r: p.r, oscs, vf, lfo };
+    vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, ae.a));
+    vg.gain.setTargetAtTime(peak * ae.s, t + ae.a, Math.max(0.03, ae.d));
+
+    // LFOs: per-note vibrato (always to osc detune) + the patch LFO routed to its
+    // destination. Both are stopped with the voice in releaseVoice.
+    const lfos: OscillatorNode[] = [];
+    const vibLfo = addVibrato(oscs.map((o) => o.detune));
+    if (vibLfo) lfos.push(vibLfo);
+    if (p.lfo.dest !== "off" && p.lfo.depth > 0) {
+      const l = c.createOscillator();
+      l.type = "sine";
+      l.frequency.value = p.lfo.rate;
+      const lg = c.createGain();
+      lg.gain.value = p.lfo.depth;
+      l.connect(lg);
+      if (p.lfo.dest === "pitch") oscs.forEach((o) => lg.connect(o.detune)); // depth = cents
+      else if (p.lfo.dest === "cutoff") lg.connect(vf.frequency); // depth = Hz
+      else lg.connect(vg.gain); // amp tremolo, depth = linear gain
+      l.start(t);
+      lfos.push(l);
+    }
+    return { kind: "synth", vg, r: ae.r, oscs, vf, noiseSrc, lfos };
   }
 
-  // Release a voice handle at an explicit time. `instant` skips the patch release.
+  // Release a voice at an explicit time. `instant` skips the patch release.
+  // `cancelAndHoldAtTime` holds the level the amp envelope has at `when` (the
+  // sequencer calls this at schedule time, so `.value` would be a stale ~0), then
+  // the release is an EXPONENTIAL decay via `setTargetAtTime` — a natural instrument
+  // tail (fast at first, long quiet fade), not a linear straight-line fade that
+  // sounds abrupt and gets re-articulated when the next chord lands. Sources are
+  // stopped only once the exponential tail is well below audibility (~5 time
+  // constants), so the tail rings out instead of being cut.
   releaseVoice(h: VoiceHandle, when: number, instant?: boolean) {
     const c = this.ctx!;
     const t = when;
-    const r = instant ? 0.03 : h.r;
-    h.vg.gain.cancelScheduledValues(t);
-    h.vg.gain.setValueAtTime(h.vg.gain.value, t);
-    h.vg.gain.setTargetAtTime(0, t, Math.max(0.01, r / 4));
-    const stopAt = t + r + 0.15;
+    const r = Math.max(0.015, instant ? 0.03 : h.r);
+    if (h.vg.gain.cancelAndHoldAtTime) h.vg.gain.cancelAndHoldAtTime(t);
+    else {
+      h.vg.gain.cancelScheduledValues(t);
+      h.vg.gain.setValueAtTime(h.vg.gain.value, t);
+    }
+    // exponential approach to 0 (time constant r/3 → ~95% gone by r, inaudible by ~5·tc)
+    const tc = r / 3;
+    h.vg.gain.setTargetAtTime(0, t, tc);
+    const stopAt = t + tc * 6 + 0.02; // let the exponential tail ring out before stop
     if (h.kind === "sample") {
       try {
         h.src.stop(stopAt);
@@ -1112,14 +1335,21 @@ class AudioEngine {
           /* already stopped */
         }
       });
+      if (h.noiseSrc) {
+        try {
+          h.noiseSrc.stop(stopAt);
+        } catch {
+          /* already stopped */
+        }
+      }
     }
-    if (h.lfo) {
+    h.lfos?.forEach((l) => {
       try {
-        h.lfo.stop(stopAt); // stop the vibrato LFO with the voice
+        l.stop(stopAt); // stop vibrato + patch LFOs with the voice
       } catch {
         /* already stopped */
       }
-    }
+    });
     const delayMs = (Math.max(0, stopAt - c.currentTime) + 0.1) * 1000;
     setTimeout(() => {
       try {
@@ -1335,16 +1565,19 @@ class AudioEngine {
   // resolve a channel's instrument to a VoiceSel for the voice factory
   private channelVoice(ch: MidiChannel): VoiceSel {
     const preset = this.samplePresets.find((pr) => pr.id === ch.presetId);
-    const patch = PATCHES[ch.presetId] ? ch.presetId : preset?.fallbackPatch && PATCHES[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
+    const patch = this.patches[ch.presetId] ? ch.presetId : preset?.fallbackPatch && this.patches[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
     return { preset, patch, dest: this.channelStrip(ch) };
   }
 
   // Group a clip's notes into FL-style legato voice runs. A `slide` note that is
   // contiguous with (or overlaps) the currently-open run bends that one voice to a
   // new pitch (no re-attack); anything else opens a fresh run. An orphan slide (no
-  // open run to continue) articulates normally as its own head. Notes are processed
-  // in start order; this is the monophonic-per-channel rule (chords go on their own
-  // channel, where successive non-slide notes simply each open their own run).
+  // open run to continue) articulates normally as its own head.
+  //
+  // Monophonic-per-channel: a `slide` chains onto the LAST-opened run. Non-slide
+  // chord tones each open their own (independent) run, so a chord rings untouched —
+  // but a slide placed right after a chord chains onto the top chord tone (the last
+  // opened). For a clean sliding lead over chords, put the lead on its own channel.
   private buildRuns(notes: Note[]): NoteRun[] {
     const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
     const runs: NoteRun[] = [];
@@ -1353,10 +1586,10 @@ class AudioEngine {
     for (const n of sorted) {
       // a slide note continues the open run if it starts at/before that run's end
       if (n.slide && open && n.start <= open.endBeat + EPS) {
-        open.bends.push({ toMidi: n.pitch, atBeat: n.start + n.length });
+        open.bends.push({ toMidi: n.pitch, fromBeat: n.start, atBeat: n.start + n.length });
         open.endBeat = Math.max(open.endBeat, n.start + n.length);
       } else {
-        open = { startBeat: n.start, endBeat: n.start + n.length, pitch: n.pitch, vel: n.vel, vibrato: n.vibrato, bends: [] };
+        open = { startBeat: n.start, endBeat: n.start + n.length, pitch: n.pitch, vel: n.vel, bends: [] };
         runs.push(open);
       }
     }
@@ -1379,7 +1612,7 @@ class AudioEngine {
   addChannel(): MidiChannel | null {
     const chans = this.sequence.channels;
     if (chans.length >= AudioEngine.MAX_CHANNELS) return null;
-    const presetId = this.samplePresets[0]?.id || Object.keys(PATCHES)[0];
+    const presetId = this.samplePresets[0]?.id || this.synthPatches[0];
     const ch: MidiChannel = {
       id: "ch" + ++this._chSeq + Date.now().toString(36),
       name: "channel " + (chans.length + 1),
@@ -1799,10 +2032,15 @@ class AudioEngine {
 
   private stopLoops() {
     const now = this.ctx ? this.ctx.currentTime : 0;
+    const d = AudioEngine.DECLICK;
     for (const id in this._loopNodes) {
       const { src, gain } = this._loopNodes[id];
+      // declick: fade the loop gain to 0, then stop just after the fade completes
       try {
-        src.stop(now + 0.02);
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(gain.gain.value, now);
+        gain.gain.linearRampToValueAtTime(0, now + d);
+        src.stop(now + d + 0.005);
       } catch {
         /* fine */
       }
@@ -1838,9 +2076,13 @@ class AudioEngine {
     const node = this._loopNodes[id];
     if (!node) return;
     const now = this.ctx!.currentTime;
-    node.gain.gain.setTargetAtTime(0, now, 0.03);
+    // declick: linear fade to true 0 over DECLICK, stop just after it completes
+    // (the old setTargetAtTime only approached 0 and was cut ~3 time-constants in).
+    node.gain.gain.cancelScheduledValues(now);
+    node.gain.gain.setValueAtTime(node.gain.gain.value, now);
+    node.gain.gain.linearRampToValueAtTime(0, now + AudioEngine.DECLICK);
     try {
-      node.src.stop(now + 0.1);
+      node.src.stop(now + AudioEngine.DECLICK + 0.005);
     } catch {
       /* fine */
     }
@@ -2057,11 +2299,21 @@ class AudioEngine {
     return 60 / this.bpm;
   }
 
-  // total beats of whatever's currently playing (drum sequence vs. note clip).
-  // A drum step = one 1/16 note = 0.25 beat, so the grid is steps × 0.25 beats.
+  // total beats of whatever's currently playing. In beat mode the transport loops
+  // over the LONGEST element — the drum grid, any MIDI channel clip, or any "on"
+  // loop — rather than letting the drum grid alone dictate length. So a 2-bar MIDI
+  // phrase under a 1-bar drum pattern plays its full length instead of being cut at
+  // bar 1. (A stopgap until a real timeline; channels with their own `loop` flag
+  // still repeat over their own clip within this total.)
   private activeTotalBeats(): number {
-    if (this.beatMode) return this.sequence.steps * STEP_BEATS;
-    return this._clip ? clipBeats(this._clip) : 0;
+    if (!this.beatMode) return this._clip ? clipBeats(this._clip) : 0;
+    const seq = this.sequence;
+    let total = seq.steps * STEP_BEATS; // drum grid
+    for (const ch of seq.channels) total = Math.max(total, clipBeats(ch.clip));
+    for (const l of this.loops) {
+      if (this.sequence.loops[l.id]?.on) total = Math.max(total, l.bars * seq.beatsPerBar);
+    }
+    return total;
   }
 
   // current beat position within the active loop, from the ctx clock
@@ -2199,14 +2451,17 @@ class AudioEngine {
 
     if (this.beatMode) {
       const seq = this.sequence;
+      // the drum pattern tiles over its OWN grid length (so a 1-bar pattern repeats
+      // to fill a longer track), independent of the transport total.
+      const gridBeats = seq.steps * STEP_BEATS;
       // swing pushes odd steps later by up to ~1/3 of a step
       const swingBeats = seq.swing * STEP_BEATS * 0.66;
       for (let s = 0; s < seq.steps; s++) {
         const stepBeat = s * STEP_BEATS + (s % 2 === 1 ? swingBeats : 0);
-        let k = Math.floor((fromBeatAbs - stepBeat) / total);
+        let k = Math.floor((fromBeatAbs - stepBeat) / gridBeats);
         if (!this.loopOn) k = 0;
         for (; ; k++) {
-          const absBeat = stepBeat + (this.loopOn ? k * total : 0);
+          const absBeat = stepBeat + (this.loopOn ? k * gridBeats : 0);
           if (absBeat >= toBeatAbs) break;
           if (absBeat < fromBeatAbs) {
             if (!this.loopOn) break;
@@ -2229,6 +2484,7 @@ class AudioEngine {
         const span = ch.loop ? clipBeats(ch.clip) : total;
         const wrap = ch.loop || this.loopOn; // repeat if the channel or transport loops
         if (span <= 0) continue;
+        const vibPts = ch.clip.autos?.find((a) => a.target === "vibrato")?.points;
         // group into legato runs so `slide` notes bend the previous voice (FL-style)
         // instead of articulating a new one. One voice per run, per wrap pass.
         for (const run of this.buildRuns(ch.clip.notes)) {
@@ -2245,18 +2501,22 @@ class AudioEngine {
             const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
             // bend points: each slide note's END maps to an absolute ctx time
             const bends = run.bends.length
-              ? run.bends.map((b) => ({ toMidi: b.toMidi, at: when + (b.atBeat - run.startBeat) * bd }))
+              ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
               : undefined;
-            const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, run.vibrato);
+            const autoVib = vibPts?.length
+              ? { points: vibPts, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd }
+              : undefined;
+            const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, autoVib);
             this.releaseVoice(h, off);
             this._seqVoices.push(h);
             if (!wrap) break;
           }
         }
       }
-      // ponytail: voice ceiling. With 8 channels × 64 steps this prune is what
-      // bounds OscillatorNode/BufferSource accumulation. Upgrade path if it ever
-      // bites: a per-channel polyphony cap before scheduling, not after.
+      // ponytail: voice ceiling. A subtractive synth voice is ≤ ~14 nodes (2 osc +
+      // sub + noise + per-source gains + filter + amp + up to 2 LFOs); this prune
+      // bounds total node accumulation across 8 channels × 64 steps. Upgrade path if
+      // it ever bites: a per-channel polyphony cap before scheduling, not after.
       if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
       this._scheduledThrough = horizon;
       return;
@@ -2268,6 +2528,7 @@ class AudioEngine {
       this._scheduledThrough = horizon;
       return;
     }
+    const clipVibPts = clip.autos?.find((a) => a.target === "vibrato")?.points;
     for (const run of this.buildRuns(clip.notes)) {
       let k = Math.floor((fromBeatAbs - run.startBeat) / total);
       if (!this.loopOn) k = 0;
@@ -2281,9 +2542,12 @@ class AudioEngine {
         const when = whenOf(absBeat);
         const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
         const bends = run.bends.length
-          ? run.bends.map((b) => ({ toMidi: b.toMidi, at: when + (b.atBeat - run.startBeat) * bd }))
+          ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
           : undefined;
-        const h = this.startVoiceAt(run.pitch, run.vel, when, undefined, bends, run.vibrato);
+        const autoVib = clipVibPts?.length
+          ? { points: clipVibPts, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd }
+          : undefined;
+        const h = this.startVoiceAt(run.pitch, run.vel, when, undefined, bends, autoVib);
         this.releaseVoice(h, off);
         this._seqVoices.push(h);
         if (!this.loopOn) break;
