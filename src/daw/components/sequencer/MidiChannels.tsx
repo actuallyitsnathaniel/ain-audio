@@ -179,7 +179,7 @@ function ChannelRow({ ch, armed, onArm }: { ch: MidiChannel; armed: boolean; onA
         <button
           onClick={() => engine.toggleChannelCollapsed(ch.id)}
           title={collapsed ? "expand" : "collapse"}
-          className="font-mono text-[10px] text-faint transition-colors hover:text-accent"
+          className="font-mono text-[30px] leading-none text-faint transition-colors hover:text-accent"
           aria-label={collapsed ? "expand channel" : "collapse channel"}
         >
           {collapsed ? "▸" : "▾"}
@@ -287,7 +287,6 @@ export function MidiChannels() {
   return (
     <div className="flex flex-col gap-[10px]">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="font-mono text-[10.5px] tracking-[0.1em] text-daw-text">MIDI CHANNELS</span>
         <button
           onClick={() => engine.addChannel()}
           disabled={atCap}

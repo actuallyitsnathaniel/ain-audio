@@ -74,6 +74,29 @@ chain the peak is unpredictable. Two guards, deliberately separate:
    `engine.getReduction()` returns its live gain reduction (dB) — the LIMIT device's "peak" LED
    lights when it engages (rAF-driven, imperative, lint-safe).
 
+## Click safety (declick) — how the engine matches pro-DAW practice
+
+Any time a buffer/oscillator source is `stop()`ed while its gain is non-zero, the waveform is cut
+mid-cycle → a click. The engine avoids this everywhere a source starts/stops:
+
+- **Note release** (`releaseVoice`) — `cancelAndHoldAtTime` holds the amp-env level, then an
+  **exponential** decay (`setTargetAtTime(0, …, r/3)`); the source is stopped ~6 time-constants later so
+  the tail rings out naturally (a linear ramp sounded abrupt and re-articulated on the next chord).
+- **Transport declick** — the "tiny fade at play and stop" every pro DAW ships (REAPER names it exactly
+  that; ~10 ms, kept ≤15 ms so the stop stays tight/performative). Applied via `AudioEngine.DECLICK`:
+  `startSources` fades the track tap gains 0→1 on start; `stopSources` fades 1→0 then stops just after;
+  `stopLoops`/`stopOneLoop` fade each loop's gain to 0 then stop. Gain-only ramps don't touch source
+  *timing*, so the A/B **phase-lock invariant** is preserved.
+- **Synth drums** already use `exponentialRampToValueAtTime(0.0001)`; the **FX-rack reorder** already
+  ducks `n.sum` around the rewire.
+
+**Deliberately NOT declicked** — parameter automations (FX mix, channel vol/pan, level-match, delay/
+reverb) already ramp via `setTargetAtTime` with time constants (zipper-free); adding fades there would
+be redundant. And native-DSP hygiene (denormals, lock-free, block processing) is the **browser's** job —
+Web Audio nodes run in its C++ audio thread; we only schedule `AudioParam` goals ahead of time (the
+control-rate/audio-rate "two-speed" split, done via the lookahead scheduler). Zero-crossing snapping is
+an *editing* technique, not a real-time transport one, so it doesn't apply here.
+
 ## Sequencer scheduler + piano roll
 
 The piano roll plays a **clip** (a bar-length phrase of notes in musical time) through a
@@ -125,17 +148,27 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
 - **Navigate:** wheel → scroll pitch · shift+wheel → scroll time · ⌘/ctrl+wheel → zoom time around
   cursor · hold Space (or middle-drag) → pan. Wheel is a **non-passive native listener** so it can
   `preventDefault` the page scroll.
-- **Velocity lane:** a docked band (`VEL_H` px) at the canvas bottom sharing the time axis. Each note
-  draws a stem+cap with height ∝ velocity; drag a stem up/down to set velocity, sweep across notes to
-  paint a ramp (a multi-note selection sets together). The pitch grid renders into `gridH = h - VEL_H`;
-  pointer presses with `y ≥ gridH` are velocity edits (`Drag` mode `"vel"`).
-- **Per-note pitch modulation** (right-click a note → menu). Both are native AudioParam automation in
-  `startVoiceAt`, no DSP: **portamento** (`Note.slideFrom`, a MIDI pitch) glides the voice's pitch from
-  that source into the note's own pitch over the note's length — sample path ramps `src.detune` (cents),
-  synth path ramps `osc.frequency`; drawn as an amber diagonal lead-in. **vibrato** (`Note.vibrato =
-  {rate Hz, depth cents}`) adds a sine LFO → gain → the voice's `detune` (stopped with the voice in
-  `releaseVoice`); drawn as a violet squiggle whose amplitude tracks depth. Menu presets set
-  light/medium/heavy depth; "clear" removes them.
+- **Automation lane** (switchable, collapsible) — a docked bottom band with a `VEL | VIB` tab + a
+  collapse caret. The pitch grid renders into `gridH = h - laneH()` (`laneH` = `VEL_H` open / `LANE_TAB_H`
+  collapsed). **VEL**: per-note velocity stems (drag/sweep). **VIB**: a free-draw **clip-global vibrato
+  curve** — `AutoLane{target:"vibrato", points:[{beat,value 0..1}]}` on `NoteClip.autos`; click to add a
+  breakpoint, drag to move, ⌘/ctrl-drag to freehand, right-click/⌥ to delete. The engine samples it
+  (`sampleAuto`, piecewise-linear) and schedules the **vibrato LFO depth** along the curve over each
+  note's window (`VIB_MAX_CENTS` at value 1, fixed `VIB_RATE`). `Drag` modes `"vel" | "auto" | "autoDraw"`.
+- **Portamento (FL-style, `Note.slide`)** — a `slide` note does **not** articulate a new voice; it bends
+  the **previous note's still-ringing voice** to its pitch (no re-attack). The scheduler groups each
+  clip into legato **voice runs** via `buildRuns()` (head note + chained slide bends), emitting **one
+  voice per run**: `startVoiceAt(…, bends)` ramps the voice's pitch param through each bend point
+  (sample → `src.detune` cents; synth → `osc.frequency`). Monophonic-per-channel — chord tones each open
+  their own run and ring untouched, so a sliding lead over chords works by putting the lead on its own
+  channel. Orphan slide (no run to continue) articulates normally. Glyph: amber diagonal from the prev
+  note's pitch into this note.
+- **Vibrato** is now the **automation lane** above (clip-global curve → time-varying LFO depth), not a
+  per-note value. `Note.vibrato` was removed.
+- **Track length** — in beat mode the transport loops over the **longest** element (drum grid, any
+  channel clip, any "on" loop) via `activeTotalBeats`, not the drum grid alone, so a long MIDI phrase
+  isn't cut at the grid length. The drum pattern tiles over its own grid length to fill the longer track.
+  (Stopgap until a real timeline.)
 - **Right-click menu** (`context-menu-bus` + `<ContextMenu/>` host in DawShell): note/velocity/portamento/
   vibrato/clip actions in the roll, channel/lane/loop actions elsewhere on the beat page. Shift+right-click
   bypasses to the native browser menu.
@@ -242,10 +275,28 @@ Selecting a preset (`setSynthPatch(id)`) lazily fetches + decodes its zone files
 (`loadPreset` mirrors `fetchBuf`). `noteOn(midi, vel)` branches: if the current preset has a
 decoded zone, it plays an `AudioBufferSourceNode` pitch-shifted by `playbackRate` from the
 zone's root (`pickZone` = nearest-root + a ±7-semitone shift cap), wrapped in an amp ADSR,
-`→ sum` (so it shares the FX rack). No decoded zone ⇒ falls back to the JS-synth `PATCHES`.
+`→ sum` (so it shares the FX rack). No decoded zone ⇒ falls back to the **synth** (below).
 Presets are **auto-discovered** from `src/assets/presets/` at build time — see
 [../assets/presets/README.md](../assets/presets/README.md) for the folder/file convention,
 multisampling, and formats.
+
+## Subtractive synth (`data/patches.ts` + `startVoiceAt` synth branch + SynthEditor)
+
+A designable voice, not just preset fallbacks: **osc1 + osc2 + sub + noise → per-source level gain →
+multi-mode filter → amp gain → dest**. Two independent ADSRs (filter env on cutoff with `amt` + key-track;
+amp env on the gain) and **one routable LFO** (off / pitch→detune / cutoff→`filter.frequency` /
+amp→`gain`). Portamento `applyBends` drives **every** pitched source's frequency; per-note vibrato and the
+patch LFO coexist (both can reach detune). Noise buffers (white / Paul-Kellet pink) are built **once**
+and cached. `releaseVoice` stops oscs + sub + noise + all LFOs. A voice is ≤ ~14 nodes (bounded vs. the
+256-voice cap).
+- **Patch store** — `engine.patches` = `BUILTIN_PATCHES` (glass pad / neon pluck / sub bass, ids kept so
+  `fallbackPatch` still resolves) merged over user patches in `localStorage["ain-synth-patches"]`.
+  API (all emit `patch`): `updateActivePatch(deepPartial)` (live edit, latched per next note),
+  `saveUserPatch(name)`, `deleteUserPatch`, `revertPatch` (built-in → factory), `isBuiltinPatch`.
+  **Built-ins edit live but never persist** — they reset to factory on reload; save-as to keep a sound.
+- **Editor** — [components/audio-lab/SynthEditor.tsx](components/audio-lab/SynthEditor.tsx): knob panel
+  (OSC1 · OSC2 · SUB · NOISE · FILTER · AMP ENV · FILTER ENV · LFO) + patch bar (select / save / save-as /
+  delete / revert). Mounted in the Audio Lab under the Preset Lab; subscribes to `["patch","synth"]`.
 
 ## Reverb impulse response
 

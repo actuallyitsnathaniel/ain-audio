@@ -11,6 +11,7 @@ import { Knob } from "../Knob";
 import { cloneClip } from "../../data/clips";
 import { PianoRoll } from "./PianoRoll";
 import { abSnap, abSnapActive } from "../../lab-utils";
+import { LabPanel } from "../audio-lab/LabPanel";
 
 // imperatively tell the PianoRoll canvas to load a clip (reset / preset change)
 function loadClipInto(canvas: HTMLElement | null, clip: ReturnType<typeof cloneClip>) {
@@ -68,10 +69,8 @@ export function RollLab() {
     readout.current.textContent = pos.playing ? `${bar}.${beat}` : "—";
   });
 
-  return (
-    <div className="flex flex-col gap-[10px] border-t border-line pt-[14px]" ref={wrapRef}>
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="font-mono text-[10.5px] tracking-[0.1em] whitespace-nowrap text-daw-text">PIANO ROLL</span>
+  const controls = (
+    <>
         <PlayStop />
         <span className="font-mono text-[10.5px] tabular-nums text-accent" ref={readout}>
           —
@@ -98,7 +97,12 @@ export function RollLab() {
             fmt={(v) => Math.round(v) + " bpm"}
           />
         </span>
-      </div>
+    </>
+  );
+
+  return (
+    <LabPanel title="PIANO ROLL" controls={controls}>
+      <div ref={wrapRef} className="flex flex-col gap-[10px]">
       <PianoRoll />
       <div className="flex flex-col gap-[3px] font-mono text-[10.5px] leading-[1.55] tracking-[0.03em] text-faint">
         <span>
@@ -114,10 +118,12 @@ export function RollLab() {
           space (or middle-drag) to pan · state shows top-right
         </span>
         <span>
-          <span className="text-dim">velocity</span> · drag a note's stem in the bottom lane to set its velocity · sweep across
-          notes to paint a ramp
+          <span className="text-dim">automation lane</span> · bottom strip · <span className="text-dim">vel</span> sets note
+          velocity · <span className="text-dim">vib</span> draws a vibrato curve (click to add a point · drag to move ·
+          ⌘/ctrl-drag to freehand · right-click / ⌥ to delete) · ▾ collapses the lane
         </span>
       </div>
-    </div>
+      </div>
+    </LabPanel>
   );
 }

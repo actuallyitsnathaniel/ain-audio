@@ -7,6 +7,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../engine";
 import { useEngine } from "../hooks/useEngine";
 import { requestMidiEnable } from "./midi-gate-bus";
+import { LabPanel } from "./audio-lab/LabPanel";
 
 const PL_START = 48; // C3
 const PL_END = 64; // E4
@@ -162,10 +163,8 @@ export function PresetLab() {
   // permission prompt only fires when the user opts in (e.g. arming a channel).
   // This panel just reflects engine.midiStatus; "idle" means not yet requested.
 
-  return (
-    <div className="flex flex-col gap-[10px] border-t border-line pt-[14px]">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="font-mono text-[10.5px] tracking-[0.1em] whitespace-nowrap text-daw-text">PRESET LAB</span>
+  const controls = (
+    <>
         <span className="relative inline-flex items-center">
           <select
             value={eng.samplePreset}
@@ -210,13 +209,17 @@ export function PresetLab() {
             midi: {midiStatus === "idle" ? "connect" : midiStatus}
           </button>
         </span>
-      </div>
+    </>
+  );
+
+  return (
+    <LabPanel title="PRESET LAB" controls={controls}>
       <PresetKeyboard octave={octave} vel={vel} />
       <div className="font-mono text-[10.5px] leading-[1.6] tracking-[0.03em] text-faint">
         click · computer keys A–K (W/E/T/Y/U for sharps) · <span className="text-dim">Z / X</span> octave down / up ·{" "}
         <span className="text-dim">C / V</span> velocity down / up · or a MIDI controller — runs through the fx rack
         above. real bounced preset one-shots, pitch-mapped across the keys.
       </div>
-    </div>
+    </LabPanel>
   );
 }

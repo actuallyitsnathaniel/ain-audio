@@ -21,12 +21,12 @@
 // The working clip lives in a ref (mutated during drag for perf) and is pushed
 // to engine.setActiveClip; the lookahead scheduler plays from there.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../../engine";
 import { openContextMenu, type MenuItem } from "../context-menu-bus";
 import { useRafLoop } from "../../hooks/useRafLoop";
-import { cloneClip, clipBeats, newNoteId, type Note, type NoteClip } from "../../data/clips";
+import { cloneClip, clipBeats, newNoteId, type AutoPoint, type Note, type NoteClip } from "../../data/clips";
 
 const SNAP = 0.25; // beats (1/16)
 const ROW_H = 14; // px per semitone row
@@ -38,7 +38,8 @@ const FULL_H = (PITCH_SPAN + 1) * ROW_H;
 const MIN_PPB = 28;
 const MAX_PPB = 220;
 const DRAG_SLOP = 3; // px before a press becomes a drag
-const VEL_H = 46; // velocity lane height (px) docked at the canvas bottom
+const VEL_H = 52; // automation lane height (px) docked at the canvas bottom when open
+const LANE_TAB_H = 16; // collapsed: just the VEL|VIB tab strip
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const noteName = (m: number) => NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
@@ -58,6 +59,8 @@ type Drag =
   | { mode: "pan"; startX: number; startY: number; baseX: number; baseY: number }
   | { mode: "play" }
   | { mode: "vel" } // drag in the velocity lane; sweeping paints a ramp
+  | { mode: "auto"; pt: number } // drag a vibrato breakpoint (index into the curve)
+  | { mode: "autoDraw" } // freehand-draw vibrato breakpoints by sweeping
   | null;
 
 interface View {
@@ -77,6 +80,14 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
   const gutterKey = useRef<number | null>(null);
   const spaceHeld = useRef(false);
   const view = useRef<View>({ scrollX: 0, scrollY: 0, ppb: 64 });
+  // bottom lane: which automation it shows, and whether it's expanded. A ref mirror
+  // (assigned in an effect, not during render) lets the rAF canvas read it.
+  const [lane, setLane] = useState<{ mode: "vel" | "vib"; open: boolean }>({ mode: "vel", open: true });
+  const laneRef = useRef(lane);
+  useEffect(() => {
+    laneRef.current = lane;
+  }, [lane]);
+  const laneH = () => (laneRef.current.open ? VEL_H : LANE_TAB_H);
 
   const commit = () => {
     if (!clipRef.current) return;
@@ -136,7 +147,7 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
 
   // ── coordinate system ──
   // the pitch grid occupies the canvas above the docked velocity lane
-  const gridH = () => Math.max(0, (ref.current?.clientHeight ?? height) - VEL_H);
+  const gridH = () => Math.max(0, (ref.current?.clientHeight ?? height) - laneH());
   const totalBeats = () => (clipRef.current ? clipBeats(clipRef.current) : 4);
   const maxScrollX = (w: number) => Math.max(0, totalBeats() * view.current.ppb - (w - KEY_W));
   const beatToX = (b: number) => KEY_W + b * view.current.ppb - view.current.scrollX;
@@ -219,6 +230,74 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     commit();
   };
 
+  // ── vibrato automation-lane editing ──
+  const laneBand = (gh: number) => ({ top: gh + 16, bottom: (ref.current?.clientHeight ?? height) - 3 });
+  const sortVib = (pts: AutoPoint[]) => pts.sort((a, b) => a.beat - b.beat);
+  // index of a breakpoint within grab range of (x,y), else -1
+  const hitVibPoint = (x: number, y: number, gh: number) => {
+    const { top, bottom } = laneBand(gh);
+    let idx = -1;
+    let best = 7;
+    vibPoints().forEach((p, i) => {
+      const d = Math.hypot(beatToX(p.beat) - x, laneYFromVal(p.value, top, bottom) - y);
+      if (d < best) {
+        best = d;
+        idx = i;
+      }
+    });
+    return idx;
+  };
+  const laneVibDown = (e: ReactPointerEvent<HTMLCanvasElement>, x: number, y: number, gh: number) => {
+    const { top, bottom } = laneBand(gh);
+    const pts = ensureVibLane();
+    const idx = hitVibPoint(x, y, gh);
+    // right-click / ⌥ on a point → delete it
+    if ((e.button === 2 || e.altKey) && idx >= 0) {
+      pts.splice(idx, 1);
+      commit();
+      return;
+    }
+    if (e.button === 2) return;
+    if (idx >= 0) {
+      drag.current = { mode: "auto", pt: idx };
+      return;
+    }
+    // empty: add a breakpoint here and grab it (⌘/ctrl = freehand-draw instead)
+    const beat = clamp(cmd(e) ? xToBeat(x) : snapTo(xToBeat(x)), 0, totalBeats());
+    const value = laneValFromY(y, top, bottom);
+    pts.push({ beat, value });
+    sortVib(pts);
+    commit();
+    drag.current = cmd(e) ? { mode: "autoDraw" } : { mode: "auto", pt: pts.findIndex((p) => p.beat === beat && p.value === value) };
+  };
+  // move the dragged breakpoint to (x,y); keep the array sorted, re-find its index
+  const laneVibMove = (x: number, y: number, gh: number) => {
+    const d = drag.current;
+    if (!clipRef.current || (d?.mode !== "auto" && d?.mode !== "autoDraw")) return;
+    const { top, bottom } = laneBand(gh);
+    const pts = ensureVibLane();
+    const value = laneValFromY(y, top, bottom);
+    if (d.mode === "autoDraw") {
+      // freehand: drop a point at the snapped beat, replacing any at the same beat
+      const beat = clamp(snapTo(xToBeat(x)), 0, totalBeats());
+      const at = pts.findIndex((p) => Math.abs(p.beat - beat) < 1e-6);
+      if (at >= 0) pts[at].value = value;
+      else {
+        pts.push({ beat, value });
+        sortVib(pts);
+      }
+      commit();
+      return;
+    }
+    const p = pts[d.pt];
+    if (!p) return;
+    p.beat = clamp(snapTo(xToBeat(x)), 0, totalBeats());
+    p.value = value;
+    sortVib(pts);
+    drag.current = { mode: "auto", pt: pts.indexOf(p) }; // re-locate after sort
+    commit();
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!clipRef.current) return;
     const cv = ref.current!;
@@ -242,11 +321,18 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
       return;
     }
 
-    // velocity lane (bottom band): set velocity from the y position. Plain drag =
-    // paint each note's velocity as you pass over it; ⌘/ctrl = draw a straight ramp.
+    // bottom automation lane. The VEL/VIB/collapse tabs are real DOM buttons
+    // overlaid on the top strip (they intercept their own clicks); editing happens
+    // below them.
     if (y >= gridH()) {
-      drag.current = { mode: "vel" };
-      applyVel(x, y);
+      const gh = gridH();
+      if (!laneRef.current.open || y < gh + 16) return; // collapsed, or on the tab strip
+      if (laneRef.current.mode === "vel") {
+        drag.current = { mode: "vel" };
+        applyVel(x, y);
+      } else {
+        laneVibDown(e, x, y, gh);
+      }
       return;
     }
 
@@ -307,6 +393,10 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     if (d.mode === "vel") {
       // sweeping with y tracking the pointer paints a ramp across notes naturally
       applyVel(x, y);
+      return;
+    }
+    if (d.mode === "auto" || d.mode === "autoDraw") {
+      laneVibMove(x, y, gridH());
       return;
     }
     if (!clipRef.current) return;
@@ -519,16 +609,6 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     });
     return best;
   };
-  // vibrato: a sine pitch wobble. `depth` in cents (0 clears it); rate ~5.5 Hz.
-  const setVibrato = (depth: number) => {
-    if (!sel.current.size) return;
-    sel.current.forEach((id) => {
-      const n = byId(id);
-      if (!n) return;
-      n.vibrato = depth > 0 ? { rate: 5.5, depth } : undefined;
-    });
-    commit();
-  };
 
   // Right-click → custom menu (Shift+right-click falls through to the browser's).
   // Items adapt: a note under the cursor gets note/velocity actions; the clip-wide
@@ -539,14 +619,22 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     const rect = ref.current!.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    // right-click inside the open vibrato lane deletes a breakpoint (no menu)
+    if (y >= gridH() && laneRef.current.open && laneRef.current.mode === "vib") {
+      const idx = hitVibPoint(x, y, gridH());
+      if (idx >= 0) {
+        ensureVibLane().splice(idx, 1);
+        commit();
+      }
+      return;
+    }
     const hit = hitNote(x, y);
     // right-clicking a note that isn't selected makes it the selection
     if (hit && !sel.current.has(hit.note.id)) sel.current = new Set([hit.note.id]);
     const selCount = sel.current.size;
     const items: MenuItem[] = [];
     if (hit || selCount) {
-      const anySlide = [...sel.current].some((id) => byId(id)?.slideFrom != null);
-      const anyVib = [...sel.current].some((id) => byId(id)?.vibrato != null);
+      const anySlide = [...sel.current].some((id) => byId(id)?.slide);
       items.push(
         { label: selCount > 1 ? `delete ${selCount} notes` : "delete note", danger: true, onClick: () => deleteNotes([...sel.current]) },
         { label: "duplicate", hint: "⌘D", onClick: () => duplicateSelection(1, 0) },
@@ -556,12 +644,8 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
         { label: "velocity 50%", onClick: () => setVelSel(0.5) },
         { separator: true },
         anySlide
-          ? { label: "clear portamento", onClick: () => setPortamento(false) }
-          : { label: "make portamento (slide in)", onClick: () => setPortamento(true) },
-        { label: "vibrato · light", onClick: () => setVibrato(20) },
-        { label: "vibrato · medium", onClick: () => setVibrato(40) },
-        { label: "vibrato · heavy", onClick: () => setVibrato(75) },
-        { label: "clear vibrato", disabled: !anyVib, onClick: () => setVibrato(0) },
+          ? { label: "clear slide", onClick: () => setSlide(false) }
+          : { label: "make slide note (bend prev)", onClick: () => setSlide(true) },
         { separator: true },
         { label: "octave up", hint: "⇧↑", onClick: () => nudge(0, 12, false) },
         { label: "octave down", hint: "⇧↓", onClick: () => nudge(0, -12, false) },
@@ -639,9 +723,25 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     }
   };
 
-  // velocity lane: a stem+cap per note in the bottom band, height ∝ velocity.
-  // Selected notes draw in white; a note under the playhead lights to accent.
-  const drawVelLane = (
+  // ── bottom automation lane (VEL | VIB tab; collapsible) ──
+  // the lane's vibrato curve points (clip-global). Reads/creates lazily.
+  const vibLane = () => clipRef.current?.autos?.find((a) => a.target === "vibrato");
+  const vibPoints = () => vibLane()?.points || [];
+  const ensureVibLane = (): AutoPoint[] => {
+    if (!clipRef.current) return [];
+    clipRef.current.autos = clipRef.current.autos || [];
+    let l = clipRef.current.autos.find((a) => a.target === "vibrato");
+    if (!l) {
+      l = { target: "vibrato", points: [] };
+      clipRef.current.autos.push(l);
+    }
+    return l.points;
+  };
+  // map a lane y to a 0..1 value (top = 1) and back, within the lane band [top,bottom]
+  const laneValFromY = (y: number, top: number, bottom: number) => clamp(1 - (y - top) / Math.max(1, bottom - top), 0, 1);
+  const laneYFromVal = (val: number, top: number, bottom: number) => top + (1 - val) * (bottom - top);
+
+  const drawLane = (
     g: CanvasRenderingContext2D,
     w: number,
     gh: number,
@@ -649,32 +749,67 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     ac: string,
     pos: { playing: boolean; beat: number },
   ) => {
-    const top = gh + 1;
-    const laneH = h - top;
     g.fillStyle = "#0a0a0d";
     g.fillRect(0, gh, w, h - gh);
     g.fillStyle = "rgba(255,255,255,0.12)";
     g.fillRect(0, gh, w, 1); // divider
-    g.fillStyle = "#3a3a40";
-    g.font = "8px ui-monospace, monospace";
-    g.fillText("vel", 4, gh + 11);
+    if (!laneRef.current.open) return; // collapsed → just the tab strip (DOM buttons)
+
+    const top = gh + 16; // leave room for the overlaid tab buttons
+    const bottom = h - 3;
     g.save();
     g.beginPath();
-    g.rect(KEY_W, top, w - KEY_W, laneH);
+    g.rect(KEY_W, gh + 1, w - KEY_W, h - gh);
     g.clip();
-    notes().forEach((n) => {
-      const x = beatToX(n.start);
-      if (x < KEY_W - 2 || x > w) return;
-      const barH = Math.max(2, n.vel * (laneH - 6));
-      const y = h - 3 - barH;
-      const selected = sel.current.has(n.id);
-      const playing = pos.playing && pos.beat >= n.start && pos.beat < n.start + n.length;
-      g.fillStyle = selected ? "#ffffff" : playing ? ac : "rgba(84,173,189,0.7)";
-      g.fillRect(x, y, 2, barH);
-      g.beginPath(); // cap handle
-      g.arc(x + 1, y, 2.5, 0, Math.PI * 2);
+
+    if (laneRef.current.mode === "vel") {
+      notes().forEach((n) => {
+        const x = beatToX(n.start);
+        if (x < KEY_W - 2 || x > w) return;
+        const barH = Math.max(2, n.vel * (bottom - top));
+        const y = bottom - barH;
+        const selected = sel.current.has(n.id);
+        const playing = pos.playing && pos.beat >= n.start && pos.beat < n.start + n.length;
+        g.fillStyle = selected ? "#ffffff" : playing ? ac : "rgba(84,173,189,0.7)";
+        g.fillRect(x, y, 2, barH);
+        g.beginPath();
+        g.arc(x + 1, y, 2.5, 0, Math.PI * 2);
+        g.fill();
+      });
+    } else {
+      // vibrato curve: piecewise-linear through the breakpoints + endpoints
+      const pts = vibPoints();
+      const tb = totalBeats();
+      g.strokeStyle = "#9a7ff0"; // violet
+      g.lineWidth = 1.5;
+      g.beginPath();
+      if (pts.length === 0) {
+        // flat-zero baseline
+        g.moveTo(KEY_W, bottom);
+        g.lineTo(w, bottom);
+      } else {
+        const first = pts[0];
+        g.moveTo(beatToX(0), laneYFromVal(first.value, top, bottom));
+        pts.forEach((p) => g.lineTo(beatToX(p.beat), laneYFromVal(p.value, top, bottom)));
+        g.lineTo(beatToX(tb), laneYFromVal(pts[pts.length - 1].value, top, bottom));
+      }
+      g.stroke();
+      // filled area under the curve (subtle)
+      g.lineTo(beatToX(tb), bottom);
+      g.lineTo(beatToX(0), bottom);
+      g.closePath();
+      g.fillStyle = "rgba(154,127,240,0.12)";
       g.fill();
-    });
+      // breakpoint handles
+      pts.forEach((p) => {
+        const px = beatToX(p.beat);
+        if (px < KEY_W - 3 || px > w) return;
+        g.fillStyle = "#9a7ff0";
+        g.beginPath();
+        g.arc(px, laneYFromVal(p.value, top, bottom), 3, 0, Math.PI * 2);
+        g.fill();
+      });
+    }
     g.restore();
   };
 
@@ -697,7 +832,7 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     g.fillRect(0, 0, w, h);
 
     const v = view.current;
-    const gh = h - VEL_H; // pitch-grid height; velocity lane occupies the rest
+    const gh = h - laneH(); // pitch-grid height; the automation lane occupies the rest
     const tb = totalBeats();
     const bpb = clipRef.current?.beatsPerBar || 4;
     const firstP = clamp(yToPitch(gh), LO_MIDI, HI_MIDI);
@@ -764,39 +899,30 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
         g.fillStyle = "rgba(255,255,255,0.28)";
         g.fillRect(x, y + 1, wn, 1);
       }
-      // portamento glyph: a diagonal lead-in from the source pitch (note start) to
-      // the note's own pitch (note end) — the pitch reaches target at the end.
-      if (n.slideFrom != null) {
-        const yFrom = pitchToY(n.slideFrom) + ROW_H / 2;
+      // slide glyph: an amber diagonal from the PREVIOUS note's pitch (at this note's
+      // start) up/down to this note's own pitch (at its end) — the bend the engine
+      // will play. Orphan slide (no previous note) gets a small amber underline tag.
+      if (n.slide) {
+        const prev = prevNote(n);
         const yTo = y + ROW_H / 2;
-        g.strokeStyle = "#e0a24f"; // amber, distinct from the accent note color
+        g.strokeStyle = "#e0a24f";
         g.lineWidth = 1.5;
-        g.beginPath();
-        g.moveTo(x, yFrom);
-        g.lineTo(x + wn, yTo);
-        g.stroke();
-        g.fillStyle = "#e0a24f"; // source marker
-        g.beginPath();
-        g.arc(x, yFrom, 2.5, 0, Math.PI * 2);
-        g.fill();
-      }
-      // vibrato glyph: a sine squiggle along the note centre; amplitude grows with
-      // depth (intensity on both sides), wavelength loosely tracks the rate.
-      if (n.vibrato && n.vibrato.depth > 0) {
-        const midY = y + ROW_H / 2;
-        const amp = Math.min(ROW_H / 2 - 1, 1.5 + (n.vibrato.depth / 100) * (ROW_H / 2));
-        const cycles = Math.max(1.5, Math.min(8, wn / 9)); // visual density, not exact Hz
-        g.strokeStyle = "#9a7ff0"; // violet, distinct from porta amber + accent
-        g.lineWidth = 1.25;
-        g.beginPath();
-        const steps = Math.max(8, Math.floor(wn / 2));
-        for (let i = 0; i <= steps; i++) {
-          const px = x + (i / steps) * wn;
-          const py = midY + Math.sin((i / steps) * cycles * Math.PI * 2) * amp;
-          if (i === 0) g.moveTo(px, py);
-          else g.lineTo(px, py);
+        if (prev) {
+          const yFrom = pitchToY(prev.pitch) + ROW_H / 2;
+          g.beginPath();
+          g.moveTo(x, yFrom);
+          g.lineTo(x + wn, yTo);
+          g.stroke();
+          g.fillStyle = "#e0a24f";
+          g.beginPath();
+          g.arc(x, yFrom, 2.5, 0, Math.PI * 2);
+          g.fill();
+        } else {
+          g.beginPath(); // orphan: no prev to bend → plays normally; mark it faintly
+          g.moveTo(x, yTo + ROW_H / 2 - 1);
+          g.lineTo(x + wn, yTo + ROW_H / 2 - 1);
+          g.stroke();
         }
-        g.stroke();
       }
     });
     // marquee box
@@ -846,7 +972,7 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     g.fillRect(KEY_W - 1, 0, 1, gh);
 
     // ── velocity lane (docked at the bottom; shares the time axis) ──
-    drawVelLane(g, w, gh, h, ac, pos);
+    drawLane(g, w, gh, h, ac, pos);
 
     // ── HUD readout (top-right): live state of the selection's params ──
     const ids = [...sel.current];
@@ -892,20 +1018,43 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
     });
   });
 
+  // lane tab buttons (real DOM, overlaid on the canvas) — sit at the lane's top-left.
+  // `bottom` = lane height minus a hair, so they hug the top edge of the lane band.
+  const tabBtn = (active: boolean) =>
+    "rounded-[3px] border px-[7px] py-[2px] font-mono text-[10px] leading-none transition-colors " +
+    (active ? "border-accent bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent" : "border-line bg-panel text-faint hover:text-dim");
+
   return (
-    <canvas
-      ref={ref}
-      tabIndex={0}
-      className="w-full touch-none rounded-[3px] border border-line bg-inset outline-none select-none focus:border-line2"
-      style={{ height }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      onDoubleClick={onDoubleClick}
-      onKeyDown={onKeyDown}
-      onContextMenu={onContextMenu}
-    />
+    <div className="relative">
+      <canvas
+        ref={ref}
+        tabIndex={0}
+        className="w-full touch-none rounded-[3px] border border-line bg-inset outline-none select-none focus:border-line2"
+        style={{ height }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onDoubleClick={onDoubleClick}
+        onKeyDown={onKeyDown}
+        onContextMenu={onContextMenu}
+      />
+      <div className="pointer-events-none absolute right-[6px] left-[4px] flex items-center gap-[4px]" style={{ bottom: (lane.open ? VEL_H : LANE_TAB_H) - 15 }}>
+        <button className={"pointer-events-auto " + tabBtn(lane.mode === "vel")} onClick={() => setLane((l) => ({ ...l, mode: "vel", open: true }))} title="velocity lane">
+          vel
+        </button>
+        <button className={"pointer-events-auto " + tabBtn(lane.mode === "vib")} onClick={() => setLane((l) => ({ ...l, mode: "vib", open: true }))} title="vibrato automation lane">
+          vib
+        </button>
+        <button
+          className="pointer-events-auto ml-auto rounded-[3px] border border-line bg-panel px-[6px] py-[2px] font-mono text-[10px] leading-none text-faint transition-colors hover:text-accent"
+          onClick={() => setLane((l) => ({ ...l, open: !l.open }))}
+          title={lane.open ? "collapse lane" : "expand lane"}
+        >
+          {lane.open ? "▾" : "▸"}
+        </button>
+      </div>
+    </div>
   );
 }
 

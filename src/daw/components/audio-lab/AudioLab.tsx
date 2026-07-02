@@ -10,6 +10,7 @@ import { Waveform } from "../Waveform";
 import { Spectrum } from "../Spectrum";
 import { LevelMeter } from "../LevelMeter";
 import { PresetLab } from "../preset-lab";
+import { SynthEditor } from "./SynthEditor";
 import { RollLab } from "../piano-roll/RollLab";
 import { abSnap, lockChip } from "../../lab-utils";
 import { ABDial } from "./ABDial";
@@ -73,6 +74,7 @@ export function AudioLab() {
           {isPair ? <ABDial /> : null}
           <FxRack />
           <PresetLab />
+          <SynthEditor />
           <RollLab />
         </div>
 
