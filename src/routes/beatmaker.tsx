@@ -1,6 +1,6 @@
 import SEO from "../components/seo";
 import { DawShell } from "../daw/DawShell";
-import { Beatmaker } from "../daw/components/sequencer/Beatmaker";
+import { ArrangementPage } from "../daw/components/arrangement/ArrangementPage";
 
 const BeatmakerPage = () => {
   return (
@@ -12,7 +12,7 @@ const BeatmakerPage = () => {
         type="website"
       />
       <DawShell>
-        <Beatmaker />
+        <ArrangementPage />
       </DawShell>
     </>
   );

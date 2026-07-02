@@ -71,7 +71,7 @@ interface View {
 
 // `channelId` binds the roll to a beat-maker MIDI channel's clip instead of the
 // global Audio-Lab clip; everything else (gestures, render, playhead) is identical.
-export function PianoRoll({ height = 280, channelId }: { height?: number; channelId?: string }) {
+export function PianoRoll({ height = 280, channelId, initialClip, onCommit }: { height?: number; channelId?: string; initialClip?: NoteClip; onCommit?: (clip: NoteClip) => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const clipRef = useRef<NoteClip | null>(null);
   const sel = useRef<Set<string>>(new Set()); // selected note ids
@@ -91,7 +91,8 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
 
   const commit = () => {
     if (!clipRef.current) return;
-    if (channelId) engine.setChannelClip(channelId, clipRef.current);
+    if (onCommit) onCommit(clipRef.current); // arrangement clip binding
+    else if (channelId) engine.setChannelClip(channelId, clipRef.current);
     else engine.setActiveClip(clipRef.current);
   };
 
@@ -119,7 +120,7 @@ export function PianoRoll({ height = 280, channelId }: { height?: number; channe
   };
 
   useEffect(() => {
-    loadClip(channelId ? engine.getChannelClip(channelId) || { bars: 1, beatsPerBar: 4, notes: [] } : engine.getClip() || engine.samplePresets[0].defaultPhrase);
+    loadClip(initialClip || (channelId ? engine.getChannelClip(channelId) || { bars: 1, beatsPerBar: 4, notes: [] } : engine.getClip() || engine.samplePresets[0].defaultPhrase));
     const el = ref.current;
     if (!el) return;
     const onLoad = (e: Event) => loadClip((e as CustomEvent<NoteClip>).detail);
