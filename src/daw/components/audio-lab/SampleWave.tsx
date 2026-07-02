@@ -68,7 +68,7 @@ export function SampleWave({
     const peaks = zoneIdx >= 0 ? engine.presetPeaks(presetId, zoneIdx, Math.max(32, Math.floor(w))) : null;
 
     if (!peaks) {
-      g.fillStyle = "#2a2a32";
+      g.fillStyle = "#6a6a76";
       g.font = "9px ui-monospace, monospace";
       g.textAlign = "center";
       g.fillText("decoding sample…", w / 2, mid + 3);
@@ -89,7 +89,7 @@ export function SampleWave({
     }
 
     // center-mirrored waveform bars
-    g.fillStyle = "#3a4a52";
+    g.fillStyle = "#5a6f78";
     const bw = w / peaks.length;
     for (let i = 0; i < peaks.length; i++) {
       const ph = Math.max(1, peaks[i] * (h - 4));

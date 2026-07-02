@@ -8,11 +8,11 @@
   --color-panel: #141418;
   --color-panel2: #1a1a20;
   --color-inset: #08080a;
-  --color-line: #242429;
-  --color-line2: #32323a;
-  --color-daw-text: #d8d8dc;
-  --color-dim: #8e8e98;
-  --color-faint: #5c5c66;
+  --color-line: #2c2c33;
+  --color-line2: #3d3d47;
+  --color-daw-text: #e4e4e8;
+  --color-dim: #a8a8b2;
+  --color-faint: #8a8a94;
   --color-accent: #54adbd;
 
   --font-display: "Archivo", "Helvetica Neue", sans-serif;
@@ -22,8 +22,8 @@
 :root {
   /* expose tokens as raw vars too, for canvas / SVG code that reads them */
   --accent: #54adbd;
-  --line: #242429;
-  --line2: #32323a;
+  --line: #2c2c33;
+  --line2: #3d3d47;
   --panel: #141418;
   --panel2: #1a1a20;
 
