@@ -13,13 +13,30 @@ export interface OscSpec {
   level: number; // 0..1
 }
 
+// A sample source — a sampled preset's multisample used like an oscillator: it
+// runs through the SAME filter + filter-env + amp-env + LFO as the oscillators.
+// `presetId` points at a SampledPreset (its zones are decoded by preset id). loop
+// off = one-shot; loop on = sustains via loopStart/loopEnd (0..1 of the buffer).
+export interface SampleSource {
+  presetId: string;
+  level: number; // 0..1 (0 = silent)
+  loop: boolean;
+  semi?: number; // varispeed transpose — coarse (semitones), independent of the note
+  cents?: number; // varispeed transpose — fine (cents)
+  start?: number; // 0..1 — playback window start (offset into the buffer)
+  end?: number; // 0..1 — playback window end
+  loopStart?: number; // 0..1 fraction of the buffer (defaults to start)
+  loopEnd?: number; //   "                            (defaults to end)
+}
+
 export interface SynthPatch {
   osc1: OscSpec;
   osc2: OscSpec;
   osc2On: boolean;
   sub: { wave: "sine" | "square"; oct: -1 | -2; level: number }; // level 0 = silent
   noise: { type: "white" | "pink"; level: number }; // level 0 = silent
-  filter: { type: BiquadFilterType; cut: number; q: number; keyTrack: number }; // keyTrack 0..1
+  sample?: SampleSource; // a sampled multisample as a voice source (level 0 / absent = off)
+  filter: { type: BiquadFilterType; cut: number; q: number; keyTrack: number; on?: boolean }; // on omitted = enabled
   filtEnv: { a: number; d: number; s: number; r: number; amt: number }; // amt Hz added to cutoff
   ampEnv: { a: number; d: number; s: number; r: number };
   lfo: { rate: number; depth: number; dest: "off" | "pitch" | "cutoff" | "amp" };
@@ -72,6 +89,26 @@ export const BUILTIN_PATCHES: Record<string, SynthPatch> = {
     vol: 0.24,
   },
 };
+
+// Convert a sampled preset into an editable SynthPatch: the sample source is on,
+// oscillators/sub/noise off, amp env + vol seeded from the preset, and a neutral
+// wide-open filter (amt 0 → the sample plays clean until the user dials the filter).
+// This is what lets a sampled preset be a first-class, editable instrument.
+export function patchFromPreset(preset: { env: { a: number; d: number; s: number; r: number }; gain: number }, presetId: string): SynthPatch {
+  return {
+    osc1: osc("sawtooth", 0, 0, 0),
+    osc2: osc("sawtooth", 0, 0, 0),
+    osc2On: false,
+    sub: OFF_SUB,
+    noise: OFF_NOISE,
+    sample: { presetId, level: 1, loop: false },
+    filter: { type: "lowpass", cut: 18000, q: 0.7, keyTrack: 0 },
+    filtEnv: { a: 0.01, d: 0.3, s: 1, r: 0.3, amt: 0 },
+    ampEnv: { ...preset.env },
+    lfo: { rate: 5, depth: 0, dest: "off" },
+    vol: preset.gain,
+  };
+}
 
 // A blank starting point for "save as new patch" / user design.
 export const INIT_PATCH: SynthPatch = {

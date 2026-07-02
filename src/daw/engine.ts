@@ -10,7 +10,8 @@
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
 import { clipBeats, sampleAuto, VIB_MAX_CENTS, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
-import { BUILTIN_PATCHES, type SynthPatch } from "./data/patches";
+import { arrangementBeats, loadArrangement, newClipId, newTrackId, saveArrangement, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
+import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
 import { parseMidi } from "./data/midi-file";
 import { DEFAULT_KIT, defaultSequence, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
 
@@ -18,7 +19,7 @@ export type TransportMode = "track" | "sequence";
 
 const STEP_BEATS = 0.25; // one drum step = a 1/16 note
 
-type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi" | "patch";
+type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi" | "patch" | "arrange";
 
 export interface Levels {
   rms: number;
@@ -105,18 +106,23 @@ interface FxState {
 // A live voice handle returned by startVoiceAt. The voice gain `vg` carries the
 // amp ADSR; `r` is the release time. Discriminated by source kind so releaseVoice
 // can stop the right nodes.
-type VoiceHandle = (
-  | { kind: "synth"; vg: GainNode; r: number; oscs: OscillatorNode[]; vf: BiquadFilterNode; noiseSrc?: AudioBufferSourceNode }
-  | { kind: "sample"; vg: GainNode; r: number; src: AudioBufferSourceNode }
-) & { lfos?: OscillatorNode[] }; // vibrato + patch LFOs, stopped with the voice
+// One unified voice: oscs + optional noise + optional sample source → filter → amp.
+type VoiceHandle = {
+  kind: "synth";
+  vg: GainNode;
+  r: number;
+  oscs: OscillatorNode[];
+  vf: BiquadFilterNode;
+  noiseSrc?: AudioBufferSourceNode;
+  sampleSrc?: AudioBufferSourceNode;
+  lfos?: OscillatorNode[]; // vibrato + patch LFOs, stopped with the voice
+};
 
-// A resolved voice selection — which preset (if sampled) and which JS-synth patch
-// to fall back to. The live keyboard + Audio-Lab roll resolve this from global
-// state; beatmaker MIDI channels resolve it per-channel so each channel sounds
-// its own instrument.
+// A resolved voice selection — the fully-resolved SynthPatch to voice (which may
+// have a sample source) + where it routes. Channels/tracks resolve their own so
+// each sounds its own instrument; the live keyboard uses the global active patch.
 interface VoiceSel {
-  preset?: SampledPreset;
-  patch: string; // synth patch id (key into engine.patches)
+  patch: SynthPatch;
   dest?: AudioNode; // where the voice connects (a channel's gain node); default n.sum
 }
 
@@ -200,8 +206,18 @@ class AudioEngine {
   currentPatch(): SynthPatch {
     return this.patches[this.synthPatch] || BUILTIN_PATCHES["glass pad"];
   }
+  activePatch = () => this.currentPatch();
   isBuiltinPatch(id: string): boolean {
     return id in BUILTIN_PATCHES;
+  }
+  // Sampled presets are first-class instruments: seed an editable patch per preset
+  // (sample source on) into the store, unless the user already saved one under that
+  // name. Runs at boot so presets appear alongside synth patches in one list.
+  private seedPresetPatches() {
+    for (const pr of this.samplePresets) {
+      if (pr.zones.length === 0) continue; // fallback-only ids stay synth patches
+      if (!(pr.name in this.patches)) this.patches[pr.name] = patchFromPreset(pr, pr.id);
+    }
   }
 
   // ── synth patch editing + save/recall (live; the SynthEditor calls these) ──
@@ -278,6 +294,9 @@ class AudioEngine {
   // beatMode switches the scheduler between the piano-roll note clip and the
   // drum sequence clip. Only one plays at a time.
   beatMode = false;
+  arrangeMode = false; // scheduler walks the linear arrangement (vs the loop grid)
+  arrangement: Arrangement = loadArrangement();
+  private _arrStrips: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-track vol/pan strip
   kit: DrumKit = DEFAULT_KIT;
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   loops: LoopLane[] = LOOPS;
@@ -285,6 +304,7 @@ class AudioEngine {
   private _noiseBufs: Partial<Record<"white" | "pink", AudioBuffer>> = {}; // synth noise sources, built once
   private _loopBufs: Record<string, AudioBuffer> = {}; // loopId → decoded buffer
   private _loopPeaks: Record<string, Float32Array> = {}; // loopId → cached waveform peaks
+  private _presetPeaks: Record<string, Float32Array> = {}; // "presetId:zoneIdx" → cached peaks
   private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode; startCtx: number; startOff: number }> = {}; // live looping voices
   private _chNodes: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-channel vol/pan strip
 
@@ -306,6 +326,7 @@ class AudioEngine {
   constructor() {
     const v = parseFloat(localStorage.getItem(LS_WET) || "");
     this.wet = isNaN(v) ? 1 : Math.min(1, Math.max(0, v));
+    this.seedPresetPatches(); // sampled presets appear as editable patches
   }
 
   // ── Section index ───────────────────────────────────────────────────────
@@ -976,26 +997,30 @@ class AudioEngine {
     return peaks;
   }
 
-  // ── preset synth + sampler ──
-  // `name` may be a sampled-preset id OR a JS-synth PATCHES key. Sampled
-  // presets are primary; the matching PATCHES key is the per-preset fallback.
-  setSynthPatch(name: string) {
-    const preset = this.samplePresets.find((pr) => pr.id === name);
-    if (preset) {
-      this.samplePreset = preset.id;
-      this.synthPatch = preset.fallbackPatch && this.patches[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
-      void this.loadPreset(preset.id);
-      this.emit("synth");
-      return;
+  // ── instrument selection (patches, incl. sampled presets that are now patches) ──
+  // `id` is a patch key. For back-compat it also accepts a sampled-preset id →
+  // resolves to that preset's seeded patch (by preset name).
+  setSynthPatch(id: string) {
+    let key = id;
+    if (!this.patches[key]) {
+      const pr = this.samplePresets.find((p) => p.id === id); // legacy preset-id call
+      if (pr) {
+        if (!(pr.name in this.patches) && pr.zones.length) this.patches[pr.name] = patchFromPreset(pr, pr.id);
+        key = pr.name;
+      }
     }
-    if (this.patches[name]) {
-      this.synthPatch = name;
-      this.emit("synth");
-    }
+    if (!this.patches[key]) return;
+    this.synthPatch = key;
+    this.warmPatch(this.patches[key]);
+    this.emit("synth");
   }
-
-  private currentPreset(): SampledPreset | undefined {
-    return this.samplePresets.find((pr) => pr.id === this.samplePreset);
+  // decode the sample-source preset a patch references (no-op for osc-only patches)
+  private warmPatch(p: SynthPatch) {
+    if (p.sample?.presetId && this.samplePresets.some((pr) => pr.id === p.sample!.presetId)) void this.loadPreset(p.sample.presetId);
+  }
+  // public: decode a preset's zones by id (for the sample waveform / manual warm)
+  warmPreset(presetId: string) {
+    if (this.samplePresets.some((pr) => pr.id === presetId)) void this.loadPreset(presetId);
   }
 
   // Lazily fetch + decode every zone of a preset (mirrors fetchBuf). A zone that
@@ -1178,64 +1203,35 @@ class AudioEngine {
       return lfo;
     };
 
-    // resolve which instrument to voice: an explicit per-channel selection, or
-    // the global live-keyboard/Audio-Lab selection when none is passed.
-    const preset = sel ? sel.preset : this.currentPreset();
-    const patchKey = sel ? sel.patch : this.synthPatch;
+    // resolve which instrument to voice: an explicit per-channel/track selection, or
+    // the global live-keyboard/Audio-Lab patch when none is passed.
     const dest = sel?.dest ?? n.sum; // channel gain node, or straight to the FX rack
 
-    // ── sampled-preset path: bufferSource → voice gain (ADSR) → sum (FX rack) ──
-    const zone = preset ? this.pickZone(preset, midi) : null;
-    if (preset && zone) {
-      const env = preset.env;
-      const vg = c.createGain();
-      vg.gain.value = 0;
-      const src = c.createBufferSource();
-      src.buffer = zone.buf;
-      src.playbackRate.value = Math.pow(2, (midi - zone.rootMidi) / 12);
-      // per-note micro-detune (opt-in per preset) — restores the subtle "alive"
-      // variation a single bounce flattens. Prefer `detune` (cents); fall back to
-      // a playbackRate nudge where detune is unsupported (older Safari).
-      if (preset.humanize > 0) {
-        const cents = (Math.random() * 2 - 1) * preset.humanize;
-        if (src.detune) src.detune.value = cents;
-        else src.playbackRate.value *= Math.pow(2, cents / 1200);
-      }
-      // portamento: glide pitch through the bend segments (cents if detune exists,
-      // else playbackRate). Note: humanize already set a small detune offset above.
-      if (bends && bends.length) {
-        if (src.detune) applyBends(src.detune, "detune", src.detune.value);
-        else applyBends(src.playbackRate, "rate", zone.rootMidi);
-      }
-      src.connect(vg);
-      vg.connect(dest);
-      const peak = preset.gain * vel;
-      vg.gain.setValueAtTime(0, t);
-      vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, env.a));
-      vg.gain.setTargetAtTime(peak * env.s, t + env.a, Math.max(0.03, env.d));
-      src.start(t);
-      const vibLfo = src.detune ? addVibrato([src.detune]) : undefined;
-      return { kind: "sample", vg, r: env.r, src, lfos: vibLfo ? [vibLfo] : undefined };
-    }
-
-    // ── subtractive synth path ──
-    // osc1 + osc2 + sub + noise → (per-source level gain) → filter → amp gain → dest
-    const p = this.patches[patchKey] || this.currentPatch();
+    // ── unified voice path ──
+    // osc1 + osc2 + sub + noise + SAMPLE → (per-source level gain) → filter (+filtEnv)
+    //   → amp gain (ampEnv) → dest. A sampled multisample is just another source into
+    // the same filter→amp spine, so it gets the same envelopes/filter/LFO as the oscs.
+    const p = sel?.patch ?? this.activePatch();
     const freqOf = (semi: number) => 440 * Math.pow(2, (midi + semi - 69) / 12);
     const vg = c.createGain(); // amp
     vg.gain.value = 0;
     const vf = c.createBiquadFilter();
-    vf.type = p.filter.type;
-    vf.Q.value = p.filter.q;
-    // key-tracking: cutoff scales with how far the note is from C4
-    const cutBase = Math.min(18000, p.filter.cut * Math.pow(2, (p.filter.keyTrack * (midi - 60)) / 12));
-    // filter envelope (ADSR) on cutoff, peaking at cutBase + amt
-    const fe = p.filtEnv;
-    const cutPeak = Math.max(20, Math.min(18000, cutBase + fe.amt));
-    const cutSus = Math.max(20, Math.min(18000, cutBase + fe.amt * fe.s));
-    vf.frequency.setValueAtTime(cutBase, t);
-    vf.frequency.linearRampToValueAtTime(cutPeak, t + Math.max(0.005, fe.a));
-    vf.frequency.setTargetAtTime(cutSus, t + fe.a, Math.max(0.03, fe.d));
+    const filterOn = p.filter.on !== false;
+    if (filterOn) {
+      vf.type = p.filter.type;
+      vf.Q.value = p.filter.q;
+      // key-tracking: cutoff scales with how far the note is from C4
+      const cutBase = Math.min(18000, p.filter.cut * Math.pow(2, (p.filter.keyTrack * (midi - 60)) / 12));
+      // filter envelope (ADSR) on cutoff, peaking at cutBase + amt
+      const fe = p.filtEnv;
+      const cutPeak = Math.max(20, Math.min(18000, cutBase + fe.amt));
+      const cutSus = Math.max(20, Math.min(18000, cutBase + fe.amt * fe.s));
+      vf.frequency.setValueAtTime(cutBase, t);
+      vf.frequency.linearRampToValueAtTime(cutPeak, t + Math.max(0.005, fe.a));
+      vf.frequency.setTargetAtTime(cutSus, t + fe.a, Math.max(0.03, fe.d));
+    } else {
+      vf.type = "allpass"; // bypass: flat magnitude, sources still route through it
+    }
     vf.connect(vg);
     vg.connect(dest);
 
@@ -1272,6 +1268,41 @@ class AudioEngine {
       noiseSrc.start(t);
     }
 
+    // sample source (a multisample as an "oscillator") → level gain → filter. Pitch
+    // via playbackRate from the picked zone's root; humanize + portamento + vibrato
+    // ride src.detune (cents), same as an osc. loop = sustain via loopStart/End.
+    let sampleSrc: AudioBufferSourceNode | undefined;
+    if (p.sample && p.sample.level > 0) {
+      const preset = this.samplePresets.find((pr) => pr.id === p.sample!.presetId);
+      const zone = preset ? this.pickZone(preset, midi) : null;
+      if (preset && zone) {
+        const s = c.createBufferSource();
+        s.buffer = zone.buf;
+        // varispeed: note pitch × independent transpose (semi + cents), speed-coupled
+        const vari = (p.sample.semi ?? 0) / 12 + (p.sample.cents ?? 0) / 1200;
+        s.playbackRate.value = Math.pow(2, (midi - zone.rootMidi) / 12 + vari);
+        if (preset.humanize > 0 && s.detune) s.detune.value = (Math.random() * 2 - 1) * preset.humanize;
+        // playback window (0..1 of the buffer). loop region defaults to the window.
+        const dur = zone.buf.duration;
+        const a = Math.min(0.999, Math.max(0, p.sample.start ?? 0));
+        const b = Math.min(1, Math.max(a + 0.001, p.sample.end ?? 1));
+        if (p.sample.loop) {
+          s.loop = true;
+          s.loopStart = (p.sample.loopStart ?? a) * dur;
+          s.loopEnd = (p.sample.loopEnd ?? b) * dur;
+        }
+        if (bends && bends.length && s.detune) applyBends(s.detune, "detune", s.detune.value);
+        const sg = c.createGain();
+        sg.gain.value = p.sample.level;
+        s.connect(sg);
+        sg.connect(vf);
+        // one-shot: play only the window. loop: start at the window, loop sustains.
+        if (p.sample.loop) s.start(t, a * dur);
+        else s.start(t, a * dur, (b - a) * dur);
+        sampleSrc = s;
+      }
+    }
+
     // amp envelope
     const ae = p.ampEnv;
     const peak = p.vol * vel;
@@ -1279,10 +1310,14 @@ class AudioEngine {
     vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, ae.a));
     vg.gain.setTargetAtTime(peak * ae.s, t + ae.a, Math.max(0.03, ae.d));
 
-    // LFOs: per-note vibrato (always to osc detune) + the patch LFO routed to its
-    // destination. Both are stopped with the voice in releaseVoice.
+    // pitch-modulation targets = every pitched source's detune (oscs + the sample)
+    const pitchTargets = oscs.map((o) => o.detune);
+    if (sampleSrc?.detune) pitchTargets.push(sampleSrc.detune);
+
+    // LFOs: per-note vibrato + the patch LFO routed to its destination. Both are
+    // stopped with the voice in releaseVoice.
     const lfos: OscillatorNode[] = [];
-    const vibLfo = addVibrato(oscs.map((o) => o.detune));
+    const vibLfo = addVibrato(pitchTargets);
     if (vibLfo) lfos.push(vibLfo);
     if (p.lfo.dest !== "off" && p.lfo.depth > 0) {
       const l = c.createOscillator();
@@ -1291,13 +1326,13 @@ class AudioEngine {
       const lg = c.createGain();
       lg.gain.value = p.lfo.depth;
       l.connect(lg);
-      if (p.lfo.dest === "pitch") oscs.forEach((o) => lg.connect(o.detune)); // depth = cents
-      else if (p.lfo.dest === "cutoff") lg.connect(vf.frequency); // depth = Hz
+      if (p.lfo.dest === "pitch") pitchTargets.forEach((d) => lg.connect(d)); // depth = cents
+      else if (p.lfo.dest === "cutoff" && filterOn) lg.connect(vf.frequency); // depth = Hz (no-op when bypassed)
       else lg.connect(vg.gain); // amp tremolo, depth = linear gain
       l.start(t);
       lfos.push(l);
     }
-    return { kind: "synth", vg, r: ae.r, oscs, vf, noiseSrc, lfos };
+    return { kind: "synth", vg, r: ae.r, oscs, vf, noiseSrc, sampleSrc, lfos };
   }
 
   // Release a voice at an explicit time. `instant` skips the patch release.
@@ -1321,28 +1356,17 @@ class AudioEngine {
     const tc = r / 3;
     h.vg.gain.setTargetAtTime(0, t, tc);
     const stopAt = t + tc * 6 + 0.02; // let the exponential tail ring out before stop
-    if (h.kind === "sample") {
+    const stop = (node?: { stop: (w: number) => void }) => {
+      if (!node) return;
       try {
-        h.src.stop(stopAt);
+        node.stop(stopAt);
       } catch {
         /* already stopped */
       }
-    } else {
-      h.oscs.forEach((o) => {
-        try {
-          o.stop(stopAt);
-        } catch {
-          /* already stopped */
-        }
-      });
-      if (h.noiseSrc) {
-        try {
-          h.noiseSrc.stop(stopAt);
-        } catch {
-          /* already stopped */
-        }
-      }
-    }
+    };
+    h.oscs.forEach(stop);
+    stop(h.noiseSrc);
+    stop(h.sampleSrc);
     h.lfos?.forEach((l) => {
       try {
         l.stop(stopAt); // stop vibrato + patch LFOs with the voice
@@ -1563,10 +1587,19 @@ class AudioEngine {
   }
 
   // resolve a channel's instrument to a VoiceSel for the voice factory
+  // resolve an instrument id (a patch key OR a legacy sampled-preset id) to a live
+  // SynthPatch, seeding a preset-patch on demand. Falls back to the active patch.
+  private resolvePatch(id: string | undefined): SynthPatch {
+    if (id && this.patches[id]) return this.patches[id];
+    const pr = id ? this.samplePresets.find((p) => p.id === id) : undefined;
+    if (pr) {
+      if (!(pr.name in this.patches) && pr.zones.length) this.patches[pr.name] = patchFromPreset(pr, pr.id);
+      if (this.patches[pr.name]) return this.patches[pr.name];
+    }
+    return this.currentPatch();
+  }
   private channelVoice(ch: MidiChannel): VoiceSel {
-    const preset = this.samplePresets.find((pr) => pr.id === ch.presetId);
-    const patch = this.patches[ch.presetId] ? ch.presetId : preset?.fallbackPatch && this.patches[preset.fallbackPatch] ? preset.fallbackPatch : this.synthPatch;
-    return { preset, patch, dest: this.channelStrip(ch) };
+    return { patch: this.resolvePatch(ch.presetId), dest: this.channelStrip(ch) };
   }
 
   // Group a clip's notes into FL-style legato voice runs. A `slide` note that is
@@ -1736,6 +1769,204 @@ class AudioEngine {
     const span = ch.loop ? clipBeats(ch.clip) : this.activeTotalBeats();
     if (span <= 0) return -1;
     return ((this.currentBeat() % span) + span) % span;
+  }
+
+  // ── arrangement (linear timeline): tracks + placed clips ──────────────────
+  private saveArr() {
+    saveArrangement(this.arrangement);
+    this.emit("arrange");
+  }
+  // lazily build a track's vol→pan→sum strip (mirrors channelStrip); returns the input gain
+  private trackStrip(t: ArrTrack): GainNode {
+    const c = this.ensureCtx();
+    const n = this.nodes!;
+    let s = this._arrStrips[t.id];
+    if (!s) {
+      const gain = c.createGain();
+      const pan = c.createStereoPanner();
+      gain.connect(pan);
+      pan.connect(n.sum);
+      s = this._arrStrips[t.id] = { gain, pan };
+    }
+    s.gain.gain.value = t.vol * this.trackGain(t);
+    s.pan.pan.value = t.pan;
+    return s.gain;
+  }
+  private anyTrackSolo(): boolean {
+    return this.arrangement.tracks.some((t) => t.solo);
+  }
+  private trackGain(t: ArrTrack): number {
+    if (t.mute) return 0;
+    return this.anyTrackSolo() && !t.solo ? 0 : 1;
+  }
+  private refreshTrackGains() {
+    if (!this.ctx) return;
+    const tt = this.ctx.currentTime;
+    for (const t of this.arrangement.tracks) {
+      const s = this._arrStrips[t.id];
+      if (s) s.gain.gain.setTargetAtTime(t.vol * this.trackGain(t), tt, 0.02);
+    }
+  }
+  // resolve a midi track's instrument to a VoiceSel routed to its strip
+  private trackVoice(t: ArrTrack): VoiceSel {
+    return { patch: this.resolvePatch(t.presetId), dest: this.trackStrip(t) };
+  }
+
+  // ── track CRUD ──
+  addTrack(kind: TrackKind, name?: string): ArrTrack {
+    const n = this.arrangement.tracks.length + 1;
+    const t: ArrTrack = {
+      id: newTrackId(),
+      name: name || (kind === "midi" ? "midi " + n : kind === "drum" ? "drums " + n : "audio " + n),
+      kind,
+      presetId: kind === "midi" ? this.samplePresets[0]?.id || this.synthPatches[0] : undefined,
+      mute: false,
+      solo: false,
+      vol: 0.8,
+      pan: 0,
+      clips: [],
+    };
+    if (t.presetId && this.samplePresets.some((p) => p.id === t.presetId)) void this.loadPreset(t.presetId);
+    this.arrangement.tracks.push(t);
+    this.saveArr();
+    return t;
+  }
+  removeTrack(id: string) {
+    this.arrangement.tracks = this.arrangement.tracks.filter((t) => t.id !== id);
+    const s = this._arrStrips[id];
+    if (s) {
+      try {
+        s.gain.disconnect();
+        s.pan.disconnect();
+      } catch {
+        /* fine */
+      }
+      delete this._arrStrips[id];
+    }
+    this.saveArr();
+  }
+  private findTrack(id: string) {
+    return this.arrangement.tracks.find((t) => t.id === id);
+  }
+  renameTrack(id: string, name: string) {
+    const t = this.findTrack(id);
+    if (t) t.name = name;
+    this.saveArr();
+  }
+  setTrackPreset(id: string, presetId: string) {
+    const t = this.findTrack(id);
+    if (!t) return;
+    t.presetId = presetId;
+    if (this.samplePresets.some((p) => p.id === presetId)) void this.loadPreset(presetId);
+    this.saveArr();
+  }
+  setTrackVol(id: string, vol: number) {
+    const t = this.findTrack(id);
+    if (!t) return;
+    t.vol = Math.min(1, Math.max(0, vol));
+    const s = this._arrStrips[id];
+    if (s && this.ctx) s.gain.gain.setTargetAtTime(t.vol * this.trackGain(t), this.ctx.currentTime, 0.02);
+    this.saveArr();
+  }
+  setTrackPan(id: string, pan: number) {
+    const t = this.findTrack(id);
+    if (!t) return;
+    t.pan = Math.min(1, Math.max(-1, pan));
+    const s = this._arrStrips[id];
+    if (s && this.ctx) s.pan.pan.setTargetAtTime(t.pan, this.ctx.currentTime, 0.02);
+    this.saveArr();
+  }
+  toggleTrackMute(id: string) {
+    const t = this.findTrack(id);
+    if (t) t.mute = !t.mute;
+    this.refreshTrackGains();
+    this.saveArr();
+  }
+  toggleTrackSolo(id: string) {
+    const t = this.findTrack(id);
+    if (t) t.solo = !t.solo;
+    this.refreshTrackGains(); // solo is global across tracks
+    this.saveArr();
+  }
+  toggleTrackCollapsed(id: string) {
+    const t = this.findTrack(id);
+    if (t) t.collapsed = !t.collapsed;
+    this.saveArr();
+  }
+
+  // ── clip CRUD ──
+  private findClip(trackId: string, clipId: string): [ArrTrack, ArrClip] | null {
+    const t = this.findTrack(trackId);
+    const c = t?.clips.find((x) => x.id === clipId);
+    return t && c ? [t, c] : null;
+  }
+  addClip(trackId: string, clip: Omit<ArrClip, "id">): ArrClip | null {
+    const t = this.findTrack(trackId);
+    if (!t) return null;
+    const c: ArrClip = { ...clip, id: newClipId() };
+    t.clips.push(c);
+    this.saveArr();
+    return c;
+  }
+  removeClip(trackId: string, clipId: string) {
+    const t = this.findTrack(trackId);
+    if (t) t.clips = t.clips.filter((c) => c.id !== clipId);
+    this.saveArr();
+  }
+  // move a clip (optionally to another track); startBeat clamped ≥ 0
+  moveClip(trackId: string, clipId: string, startBeat: number, toTrackId?: string) {
+    const found = this.findClip(trackId, clipId);
+    if (!found) return;
+    const [from, c] = found;
+    c.startBeat = Math.max(0, startBeat);
+    if (toTrackId && toTrackId !== trackId) {
+      const to = this.findTrack(toTrackId);
+      if (to && to.kind === from.kind) {
+        from.clips = from.clips.filter((x) => x.id !== clipId);
+        to.clips.push(c);
+      }
+    }
+    this.saveArr();
+  }
+  resizeClip(trackId: string, clipId: string, lengthBeats: number) {
+    const found = this.findClip(trackId, clipId);
+    if (!found) return;
+    found[1].lengthBeats = Math.max(0.25, lengthBeats);
+    this.saveArr();
+  }
+  duplicateClip(trackId: string, clipId: string): ArrClip | null {
+    const found = this.findClip(trackId, clipId);
+    if (!found) return null;
+    const [t, c] = found;
+    const copy: ArrClip = { ...structuredClone(c), id: newClipId(), startBeat: c.startBeat + c.lengthBeats };
+    t.clips.push(copy);
+    this.saveArr();
+    return copy;
+  }
+  // write back edited clip content (from the piano roll / step grid / loop editor)
+  setClipContent(trackId: string, clipId: string, content: ArrClip["content"]) {
+    const found = this.findClip(trackId, clipId);
+    if (found) found[1].content = content;
+    this.saveArr();
+  }
+  toggleClipLoop(trackId: string, clipId: string) {
+    const found = this.findClip(trackId, clipId);
+    if (found) found[1].loop = !found[1].loop;
+    this.saveArr();
+  }
+  getArrClip(trackId: string, clipId: string): ArrClip | null {
+    return this.findClip(trackId, clipId)?.[1] || null;
+  }
+
+  setArrangementBpm(bpm: number) {
+    this.arrangement.bpm = Math.min(220, Math.max(40, Math.round(bpm)));
+    if (this.arrangeMode) this.setBpm(this.arrangement.bpm);
+    else this.saveArr();
+  }
+  setArrangementLoop(start: number, end: number, on: boolean) {
+    this.arrangement.loop = { start: Math.max(0, start), end: Math.max(start + 0.25, end), on };
+    this.loopOn = on;
+    this.saveArr();
   }
 
   // trigger one drum lane at an explicit time: decoded sample if present, else a
@@ -2246,6 +2477,46 @@ class AudioEngine {
     return peaks;
   }
 
+  // the zone index of a preset nearest C4 (midi 60) — the one we show as the visual
+  presetC4Zone(presetId: string): number {
+    const preset = this.samplePresets.find((p) => p.id === presetId);
+    if (!preset || !preset.zones.length) return -1;
+    let idx = 0;
+    let best = Infinity;
+    preset.zones.forEach((z, i) => {
+      const d = Math.abs(z.rootMidi - 60);
+      if (d < best) {
+        best = d;
+        idx = i;
+      }
+    });
+    return idx;
+  }
+  // waveform peaks for a decoded preset zone (mirrors loopPeaks). Cached per
+  // "presetId:zoneIdx:bins". null if the zone isn't decoded yet.
+  presetPeaks(presetId: string, zoneIdx: number, bins: number): Float32Array | null {
+    const buf = this._sampleBufs[presetId]?.[zoneIdx];
+    if (!buf) return null;
+    const key = presetId + ":" + zoneIdx;
+    const cached = this._presetPeaks[key];
+    if (cached && cached.length === bins) return cached;
+    const ch0 = buf.getChannelData(0);
+    const ch1 = buf.numberOfChannels > 1 ? buf.getChannelData(1) : ch0;
+    const per = Math.max(1, Math.floor(ch0.length / bins));
+    const peaks = new Float32Array(bins);
+    for (let b = 0; b < bins; b++) {
+      let max = 0;
+      const start = b * per;
+      for (let i = start; i < start + per && i < ch0.length; i += 8) {
+        const a = Math.abs((ch0[i] + ch1[i]) * 0.5);
+        if (a > max) max = a;
+      }
+      peaks[b] = max;
+    }
+    this._presetPeaks[key] = peaks;
+    return peaks;
+  }
+
   // ── sequencer: lookahead scheduler ──
   // A setInterval clock walks ctx.currentTime and schedules note events slightly
   // ahead with sample-accurate start/stop times. rAF is NOT used for audio timing
@@ -2306,6 +2577,7 @@ class AudioEngine {
   // bar 1. (A stopgap until a real timeline; channels with their own `loop` flag
   // still repeat over their own clip within this total.)
   private activeTotalBeats(): number {
+    if (this.arrangeMode) return arrangementBeats(this.arrangement);
     if (!this.beatMode) return this._clip ? clipBeats(this._clip) : 0;
     const seq = this.sequence;
     let total = seq.steps * STEP_BEATS; // drum grid
@@ -2316,11 +2588,20 @@ class AudioEngine {
     return total;
   }
 
-  // current beat position within the active loop, from the ctx clock
+  // current beat position from the ctx clock. In arrange mode the playhead wraps at
+  // the loop BRACE (not [0,total)); otherwise it wraps the active loop cycle.
   private currentBeat(): number {
     if (!this.ctx) return 0;
     const elapsed = this.ctx.currentTime - this._seqAnchorTime;
     let beat = this._seqAnchorBeat + elapsed / this.beatDur();
+    if (this.arrangeMode) {
+      const br = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
+      if (br) {
+        const len = br.end - br.start;
+        beat = br.start + (((beat - br.start) % len) + len) % len;
+      }
+      return Math.max(0, beat);
+    }
     const total = this.activeTotalBeats();
     if (this.loopOn && total > 0) beat = ((beat % total) + total) % total;
     return beat;
@@ -2333,14 +2614,20 @@ class AudioEngine {
     const beat = this.sequencePlaying ? this.currentBeat() : 0;
     return {
       beat,
-      bars: this.beatMode ? Math.max(1, total / this.sequence.beatsPerBar) : this._clip ? this._clip.bars : 0,
+      bars: this.arrangeMode ? Math.max(1, total / this.arrangement.beatsPerBar) : this.beatMode ? Math.max(1, total / this.sequence.beatsPerBar) : this._clip ? this._clip.bars : 0,
       playing: this.sequencePlaying,
-      step: this.beatMode && this.sequencePlaying ? Math.floor(beat / STEP_BEATS) % this.sequence.steps : -1,
+      step: this.beatMode && !this.arrangeMode && this.sequencePlaying ? Math.floor(beat / STEP_BEATS) % this.sequence.steps : -1,
     };
   }
 
-  playSequence() {
-    if (!this.beatMode && !this._clip) return;
+  // arrangement playhead beat for the timeline (or the pending seek when stopped)
+  arrangementPosition(): number {
+    if (this.arrangeMode && this.sequencePlaying) return this.currentBeat();
+    return this._pendingSeekBeat;
+  }
+
+  playSequence(fromBeat = 0) {
+    if (!this.arrangeMode && !this.beatMode && !this._clip) return;
     const c = this.ensureCtx();
     // transport mutual-exclusion: track playback and the sequencer can't both
     // drive the graph (double-sum + corrupt metering)
@@ -2349,7 +2636,8 @@ class AudioEngine {
     this.sequencePlaying = true;
     const start = c.currentTime + 0.08; // small headroom before first note
     this._seqAnchorTime = start;
-    this._seqAnchorBeat = 0;
+    this._seqAnchorBeat = this.arrangeMode ? fromBeat || this._pendingSeekBeat : 0;
+    this._pendingSeekBeat = 0;
     this._scheduledThrough = start;
     if (this._schedTimer) clearInterval(this._schedTimer);
     this._schedTimer = window.setInterval(() => this.schedTick(), AudioEngine.SCHED_INTERVAL);
@@ -2408,6 +2696,53 @@ class AudioEngine {
     else this.playBeat();
   }
 
+  // ── arrangement transport ──
+  // Start the linear timeline scheduler. `fromBeat` seeds the playhead (0 = song
+  // start). Mirrors playBeat but sets arrangeMode; the loop brace drives looping.
+  // decode the sampled presets every midi track uses, so restored/selected tracks
+  // don't fall back to the synth (a preset with no decoded zones voices as glass pad).
+  warmArrangement() {
+    for (const t of this.arrangement.tracks) {
+      if (t.kind === "midi" && t.presetId) this.warmPatch(this.resolvePatch(t.presetId));
+    }
+  }
+  playArrangement(fromBeat = 0) {
+    this.arrangeMode = true;
+    this.beatMode = false;
+    this.bpm = this.arrangement.bpm;
+    this.loopOn = !!this.arrangement.loop?.on;
+    this.warmArrangement(); // decode track instruments before scheduling
+    void this.loadLoops(); // audio-loop buffers (Phase 3)
+    this.playSequence(fromBeat);
+  }
+  stopArrangement() {
+    this.stopSequence();
+    this.arrangeMode = false;
+  }
+  toggleArrangement() {
+    if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
+    else this.playArrangement();
+  }
+  // move the playhead to `beat` while playing, via the re-anchor trick (same as
+  // setBpm): anchor the clock at the target beat now, re-schedule from here.
+  seekArrangement(beat: number) {
+    beat = Math.max(0, beat);
+    if (this.sequencePlaying && this.arrangeMode && this.ctx) {
+      const now = this.ctx.currentTime;
+      // release ringing voices so a seek doesn't leave stuck notes
+      this._seqVoices.forEach((h) => this.releaseVoice(h, now, true));
+      this._seqVoices = [];
+      this._seqAnchorBeat = beat;
+      this._seqAnchorTime = now;
+      this._scheduledThrough = now;
+      this.schedTick();
+    } else {
+      this._pendingSeekBeat = beat; // remembered until play (start from here)
+    }
+    this.emit("transport");
+  }
+  private _pendingSeekBeat = 0;
+
   setSwing(v: number) {
     this.sequence.swing = Math.min(0.7, Math.max(0, v));
     this.emit("clip");
@@ -2448,6 +2783,63 @@ class AudioEngine {
     const fromBeatAbs = this._seqAnchorBeat + (this._scheduledThrough - this._seqAnchorTime) / bd;
     const toBeatAbs = this._seqAnchorBeat + (horizon - this._seqAnchorTime) / bd;
     const whenOf = (absBeat: number) => this._seqAnchorTime + (absBeat - this._seqAnchorBeat) * bd;
+
+    // ── linear arrangement branch ──
+    // Walk placed clips; a clip's content sits at `clip.startBeat`. The global loop
+    // brace (arrangement.loop, on ⇒ loopOn) wraps the WHOLE window at the brace
+    // bounds — so we shift the lookahead window back into the brace and also probe
+    // the previous wrap for clips straddling the brace start. Phase 1: MIDI clips.
+    if (this.arrangeMode) {
+      const brace = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
+      const braceLen = brace ? brace.end - brace.start : 0;
+      // Emit a voice for a run at its timeline beat, mapping into the lookahead
+      // window. With the loop brace, an event only fires if it lives inside the
+      // brace, and it repeats every braceLen — so we scan the wrap iterations `k`
+      // that land in the window (mirrors the loop grid's k*total wrap).
+      const emitRun = (run: NoteRun, timelineBeat: number, sel: VoiceSel, vibPts?: AutoPoint[]) => {
+        if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end)) return;
+        let k = brace ? Math.floor((fromBeatAbs - timelineBeat) / braceLen) : 0;
+        for (; ; k++) {
+          const absBeat = timelineBeat + (brace ? k * braceLen : 0);
+          if (absBeat >= toBeatAbs) break;
+          if (absBeat < fromBeatAbs) {
+            if (!brace) break;
+            continue;
+          }
+          const when = whenOf(absBeat);
+          const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
+          const bends = run.bends.length
+            ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
+            : undefined;
+          const autoVib = vibPts?.length ? { points: vibPts, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd } : undefined;
+          const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, autoVib);
+          this.releaseVoice(h, off);
+          this._seqVoices.push(h);
+          if (!brace) break;
+        }
+      };
+      for (const t of this.arrangement.tracks) {
+        if (this.trackGain(t) <= 0) continue;
+        for (const clip of t.clips) {
+          if (clip.content.kind !== "midi") continue; // Phase 1: MIDI only
+          const sel = this.trackVoice(t);
+          const vibPts = clip.content.clip.autos?.find((a) => a.target === "vibrato")?.points;
+          const runs = this.buildRuns(clip.content.clip.notes);
+          const contentLen = Math.max(0.25, clipBeats(clip.content.clip));
+          const reps = clip.loop ? Math.max(1, Math.ceil(clip.lengthBeats / contentLen)) : 1;
+          for (let r = 0; r < reps; r++) {
+            const repOffset = r * contentLen;
+            for (const run of runs) {
+              if (run.startBeat + repOffset >= clip.lengthBeats) continue; // past the clip length
+              emitRun(run, clip.startBeat + run.startBeat + repOffset, sel, vibPts);
+            }
+          }
+        }
+      }
+      if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
+      this._scheduledThrough = horizon;
+      return;
+    }
 
     if (this.beatMode) {
       const seq = this.sequence;

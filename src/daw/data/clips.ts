@@ -28,8 +28,9 @@ export interface AutoPoint {
   beat: number; // beats from clip start
   value: number; // 0..1
 }
+export type AutoTarget = "vibrato" | "vol" | "pan"; // vibrato = per-clip; vol/pan = per-track
 export interface AutoLane {
-  target: "vibrato";
+  target: AutoTarget;
   points: AutoPoint[];
 }
 
