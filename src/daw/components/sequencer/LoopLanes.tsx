@@ -29,6 +29,7 @@ function loopMenu(e: React.MouseEvent, l: LoopLane) {
       { label: st.solo ? "unsolo" : "solo", onClick: () => engine.toggleLoopSolo(l.id) },
       { separator: true },
       { label: st.sync ? "unlock from grid tempo" : "lock to grid tempo", onClick: () => engine.toggleLoopSync(l.id) },
+      { label: st.reverse ? "play forward" : "play reversed", onClick: () => engine.toggleLoopReverse(l.id) },
       { label: "reset A→B region", disabled: (st.a ?? 0) === 0 && (st.b ?? 1) === 1, onClick: () => engine.setLoopRegion(l.id, 0, 1) },
       { separator: true },
       { label: "remove loop", danger: true, onClick: () => engine.removeLoop(l.id) },
@@ -331,6 +332,16 @@ export function LoopLanes() {
                 }
               >
                 lock
+              </button>
+              <button
+                onClick={() => engine.toggleLoopReverse(l.id)}
+                title={st.reverse ? "playing reversed — click for forward" : "play the loop backwards"}
+                className={
+                  "rounded-[3px] border px-[7px] py-[4px] font-mono text-[9px] tracking-[0.06em] transition-colors " +
+                  (st.reverse ? "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent" : "border-line text-faint hover:text-dim")
+                }
+              >
+                rev
               </button>
               <button
                 onClick={() => engine.toggleLoopMute(l.id)}

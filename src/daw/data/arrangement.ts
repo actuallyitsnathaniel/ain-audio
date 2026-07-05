@@ -17,9 +17,12 @@ export type ClipContent =
   //   a/b        — played-region trim (0..1 of the buffer)
   //   gain       — per-clip level (0..~2, linear)
   //   semi/cents — independent varispeed transpose (speed-coupled), default 0
-  //   sync       — tempo-lock: playbackRate stretches so the clip length fits the tempo
-  //   sampleLoop — loop the trimmed region to fill the clip length (vs one-shot)
+  //   sync       — grid-tempo match: playbackRate = arrangement.bpm / rootBpm (like LoopLanes)
+  //   (looping is AUTOMATIC — Ableton rule: a clip longer than its content re-hashes the
+  //    loopA/loopB sub-region to fill; shorter cuts. No toggle.)
   //   loopA/loopB — loop region inside [a,b] (default = a/b); xfade + snap = click-free seam
+  //   rootBpm/bars/key — detected from the filename (parseLoopMeta); rootBpm drives sync
+  //   reverse    — play the buffer backwards
   | {
       kind: "audio";
       bufId?: string;
@@ -31,11 +34,14 @@ export type ClipContent =
       semi?: number;
       cents?: number;
       sync?: boolean;
-      sampleLoop?: boolean;
       loopA?: number;
       loopB?: number;
       xfade?: number; // loop-seam crossfade, seconds
       snap?: boolean; // snap loop points to zero-crossings (default on)
+      rootBpm?: number; // native tempo (detected from filename); drives grid-sync
+      bars?: number; // detected bar count
+      key?: string; // detected musical key (display)
+      reverse?: boolean; // play backwards
     };
 
 export interface ArrClip {

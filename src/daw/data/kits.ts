@@ -96,6 +96,7 @@ export interface LoopState {
   sync?: boolean; // locked to grid tempo (playbackRate = bpm/rootBpm)? off = original speed
   a?: number; // loop region start, fraction 0..1 of the buffer (default 0 = whole loop)
   b?: number; // loop region end, fraction 0..1 of the buffer (default 1)
+  reverse?: boolean; // play the loop backwards
 }
 
 // per-lane step arrays live in SequenceClip keyed by lane id.
