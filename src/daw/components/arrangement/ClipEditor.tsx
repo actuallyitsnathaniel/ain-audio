@@ -20,6 +20,7 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
         <PianoRoll
           key={clipId}
           height={220}
+          trackId={trackId}
           initialClip={midi.clip}
           onCommit={(nc) => engine.setClipContent(trackId, clipId, { kind: "midi", clip: nc })}
         />

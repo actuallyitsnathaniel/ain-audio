@@ -27,6 +27,7 @@ import { engine } from "../../engine";
 import { openContextMenu, type MenuItem } from "../context-menu-bus";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { cloneClip, clipBeats, newNoteId, type AutoPoint, type Note, type NoteClip } from "../../data/clips";
+import { Knob } from "../Knob";
 
 const SNAP = 0.25; // beats (1/16)
 const ROW_H = 14; // px per semitone row
@@ -71,7 +72,10 @@ interface View {
 
 // `channelId` binds the roll to a beat-maker MIDI channel's clip instead of the
 // global Audio-Lab clip; everything else (gestures, render, playhead) is identical.
-export function PianoRoll({ height = 280, channelId, initialClip, onCommit }: { height?: number; channelId?: string; initialClip?: NoteClip; onCommit?: (clip: NoteClip) => void }) {
+export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCommit }: { height?: number; channelId?: string; trackId?: string; initialClip?: NoteClip; onCommit?: (clip: NoteClip) => void }) {
+  // which instrument to audition note previews through: a beat-maker channel, or an
+  // arrangement track. undefined ⇒ the global Audio-Lab patch (live keyboard).
+  const auditionId = channelId ?? trackId;
   const ref = useRef<HTMLCanvasElement>(null);
   const clipRef = useRef<NoteClip | null>(null);
   const sel = useRef<Set<string>>(new Set()); // selected note ids
@@ -83,6 +87,7 @@ export function PianoRoll({ height = 280, channelId, initialClip, onCommit }: { 
   // bottom lane: which automation it shows, and whether it's expanded. A ref mirror
   // (assigned in an effect, not during render) lets the rAF canvas read it.
   const [lane, setLane] = useState<{ mode: "vel" | "vib"; open: boolean }>({ mode: "vel", open: true });
+  const [, bump] = useState(0); // re-render the vib knobs (clip lives in a ref)
   const laneRef = useRef(lane);
   useEffect(() => {
     laneRef.current = lane;
@@ -179,20 +184,20 @@ export function PianoRoll({ height = 280, channelId, initialClip, onCommit }: { 
   };
 
   const blip = (pitch: number) => {
-    engine.noteOn(pitch, 0.85, channelId);
-    setTimeout(() => engine.noteOff(pitch, false, channelId), 140);
+    engine.noteOn(pitch, 0.85, auditionId);
+    setTimeout(() => engine.noteOff(pitch, false, auditionId), 140);
   };
 
   // ── gutter keyboard ──
   const gutterOn = (pitch: number) => {
     if (gutterKey.current === pitch) return;
-    if (gutterKey.current !== null) engine.noteOff(gutterKey.current, false, channelId);
+    if (gutterKey.current !== null) engine.noteOff(gutterKey.current, false, auditionId);
     gutterKey.current = pitch;
-    engine.noteOn(pitch, 0.9, channelId);
+    engine.noteOn(pitch, 0.9, auditionId);
   };
   const gutterOff = () => {
     if (gutterKey.current === null) return;
-    engine.noteOff(gutterKey.current, false, channelId);
+    engine.noteOff(gutterKey.current, false, auditionId);
     gutterKey.current = null;
   };
 
@@ -738,6 +743,15 @@ export function PianoRoll({ height = 280, channelId, initialClip, onCommit }: { 
     }
     return l.points;
   };
+  // set the vibrato lane's speed (rate, Hz) or intensity (depth scale) — clip-global
+  const setVibField = (field: "rate" | "intensity", v: number) => {
+    if (!clipRef.current) return;
+    ensureVibLane(); // makes sure the lane exists
+    const l = clipRef.current.autos!.find((a) => a.target === "vibrato")!;
+    l[field] = v;
+    commit();
+    bump((n) => n + 1);
+  };
   // map a lane y to a 0..1 value (top = 1) and back, within the lane band [top,bottom]
   const laneValFromY = (y: number, top: number, bottom: number) => clamp(1 - (y - top) / Math.max(1, bottom - top), 0, 1);
   const laneYFromVal = (val: number, top: number, bottom: number) => top + (1 - val) * (bottom - top);
@@ -1055,6 +1069,20 @@ export function PianoRoll({ height = 280, channelId, initialClip, onCommit }: { 
           {lane.open ? "▾" : "▸"}
         </button>
       </div>
+      {/* vibrato lane knobs — clip-global speed + intensity, shown over the VIB lane */}
+      {lane.mode === "vib" && lane.open && (
+        <div
+          className="pointer-events-none absolute left-[34px] flex items-end gap-[10px] rounded-[3px] border border-line bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-[8px] py-[4px]"
+          style={{ bottom: 6 }}
+        >
+          <div className="pointer-events-auto">
+            <Knob size={30} label="speed" value={vibLane()?.rate ?? 5.5} min={0.5} max={12} defaultValue={5.5} onChange={(v) => setVibField("rate", v)} fmt={(v) => v.toFixed(1) + "Hz"} />
+          </div>
+          <div className="pointer-events-auto">
+            <Knob size={30} label="depth" value={vibLane()?.intensity ?? 1} min={0} max={2} defaultValue={1} onChange={(v) => setVibField("intensity", v)} fmt={(v) => Math.round(v * 100) + "%"} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

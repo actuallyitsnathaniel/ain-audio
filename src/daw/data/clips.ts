@@ -32,6 +32,8 @@ export type AutoTarget = "vibrato" | "vol" | "pan"; // vibrato = per-clip; vol/p
 export interface AutoLane {
   target: AutoTarget;
   points: AutoPoint[];
+  rate?: number; // vibrato: LFO speed in Hz (defaults to the engine's VIB_RATE)
+  intensity?: number; // vibrato: depth scale, ~0..2 (1 = the curve's nominal depth)
 }
 
 export interface NoteClip {
@@ -91,7 +93,7 @@ export const cloneClip = (clip: NoteClip): NoteClip => ({
   bars: clip.bars,
   beatsPerBar: clip.beatsPerBar,
   notes: clip.notes.map((n) => ({ ...n })),
-  autos: clip.autos?.map((a) => ({ target: a.target, points: a.points.map((p) => ({ ...p })) })),
+  autos: clip.autos?.map((a) => ({ target: a.target, points: a.points.map((p) => ({ ...p })), rate: a.rate, intensity: a.intensity })),
 });
 
 // ── default-phrase authoring helper ───────────────────────────────────────

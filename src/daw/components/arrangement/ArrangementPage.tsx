@@ -126,9 +126,9 @@ function TrackHeader({ t, armed, onArm }: { t: ArrTrack; armed: boolean; onArm: 
             className="min-w-0 flex-1 cursor-pointer appearance-none rounded-[2px] border border-line2 bg-panel2 px-[4px] py-[1px] font-mono text-[8.5px] text-daw-text hover:border-accent focus:outline-none"
             aria-label="instrument"
           >
-            {engine.samplePresets.map((p) => (
-              <option key={p.id} value={p.id} className="bg-panel2">
-                {p.name}
+            {engine.synthPatches.map((key) => (
+              <option key={key} value={key} className="bg-panel2">
+                {key}
               </option>
             ))}
           </select>
@@ -140,7 +140,7 @@ function TrackHeader({ t, armed, onArm }: { t: ArrTrack; armed: boolean; onArm: 
 }
 
 export function ArrangementPage() {
-  const eng = useEngine(["arrange", "transport", "preset"]);
+  const eng = useEngine(["arrange", "transport", "preset", "patch"]);
   const tracks = eng.arrangement.tracks;
   const [rawSel, setSel] = useState<{ trackId: string; clipId: string } | null>(null);
   // derive validity during render (no setState-in-effect); a stale selection just
