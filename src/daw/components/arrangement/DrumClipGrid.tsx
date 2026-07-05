@@ -9,11 +9,13 @@ import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { KITS, type SequenceClip } from "../../data/kits";
+import type { NoteClip } from "../../data/clips";
+import { stepDiscrepancy } from "../../data/drum-midi";
 
 const BAR_STEPS = 16;
 const STEP_BEATS = 0.25;
 
-export function DrumClipGrid({ pattern, startBeat, onCommit }: { pattern: SequenceClip; startBeat: number; onCommit: (p: SequenceClip) => void }) {
+export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern: SequenceClip; notes?: NoteClip; startBeat: number; onCommit: (p: SequenceClip) => void }) {
   useEngine(["transport"]);
   const kit = KITS.find((k) => k.id === pattern.kitId) || engine.kit;
   const gridRef = useRef<HTMLDivElement>(null);
@@ -68,12 +70,20 @@ export function DrumClipGrid({ pattern, startBeat, onCommit }: { pattern: Sequen
                     const isOn = on[s];
                     const isAccent = accent[s];
                     const beatStart = i % 4 === 0;
+                    // discrepancy: this on-step hides note detail the grid can't show
+                    // (off-grid / length / multi-hit / mid-velocity) → diagonal hatch
+                    const disc = isOn && !!notes && stepDiscrepancy(notes, kit, lane.id, s);
                     return (
                       <button
                         key={s}
                         data-step={s}
                         onClick={(e) => toggle(lane.id, s, e.shiftKey)}
-                        title={`${lane.name} · step ${s + 1}${isOn ? " (shift-click: accent)" : ""}`}
+                        title={`${lane.name} · step ${s + 1}${disc ? " — has off-grid / variable detail (edit in piano roll)" : isOn ? " (shift-click: accent)" : ""}`}
+                        style={
+                          disc
+                            ? { backgroundImage: "repeating-linear-gradient(45deg, transparent 0, transparent 2px, rgba(12,12,16,0.55) 2px, rgba(12,12,16,0.55) 4px)" }
+                            : undefined
+                        }
                         className={
                           "h-[24px] flex-1 rounded-[3px] border transition-colors " +
                           (isOn

@@ -3256,7 +3256,7 @@ class AudioEngine {
         }
       };
       // one drum hit at a timeline beat, wrapped through the loop brace like emitRun
-      const emitDrum = (lane: DrumLane, timelineBeat: number, accent: boolean, dest: AudioNode) => {
+      const emitDrum = (lane: DrumLane, timelineBeat: number, vel: number, dest: AudioNode) => {
         if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end)) return;
         let k = brace ? Math.floor((fromBeatAbs - timelineBeat) / braceLen) : 0;
         for (; ; k++) {
@@ -3266,7 +3266,7 @@ class AudioEngine {
             if (!brace) break;
             continue;
           }
-          this.voiceDrum(lane, whenOf(absBeat), accent ? 1 : 0.7, dest);
+          this.voiceDrum(lane, whenOf(absBeat), vel, dest);
           if (!brace) break;
         }
       };
@@ -3292,16 +3292,28 @@ class AudioEngine {
             const kit = KITS.find((kt) => kt.id === pat.kitId) || this.kit;
             const dest = this.trackStrip(t);
             const contentLen = Math.max(0.25, pat.steps * STEP_BEATS);
-            // song rule: pattern tiles to fill the clip length automatically
+            // song rule: content tiles to fill the clip length automatically
             const reps = Math.max(1, Math.ceil(clip.lengthBeats / contentLen));
+            const notes = clip.content.notes; // lossless source of truth when present
             for (let r = 0; r < reps; r++) {
               const repOffset = r * contentLen;
-              for (let s = 0; s < pat.steps; s++) {
-                const stepBeat = repOffset + s * STEP_BEATS;
-                if (stepBeat >= clip.lengthBeats) continue; // past the clip length
-                for (const lane of kit.lanes) {
-                  if (!pat.on[lane.id]?.[s]) continue;
-                  emitDrum(lane, clip.startBeat + stepBeat, !!pat.accent[lane.id]?.[s], dest);
+              if (notes) {
+                // kit-voiced MIDI: each note → its lane at its own beat + velocity (off-grid,
+                // variable length/vel, multi-hits all play exactly as edited in the roll)
+                for (const nt of notes.notes) {
+                  const beat = repOffset + nt.start;
+                  if (beat >= clip.lengthBeats) continue;
+                  const lane = kit.lanes[nt.pitch - DRUM_BASE];
+                  if (lane) emitDrum(lane, clip.startBeat + beat, nt.vel, dest);
+                }
+              } else {
+                for (let s = 0; s < pat.steps; s++) {
+                  const stepBeat = repOffset + s * STEP_BEATS;
+                  if (stepBeat >= clip.lengthBeats) continue;
+                  for (const lane of kit.lanes) {
+                    if (!pat.on[lane.id]?.[s]) continue;
+                    emitDrum(lane, clip.startBeat + stepBeat, pat.accent[lane.id]?.[s] ? 1 : 0.7, dest);
+                  }
                 }
               }
             }
