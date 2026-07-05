@@ -316,6 +316,9 @@ class AudioEngine {
   // decoded zone buffers per preset id; index parallels preset.zones.
   // an entry of `null` at a slot means that zone failed to decode.
   private _sampleBufs: Record<string, (AudioBuffer | null)[]> = {};
+  // click-free looping: buffers with an equal-power crossfade baked into the loop
+  // seam, keyed by "presetId:zoneIdx:loopStart:loopEnd" (rounded). Built lazily.
+  private _xfadeBufs: Record<string, AudioBuffer> = {};
   private _presetLoading: Record<string, boolean> = {};
   private _phraseCache: Record<string, { clip: NoteClip; bpm?: number }> = {};
   private _ls: Partial<Record<EngineEvent, Array<() => void>>> = {};
@@ -1090,7 +1093,7 @@ class AudioEngine {
   // for densely-sampled instruments). Returns null if no zone decoded. The
   // returned rootMidi is the value to compute playbackRate against — clamped so
   // out-of-range notes never overshoot SHIFT_CAP.
-  private pickZone(preset: SampledPreset, midi: number): { buf: AudioBuffer; rootMidi: number } | null {
+  private pickZone(preset: SampledPreset, midi: number): { buf: AudioBuffer; rootMidi: number; zoneIdx: number } | null {
     const bufs = this._sampleBufs[preset.id];
     if (!bufs) return null;
     let containing = -1;
@@ -1111,7 +1114,77 @@ class AudioEngine {
     // clamp the effective root so |midi - root| never exceeds the shift cap
     const cap = AudioEngine.SHIFT_CAP;
     const effRoot = midi > root + cap ? midi - cap : midi < root - cap ? midi + cap : root;
-    return { buf: bufs[idx]!, rootMidi: effRoot };
+    return { buf: bufs[idx]!, rootMidi: effRoot, zoneIdx: idx };
+  }
+
+  // Bake a user-controlled equal-power crossfade into a sample's loop seam so `s.loop`
+  // wraps without a click. `xfadeSec` is the fade time the user dials on the UI (0 = off).
+  //
+  // Standard sampler loop-xfade: native looping plays [loopStart, loopEnd) then jumps
+  // back to loopStart, so the click is inD[bS-1] → inD[aS]. We rewrite the `xf` samples
+  // ENDING AT loopEnd as (loop tail, fading out) + (the pre-roll ending just BEFORE
+  // loopStart, fading in). After the fade the tail has become inD[aS-1]'s material, and
+  // the loop restarts at inD[aS] — which is physically the NEXT sample, so the wrap is
+  // continuous. Equal-power (cos/sin) keeps perceived level constant across the blend.
+  // Needs `xf` samples of pre-roll before loopStart (aS ≥ xf) — capped below.
+  private xfadeLoopBuffer(src: AudioBuffer, presetId: string, zoneIdx: number, a: number, b: number, xfadeSec: number): AudioBuffer {
+    const N = src.length;
+    const aS = Math.floor(a * N);
+    const bS = Math.floor(b * N);
+    const region = bS - aS;
+    // fade length: the user's seconds, capped to half the loop AND to the pre-roll
+    // available before loopStart (can't read before the buffer head).
+    let xf = Math.floor(src.sampleRate * Math.max(0, xfadeSec));
+    xf = Math.min(xf, Math.floor(region / 2), aS);
+    const key = presetId + ":" + zoneIdx + ":" + a.toFixed(4) + ":" + b.toFixed(4) + ":" + xf;
+    const hit = this._xfadeBufs[key];
+    if (hit) return hit;
+    if (xf < 8) return src; // fade off / too small / loop at buffer head → plain loop
+    const c = this.ensureCtx();
+    const out = c.createBuffer(src.numberOfChannels, N, src.sampleRate);
+    for (let ch = 0; ch < src.numberOfChannels; ch++) {
+      const inD = src.getChannelData(ch);
+      const outD = out.getChannelData(ch);
+      outD.set(inD); // copy all, then rewrite the last `xf` samples before loopEnd
+      for (let i = 0; i < xf; i++) {
+        const t = (i + 0.5) / xf; // 0..1 across the fade toward loopEnd
+        const fadeOut = Math.cos((t * Math.PI) / 2); // outgoing loop tail
+        const fadeIn = Math.sin((t * Math.PI) / 2); // incoming = pre-roll before loopStart
+        // tail [bS-xf+i] morphs into the material that leads INTO loopStart [aS-xf+i]
+        outD[bS - xf + i] = inD[bS - xf + i] * fadeOut + inD[aS - xf + i] * fadeIn;
+      }
+    }
+    this._xfadeBufs[key] = out;
+    return out;
+  }
+
+  // Snap a loop-point fraction to the nearest upward zero-crossing on channel 0, so a
+  // loop's start and end both sit at ~0 amplitude → the seam is 0→0 (click-free) before
+  // any crossfade. Searches ±`win` fraction of the buffer; if none found, returns the
+  // original. "Upward" (neg→pos) on both ends keeps the waveform slope consistent too.
+  private snapZeroCross(buf: AudioBuffer, frac: number, win = 0.02): number {
+    const N = buf.length;
+    const d = buf.getChannelData(0);
+    const center = Math.min(N - 2, Math.max(1, Math.round(frac * N)));
+    const span = Math.max(1, Math.floor(win * N));
+    let best = -1;
+    let bestDist = Infinity;
+    for (let off = 0; off <= span; off++) {
+      for (const i of off === 0 ? [center] : [center - off, center + off]) {
+        if (i < 1 || i >= N) continue;
+        if (d[i - 1] <= 0 && d[i] > 0) {
+          // interpolate the sub-sample crossing for a tighter landing
+          const frac2 = d[i] !== d[i - 1] ? -d[i - 1] / (d[i] - d[i - 1]) : 0;
+          const dist = Math.abs(i - 1 + frac2 - center);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = i - 1 + frac2;
+          }
+        }
+      }
+      if (best >= 0) break; // nearest ring found → stop widening
+    }
+    return best >= 0 ? best / N : frac;
   }
 
   // a 2-second looping noise buffer (white or pink), built once and reused by every
@@ -1290,7 +1363,6 @@ class AudioEngine {
       const zone = preset ? this.pickZone(preset, midi) : null;
       if (preset && zone) {
         const s = c.createBufferSource();
-        s.buffer = zone.buf;
         // varispeed: note pitch × independent transpose (semi + cents), speed-coupled
         const vari = (p.sample.semi ?? 0) / 12 + (p.sample.cents ?? 0) / 1200;
         s.playbackRate.value = Math.pow(2, (midi - zone.rootMidi) / 12 + vari);
@@ -1300,9 +1372,22 @@ class AudioEngine {
         const a = Math.min(0.999, Math.max(0, p.sample.start ?? 0));
         const b = Math.min(1, Math.max(a + 0.001, p.sample.end ?? 1));
         if (p.sample.loop) {
+          let ls = p.sample.loopStart ?? a;
+          let le = p.sample.loopEnd ?? b;
+          // snap both loop points to zero-crossings so the seam is 0→0 (click-free); the
+          // crossfade below then just polishes any residual. Default on.
+          if (p.sample.snap !== false) {
+            ls = this.snapZeroCross(zone.buf, ls);
+            le = this.snapZeroCross(zone.buf, le);
+            if (le <= ls) le = Math.min(1, ls + 0.001); // guard degenerate snap
+          }
+          // loop a buffer with the user's seam crossfade baked in → no click on wrap
+          s.buffer = this.xfadeLoopBuffer(zone.buf, p.sample.presetId, zone.zoneIdx, ls, le, p.sample.xfade ?? 0);
           s.loop = true;
-          s.loopStart = (p.sample.loopStart ?? a) * dur;
-          s.loopEnd = (p.sample.loopEnd ?? b) * dur;
+          s.loopStart = ls * dur;
+          s.loopEnd = le * dur;
+        } else {
+          s.buffer = zone.buf;
         }
         if (bends && bends.length && s.detune) applyBends(s.detune, "detune", s.detune.value);
         const sg = c.createGain();
@@ -2518,20 +2603,28 @@ class AudioEngine {
   }
   // waveform peaks for a decoded preset zone (mirrors loopPeaks). Cached per
   // "presetId:zoneIdx:bins". null if the zone isn't decoded yet.
-  presetPeaks(presetId: string, zoneIdx: number, bins: number): Float32Array | null {
+  // Peak envelope over a fraction range [from,to] of the zone buffer, binned to `bins`.
+  // Range support lets the sample view zoom in and still resolve fine detail. Cached per
+  // (preset, zone, bins, range); the common whole-buffer call reuses one entry.
+  presetPeaks(presetId: string, zoneIdx: number, bins: number, from = 0, to = 1): Float32Array | null {
     const buf = this._sampleBufs[presetId]?.[zoneIdx];
     if (!buf) return null;
-    const key = presetId + ":" + zoneIdx;
+    const key = presetId + ":" + zoneIdx + ":" + bins + ":" + from.toFixed(4) + ":" + to.toFixed(4);
     const cached = this._presetPeaks[key];
-    if (cached && cached.length === bins) return cached;
+    if (cached) return cached;
     const ch0 = buf.getChannelData(0);
     const ch1 = buf.numberOfChannels > 1 ? buf.getChannelData(1) : ch0;
-    const per = Math.max(1, Math.floor(ch0.length / bins));
+    const N = ch0.length;
+    const s0 = Math.max(0, Math.floor(from * N));
+    const s1 = Math.min(N, Math.ceil(to * N));
+    const span = Math.max(1, s1 - s0);
+    const per = Math.max(1, Math.floor(span / bins));
+    const step = Math.max(1, Math.floor(per / 256)); // subsample big bins for speed
     const peaks = new Float32Array(bins);
     for (let b = 0; b < bins; b++) {
       let max = 0;
-      const start = b * per;
-      for (let i = start; i < start + per && i < ch0.length; i += 8) {
+      const start = s0 + b * per;
+      for (let i = start; i < start + per && i < s1; i += step) {
         const a = Math.abs((ch0[i] + ch1[i]) * 0.5);
         if (a > max) max = a;
       }

@@ -68,8 +68,11 @@ export function Knob({
     const n = Math.min(1, Math.max(0, drag.current.norm + dy));
     onChange(min + n * (max - min));
   };
-  const onPointerUp = () => {
+  const onPointerUp = (e: ReactPointerEvent<SVGSVGElement>) => {
     drag.current = null;
+    // explicitly release capture — without this a missed/again-captured pointer can
+    // keep dragging the knob after the mouse is up.
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
   };
   const onDoubleClick = () => {
     if (defaultValue !== null) onChange(defaultValue);
@@ -101,6 +104,8 @@ export function Knob({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onLostPointerCapture={() => (drag.current = null)}
         onDoubleClick={onDoubleClick}
       >
         <path d={knobArc(32, 32, 26, a0, a1)} stroke="var(--line2)" strokeWidth="3" fill="none" strokeLinecap="round" />
