@@ -10,6 +10,7 @@
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
 import { clipBeats, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
+import { DRUM_BASE } from "./data/drum-midi";
 import { arrangementBeats, loadArrangement, newClipId, newTrackId, saveArrangement, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
 import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
 import { parseMidi } from "./data/midi-file";
@@ -1551,6 +1552,15 @@ class AudioEngine {
     this.ensureCtx();
     // no explicit channel ⇒ the global keyboard, which follows the armed channel
     const cid = channelId ?? this.armedChannel ?? undefined;
+    // drum-track preview: a note in the drum piano-roll triggers the pitch's kit lane
+    // as a one-shot (no sustained voice), so it sounds like the drum it edits.
+    const dt = cid ? this.arrangement.tracks.find((tr) => tr.id === cid && tr.kind === "drum") : undefined;
+    if (dt) {
+      const kit = KITS.find((k) => k.id === this.drumTrackKitId(dt)) || this.kit;
+      const lane = kit.lanes[midi - DRUM_BASE];
+      if (lane) this.voiceDrum(lane, this.ctx!.currentTime, vel > 0.85 ? 1 : 0.7, this.trackStrip(dt));
+      return;
+    }
     this.noteOff(midi, true, cid);
     // `cid` may name a beat-maker channel OR an arrangement track — resolve whichever
     // it is so previewing a note in the piano roll auditions that instrument, not the
@@ -1558,6 +1568,11 @@ class AudioEngine {
     const sel = this.voiceForId(cid);
     this._liveVoices[this.liveKey(midi, cid)] = this.startVoiceAt(midi, vel, this.ctx!.currentTime, sel);
     this.emit("synth");
+  }
+  // the kit a drum track's clips use (from the first drum clip, else the current kit)
+  private drumTrackKitId(t: ArrTrack): string {
+    for (const clip of t.clips) if (clip.content.kind === "drum") return clip.content.pattern.kitId || this.kit.id;
+    return this.kit.id;
   }
   // resolve a channel/track id to its voice selection (undefined = global patch)
   private voiceForId(id: string | undefined): VoiceSel | undefined {
