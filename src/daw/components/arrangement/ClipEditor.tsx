@@ -11,14 +11,24 @@ import { DrumClipGrid } from "./DrumClipGrid";
 import { AudioClipEditor } from "./AudioClipEditor";
 import { KITS } from "../../data/kits";
 import type { SequenceClip } from "../../data/kits";
-import { patternToNotes, notesToPattern, pitchLaneName } from "../../data/drum-midi";
+import type { NoteClip } from "../../data/clips";
+import { patternToNotes, notesToPattern, pitchLaneName, reconcileGridEdit } from "../../data/drum-midi";
 
-// a drum clip, editable as a step SEQUENCE or a kit-labeled PIANO ROLL. Both edit the
-// same pattern: the roll converts pattern↔notes (on-grid; off-grid quantises back).
-function DrumClipView({ trackId, clipId, pat, startBeat }: { trackId: string; clipId: string; pat: SequenceClip; startBeat: number }) {
+// a drum clip, editable as a step SEQUENCE or a kit-labeled PIANO ROLL. The roll is
+// LOSSLESS: it edits real notes (off-grid, variable length/vel, multi-hits), stored as
+// `content.notes` — the source of truth. The sequence grid shows those notes on-grid and
+// hatch-flags any step whose notes it can't fully represent. A grid edit is on-grid, so
+// it regenerates the notes from the grid.
+function DrumClipView({ trackId, clipId, pat, notes, startBeat }: { trackId: string; clipId: string; pat: SequenceClip; notes?: NoteClip; startBeat: number }) {
   const [view, setView] = useState<"seq" | "roll">("seq");
   const kit = KITS.find((k) => k.id === pat.kitId) || engine.kit;
-  const commit = (p: SequenceClip) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: p });
+  // sequence-view pattern: derive from notes when they're the truth, else the raw pattern
+  const gridPat = notes ? { ...pat, ...notesToPattern(notes, kit, pat.steps) } : pat;
+  // grid edit → reconcile against existing notes so off-grid/held detail on untouched
+  // cells survives; only the toggled cells add/remove on-grid notes.
+  const commitGrid = (p: SequenceClip) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: p, notes: notes ? reconcileGridEdit(notes, p, kit) : patternToNotes(p, kit) });
+  // roll edit → store the notes verbatim; keep pattern for kitId/steps
+  const commitRoll = (nc: NoteClip) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: pat, notes: nc });
   const tab = (v: "seq" | "roll", label: string) => (
     <button
       onClick={() => setView(v)}
@@ -37,15 +47,15 @@ function DrumClipView({ trackId, clipId, pat, startBeat }: { trackId: string; cl
         </span>
       </div>
       {view === "seq" ? (
-        <DrumClipGrid key={clipId + "-seq"} pattern={pat} startBeat={startBeat} onCommit={commit} />
+        <DrumClipGrid key={clipId + "-seq"} pattern={gridPat} notes={notes} startBeat={startBeat} onCommit={commitGrid} />
       ) : (
         <PianoRoll
           key={clipId + "-roll"}
           height={220}
           trackId={trackId}
-          initialClip={patternToNotes(pat, kit)}
+          initialClip={notes ?? patternToNotes(pat, kit)}
           pitchLabel={(p) => pitchLaneName(kit, p)}
-          onCommit={(nc) => commit(notesToPattern(nc, kit, pat.steps))}
+          onCommit={commitRoll}
         />
       )}
     </div>
@@ -74,7 +84,7 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
   }
 
   if (clip.content.kind === "drum") {
-    return <DrumClipView trackId={trackId} clipId={clipId} pat={clip.content.pattern} startBeat={clip.startBeat} />;
+    return <DrumClipView trackId={trackId} clipId={clipId} pat={clip.content.pattern} notes={clip.content.notes} startBeat={clip.startBeat} />;
   }
 
   // audio: import a file, trim it, set its level

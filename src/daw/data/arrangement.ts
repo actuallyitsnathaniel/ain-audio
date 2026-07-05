@@ -11,7 +11,11 @@ import type { SequenceClip } from "./kits";
 // A clip wraps ONE content unit + a timeline position + a length.
 export type ClipContent =
   | { kind: "midi"; clip: NoteClip } // edited in the PianoRoll
-  | { kind: "drum"; pattern: SequenceClip } // edited in the StepGrid
+  // drum: a step pattern (kitId + steps) editable in the grid. `notes`, when present, is
+  // the LOSSLESS source of truth (edited in the kit-labeled piano roll) — it can hold
+  // off-grid timing, variable lengths, per-note velocity, multi-hits the grid can't show;
+  // the grid then flags those steps. Absent `notes` ⇒ the step pattern is authoritative.
+  | { kind: "drum"; pattern: SequenceClip; notes?: NoteClip }
   // audio: an imported file (bufId → session buffer store) OR a LoopLane ref (loopId).
   // Full sample-source feature set (union of the synth sampler + beat-maker loop lane):
   //   a/b        — played-region trim (0..1 of the buffer)

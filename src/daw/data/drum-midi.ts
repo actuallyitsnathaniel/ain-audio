@@ -66,3 +66,59 @@ export function notesToPattern(clip: NoteClip, kit: DrumKit, steps: number): Seq
   }
   return { steps, beatsPerBar: clip.beatsPerBar, bpm: 120, swing: 0, on, accent, loops: {}, laneMix: {}, channels: [] };
 }
+
+// Does the note detail on (lane, step) exceed what the step grid can show? The grid can
+// only represent: one hit, exactly on the 1/16 grid, one 1/16 long, at normal/accent
+// velocity. Anything beyond that is a "discrepancy" the sequencer flags with a hatch:
+//   · off-grid   — a note near this step but not exactly on it
+//   · length     — a note not ~one step long
+//   · multi      — more than one note landing in this step
+//   · velocity   — velocity that isn't ~0.7 (normal) or ~1.0 (accent)
+export function stepDiscrepancy(notes: NoteClip, kit: DrumKit, laneId: string, step: number): boolean {
+  const pitch = laneToPitch(kit, laneId);
+  const center = step * STEP_BEATS;
+  let hits = 0;
+  for (const n of notes.notes) {
+    if (n.pitch !== pitch) continue;
+    // does this note belong to this step's cell? (nearest-step quantisation)
+    if (Math.round(n.start / STEP_BEATS) !== step) continue;
+    hits++;
+    if (Math.abs(n.start - center) > 0.001) return true; // off-grid
+    if (Math.abs(n.length - STEP_BEATS) > 0.001) return true; // non-1/16 length
+    if (Math.abs(n.vel - 0.7) > 0.05 && Math.abs(n.vel - 1) > 0.05) return true; // mid velocity
+  }
+  return hits > 1; // multiple hits collapsed into one cell
+}
+
+// Reconcile a grid edit against the lossless notes WITHOUT nuking off-grid detail. The
+// grid `pat` is the on-grid truth the user just edited; for each (lane, step): if the
+// grid has it ON but no note lands in that cell, add an on-grid note (accent→vel); if the
+// grid has it OFF but a note is there, remove that cell's notes. Notes that already match
+// the grid (including off-grid ones whose cell is still ON) are left untouched — so
+// toggling one step never disturbs a nudged/held hit elsewhere.
+export function reconcileGridEdit(prev: NoteClip, pat: SequenceClip, kit: DrumKit): NoteClip {
+  const kept: Note[] = [];
+  // index prev notes by (pitch, step-cell)
+  const cellHas = new Set<string>();
+  for (const n of prev.notes) {
+    const laneId = pitchToLane(kit, n.pitch);
+    if (!laneId) { kept.push(n); continue; } // off-kit note: leave it
+    const s = Math.round(n.start / STEP_BEATS);
+    const cellOn = s >= 0 && s < pat.steps && pat.on[laneId]?.[s];
+    if (cellOn) { kept.push(n); cellHas.add(laneId + ":" + s); } // grid still wants this cell → keep the note
+    // else: grid turned this cell off → drop the note
+  }
+  // add on-grid notes for grid cells that are ON but had no surviving note
+  for (const lane of kit.lanes) {
+    const on = pat.on[lane.id];
+    if (!on) continue;
+    const acc = pat.accent[lane.id] || [];
+    const pitch = laneToPitch(kit, lane.id);
+    for (let s = 0; s < pat.steps; s++) {
+      if (!on[s] || cellHas.has(lane.id + ":" + s)) continue;
+      kept.push({ id: newNoteId(), pitch, start: s * STEP_BEATS, length: STEP_BEATS, vel: acc[s] ? 1 : 0.7 });
+    }
+  }
+  const bars = Math.max(1, Math.ceil((pat.steps * STEP_BEATS) / pat.beatsPerBar));
+  return { bars, beatsPerBar: pat.beatsPerBar, notes: kept };
+}

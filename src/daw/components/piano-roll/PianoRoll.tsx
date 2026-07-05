@@ -1081,18 +1081,15 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
           {lane.open ? "▾" : "▸"}
         </button>
       </div>
-      {/* vibrato lane knobs — clip-global speed + intensity, shown over the VIB lane */}
+      {/* vibrato lane knobs — clip-global speed + intensity. Hang OUTSIDE the view to
+          the left so they never cover the automation curve. */}
       {lane.mode === "vib" && lane.open && (
         <div
-          className="pointer-events-none absolute left-[34px] flex items-end gap-[10px] rounded-[3px] border border-line bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-[8px] py-[4px]"
-          style={{ bottom: 6 }}
+          className="pointer-events-auto absolute flex flex-col items-center gap-[6px] rounded-[3px] border border-line bg-panel px-[6px] py-[5px]"
+          style={{ right: "calc(100% + 6px)", bottom: 0 }}
         >
-          <div className="pointer-events-auto">
-            <Knob size={30} label="speed" value={vibLane()?.rate ?? 5.5} min={0.5} max={12} defaultValue={5.5} onChange={(v) => setVibField("rate", v)} fmt={(v) => v.toFixed(1) + "Hz"} />
-          </div>
-          <div className="pointer-events-auto">
-            <Knob size={30} label="depth" value={vibLane()?.intensity ?? 1} min={0} max={2} defaultValue={1} onChange={(v) => setVibField("intensity", v)} fmt={(v) => Math.round(v * 100) + "%"} />
-          </div>
+          <Knob size={30} label="speed" value={vibLane()?.rate ?? 5.5} min={0.5} max={12} defaultValue={5.5} onChange={(v) => setVibField("rate", v)} fmt={(v) => v.toFixed(1) + "Hz"} />
+          <Knob size={30} label="depth" value={vibLane()?.intensity ?? 1} min={0} max={2} defaultValue={1} onChange={(v) => setVibField("intensity", v)} fmt={(v) => Math.round(v * 100) + "%"} />
         </div>
       )}
     </div>
