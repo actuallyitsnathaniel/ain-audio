@@ -176,6 +176,39 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     });
   };
 
+  // drop an audio file onto an audio-track lane → create a clip there + import it.
+  // preventDefault on dragover is REQUIRED or the browser navigates to the file.
+  const onDragOver = (e: React.DragEvent<HTMLCanvasElement>) => {
+    if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
+  };
+  const onDrop = async (e: React.DragEvent<HTMLCanvasElement>) => {
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    e.preventDefault();
+    const r = ref.current!.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
+    const res = await engine.importAudio(file);
+    if (!res) return; // undecodable
+    // sample length in beats at the current tempo (¼-beat granularity)
+    const secPerBeat = 60 / engine.arrangement.bpm;
+    const lengthBeats = Math.max(1, Math.round((res.seconds / secPerBeat) * 4) / 4);
+    const audioContent = { kind: "audio" as const, bufId: res.bufId, name: res.name, a: 0, b: 1, gain: 1, cents: 0, semi: 0, snap: true };
+
+    // over an existing AUDIO clip? → replace its content (keeps its position/length)
+    const hit = y >= HEAD_H ? hitClip(x, y) : null;
+    if (hit && hit.c.content.kind === "audio") {
+      engine.setClipContent(hit.t.id, hit.c.id, { ...audioContent });
+      onSelectClip(hit.t.id, hit.c.id);
+      return;
+    }
+    // otherwise → a NEW audio track with the clip on it (the default gesture)
+    const track = engine.addTrack("audio");
+    const created = engine.addClip(track.id, { startBeat: beat, lengthBeats, loop: false, content: { ...audioContent } });
+    if (created) onSelectClip(track.id, created.id);
+  };
+
   // wheel: horizontal scroll; ⌘/ctrl = zoom around cursor
   useEffect(() => {
     const cv = ref.current;
@@ -344,11 +377,13 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     />
   );
 }
 
 // a blank drum pattern sized to one bar (reuses SequenceClip shape minimally)
 function emptyDrumPattern(bpb: number) {
-  return { steps: 16, beatsPerBar: bpb, bpm: engine.arrangement.bpm, swing: 0, on: {}, accent: {}, loops: {}, laneMix: {}, channels: [] };
+  return { steps: 16, beatsPerBar: bpb, kitId: engine.kit.id, bpm: engine.arrangement.bpm, swing: 0, on: {}, accent: {}, loops: {}, laneMix: {}, channels: [] };
 }

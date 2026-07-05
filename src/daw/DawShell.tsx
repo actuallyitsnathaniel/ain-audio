@@ -18,6 +18,21 @@ export function DawShell({ children }: { children: ReactNode }) {
     engine.setDefaultTrack(jlmTrack);
   }, []);
 
+  // Guard: a file dropped anywhere OTHER than a real drop target (the timeline / the
+  // audio-clip drop zone, which preventDefault themselves) must NOT make the browser
+  // navigate to the file. Swallow stray file drops at the window level.
+  useEffect(() => {
+    const isFile = (e: DragEvent) => Array.from(e.dataTransfer?.types || []).includes("Files");
+    const over = (e: DragEvent) => { if (isFile(e)) e.preventDefault(); };
+    const drop = (e: DragEvent) => { if (isFile(e) && !e.defaultPrevented) e.preventDefault(); };
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("drop", drop);
+    };
+  }, []);
+
   // Scroll to a #hash target, offsetting for the fixed transport bar.
   useEffect(() => {
     if (location.hash) {

@@ -102,6 +102,7 @@ export interface LoopState {
 export interface SequenceClip {
   steps: number; // 16
   beatsPerBar: number; // 4 → 16 steps = 1 bar of 1/16s
+  kitId?: string; // which kit voices this pattern (arrangement drum clips; default = current)
   bpm: number;
   swing: number; // 0–0.7, shifts odd 1/16s later
   on: Record<string, boolean[]>; // laneId → per-step on/off
