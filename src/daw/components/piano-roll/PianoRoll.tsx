@@ -72,7 +72,7 @@ interface View {
 
 // `channelId` binds the roll to a beat-maker MIDI channel's clip instead of the
 // global Audio-Lab clip; everything else (gestures, render, playhead) is identical.
-export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCommit }: { height?: number; channelId?: string; trackId?: string; initialClip?: NoteClip; onCommit?: (clip: NoteClip) => void }) {
+export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCommit, pitchLabel }: { height?: number; channelId?: string; trackId?: string; initialClip?: NoteClip; onCommit?: (clip: NoteClip) => void; pitchLabel?: (pitch: number) => string | null }) {
   // which instrument to audition note previews through: a beat-maker channel, or an
   // arrangement track. undefined ⇒ the global Audio-Lab patch (live keyboard).
   const auditionId = channelId ?? trackId;
@@ -974,12 +974,24 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
     for (let p = firstP; p <= lastP; p++) {
       const y = pitchToY(p);
       const lit = p === held || sounding.has(p);
-      g.fillStyle = lit ? ac : isBlack(p) ? "#16161a" : "#c9c9cf";
-      g.fillRect(0, y, KEY_W - 1, ROW_H - 1);
-      if (p % 12 === 0) {
-        g.fillStyle = lit ? "#0c0c0e" : "#3a3a40";
-        g.font = "8px ui-monospace, monospace";
-        g.fillText("C" + (Math.floor(p / 12) - 1), 3, y + ROW_H - 4);
+      // drum mode: a lane pitch gets a lit key + its lane name; non-lane rows dim out
+      const label = pitchLabel ? pitchLabel(p) : null;
+      if (pitchLabel) {
+        g.fillStyle = lit ? ac : label ? "#c9c9cf" : "#0e0e12";
+        g.fillRect(0, y, KEY_W - 1, ROW_H - 1);
+        if (label) {
+          g.fillStyle = lit ? "#0c0c0e" : "#2a2a30";
+          g.font = "7px ui-monospace, monospace";
+          g.fillText(label.slice(0, 5), 2, y + ROW_H - 4);
+        }
+      } else {
+        g.fillStyle = lit ? ac : isBlack(p) ? "#16161a" : "#c9c9cf";
+        g.fillRect(0, y, KEY_W - 1, ROW_H - 1);
+        if (p % 12 === 0) {
+          g.fillStyle = lit ? "#0c0c0e" : "#3a3a40";
+          g.font = "8px ui-monospace, monospace";
+          g.fillText("C" + (Math.floor(p / 12) - 1), 3, y + ROW_H - 4);
+        }
       }
     }
     g.restore();

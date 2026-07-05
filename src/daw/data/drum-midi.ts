@@ -1,0 +1,68 @@
+// ── Drum ↔ MIDI bridge ────────────────────────────────────────────────────────
+// A drum clip can be edited as a step grid OR a piano roll. In the roll, each kit
+// lane maps to a MIDI pitch so on/off steps become real notes (with variable length,
+// off-grid timing, per-note velocity). Lane index i → pitch DRUM_BASE + i (36 = kick,
+// GM-ish), so the roll's rows read bottom-up as the kit's lanes.
+
+import type { DrumKit } from "./kits";
+import type { Note, NoteClip } from "./clips";
+import type { SequenceClip } from "./kits";
+import { newNoteId } from "./clips";
+
+export const DRUM_BASE = 36; // MIDI pitch of the first (lowest) kit lane
+
+// lane id ↔ MIDI pitch, given a kit's lane order
+export function laneToPitch(kit: DrumKit, laneId: string): number {
+  const i = kit.lanes.findIndex((l) => l.id === laneId);
+  return DRUM_BASE + (i < 0 ? 0 : i);
+}
+export function pitchToLane(kit: DrumKit, pitch: number): string | null {
+  const i = pitch - DRUM_BASE;
+  return i >= 0 && i < kit.lanes.length ? kit.lanes[i].id : null;
+}
+// pitch → the kit lane's display name (for the roll's key labels); null if off-kit
+export function pitchLaneName(kit: DrumKit, pitch: number): string | null {
+  const i = pitch - DRUM_BASE;
+  return i >= 0 && i < kit.lanes.length ? kit.lanes[i].name : null;
+}
+
+const STEP_BEATS = 0.25; // 1/16
+
+// step pattern → note clip: every "on" step becomes a 1/16 note at its lane's pitch.
+// accent → higher velocity. This is the seed when you first open a step clip in the roll.
+export function patternToNotes(pat: SequenceClip, kit: DrumKit): NoteClip {
+  const notes: Note[] = [];
+  for (const lane of kit.lanes) {
+    const on = pat.on[lane.id];
+    if (!on) continue;
+    const pitch = laneToPitch(kit, lane.id);
+    const acc = pat.accent[lane.id] || [];
+    for (let s = 0; s < pat.steps; s++) {
+      if (!on[s]) continue;
+      notes.push({ id: newNoteId(), pitch, start: s * STEP_BEATS, length: STEP_BEATS, vel: acc[s] ? 1 : 0.7 });
+    }
+  }
+  const bars = Math.max(1, Math.ceil((pat.steps * STEP_BEATS) / pat.beatsPerBar));
+  return { bars, beatsPerBar: pat.beatsPerBar, notes };
+}
+
+// note clip → step pattern: quantise each note to the nearest 1/16, light that lane's
+// step, velocity ≥ 0.85 → accent. Off-grid detail is LOST (the step grid can't hold it);
+// that's the expected lossy direction (roll → grid). Notes off the kit are dropped.
+export function notesToPattern(clip: NoteClip, kit: DrumKit, steps: number): SequenceClip {
+  const on: Record<string, boolean[]> = {};
+  const accent: Record<string, boolean[]> = {};
+  for (const lane of kit.lanes) {
+    on[lane.id] = Array(steps).fill(false);
+    accent[lane.id] = Array(steps).fill(false);
+  }
+  for (const n of clip.notes) {
+    const laneId = pitchToLane(kit, n.pitch);
+    if (!laneId) continue; // note isn't on a kit lane
+    const s = Math.round(n.start / STEP_BEATS);
+    if (s < 0 || s >= steps) continue;
+    on[laneId][s] = true;
+    if (n.vel >= 0.85) accent[laneId][s] = true;
+  }
+  return { steps, beatsPerBar: clip.beatsPerBar, bpm: 120, swing: 0, on, accent, loops: {}, laneMix: {}, channels: [] };
+}
