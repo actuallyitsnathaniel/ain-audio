@@ -12,7 +12,7 @@ import type { ClipContent } from "../../data/arrangement";
 
 type AudioContentT = Extract<ClipContent, { kind: "audio" }>;
 
-export function AudioClipEditor({ content, onCommit }: { content: AudioContentT; onCommit: (c: AudioContentT) => void }) {
+export function AudioClipEditor({ content, looping = false, onCommit }: { content: AudioContentT; looping?: boolean; onCommit: (c: AudioContentT) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -66,29 +66,44 @@ export function AudioClipEditor({ content, onCommit }: { content: AudioContentT;
         <Knob size={38} label="gain" value={content.gain ?? 1} min={0} max={2} defaultValue={1} onChange={(v) => onCommit({ ...content, gain: v })} fmt={(v) => (v <= 0 ? "-∞" : (20 * Math.log10(v)).toFixed(1) + "dB")} />
       </div>
 
-      {/* union sample controls: varispeed · tempo-sync · loop (+ xfade/snap) */}
+      {/* sample controls: varispeed · tempo-sync · reverse. Looping is automatic (the
+          clip re-hashes its content when dragged longer than the sample) → the loop-seam
+          controls appear only when the clip is actually overflowing. */}
       <div className="flex flex-wrap items-end gap-x-[12px] gap-y-[6px]">
         <Knob size={34} label="semi" value={content.semi ?? 0} min={-24} max={24} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, semi: Math.round(v) })} fmt={(v) => (Math.round(v) > 0 ? "+" : "") + Math.round(v)} />
         <Knob size={34} label="fine" value={content.cents ?? 0} min={-100} max={100} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, cents: Math.round(v) })} fmt={(v) => Math.round(v) + "c"} />
-        <button className={toggle + " self-end " + on(!!content.sync)} title="tempo-sync: stretch the clip to fit its length at the current tempo (varispeed rides on top)" onClick={() => onCommit({ ...content, sync: !content.sync })}>
+        <button className={toggle + " self-end " + on(!!content.sync)} title="grid-sync: match the arrangement tempo using the sample's native bpm (set below). varispeed rides on top" onClick={() => onCommit({ ...content, sync: !content.sync })}>
           sync {content.sync ? "on" : "off"}
         </button>
-        <button className={toggle + " self-end " + on(!!content.sampleLoop)} title="loop the trimmed region to fill the clip length" onClick={() => onCommit({ ...content, sampleLoop: !content.sampleLoop })}>
-          loop {content.sampleLoop ? "on" : "off"}
+        <button className={toggle + " self-end " + on(!!content.reverse)} title="play the sample backwards" onClick={() => onCommit({ ...content, reverse: !content.reverse })}>
+          rev {content.reverse ? "on" : "off"}
         </button>
-        {content.sampleLoop && (
-          <>
+        {looping && (
+          <span className="flex items-end gap-[12px] rounded-[3px] border border-line bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] px-[8px] py-[3px]">
+            <span className="self-center font-mono text-[8.5px] tracking-[0.08em] text-accent uppercase">loop ↻</span>
             <button className={toggle + " self-end " + on(content.snap !== false)} title="snap loop points to zero-crossings (click-free seam)" onClick={() => onCommit({ ...content, snap: content.snap === false })}>
               snap {content.snap !== false ? "on" : "off"}
             </button>
             <Knob size={34} label="xfade" value={content.xfade ?? 0} min={0} max={0.2} defaultValue={0} onChange={(v) => onCommit({ ...content, xfade: v })} fmt={(v) => (v <= 0 ? "off" : Math.round(v * 1000) + "ms")} />
-          </>
+          </span>
         )}
       </div>
 
       <div className="flex items-center gap-[8px] font-mono text-[9px] text-faint">
         <span className="truncate text-dim">♪ {content.name || "audio"}</span>
         <span>· {engine.importSeconds(content.bufId!).toFixed(2)}s</span>
+        {content.key && <span className="text-accent">· {content.key}</span>}
+        {/* native tempo (detected from filename, editable) — drives grid-sync */}
+        <label className="flex items-center gap-[3px]" title="the sample's native tempo — grid-sync matches the arrangement to this">
+          <span>· bpm</span>
+          <input
+            type="number"
+            value={content.rootBpm ?? ""}
+            placeholder="—"
+            onChange={(e) => onCommit({ ...content, rootBpm: e.target.value ? Math.min(300, Math.max(40, Math.round(Number(e.target.value)))) : undefined })}
+            className="w-[42px] rounded-[2px] border border-line2 bg-panel2 px-[3px] py-[1px] text-center text-daw-text focus:border-accent focus:outline-none"
+          />
+        </label>
         <button
           onClick={() => onCommit({ ...content, bufId: undefined, name: undefined })}
           className="ml-auto rounded-[3px] border border-line px-[7px] py-[2px] text-faint transition-colors hover:border-accent hover:text-accent"

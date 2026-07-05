@@ -50,7 +50,7 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
   return (
     <div className="flex flex-col gap-[8px] rounded-[4px] border border-line bg-[#0e0e12] p-[10px]">
       <span className="font-mono text-[10px] tracking-[0.08em] text-faint">CLIP · {clip.name || "audio"}</span>
-      <AudioClipEditor content={audio} onCommit={(c) => engine.setClipContent(trackId, clipId, c)} />
+      <AudioClipEditor content={audio} looping={engine.audioClipLoops(clip)} onCommit={(c) => engine.setClipContent(trackId, clipId, c)} />
     </div>
   );
 }

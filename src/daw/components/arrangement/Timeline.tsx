@@ -169,7 +169,6 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       title: hit.c.content.kind + " clip",
       items: [
         { label: "duplicate", onClick: () => engine.duplicateClip(hit.t.id, hit.c.id) },
-        { label: hit.c.loop ? "loop off" : "loop on", onClick: () => engine.toggleClipLoop(hit.t.id, hit.c.id) },
         { separator: true },
         { label: "delete clip", danger: true, onClick: () => engine.removeClip(hit.t.id, hit.c.id) },
       ],
@@ -191,10 +190,24 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
     const res = await engine.importAudio(file);
     if (!res) return; // undecodable
-    // sample length in beats at the current tempo (¼-beat granularity)
+    // clip length FOLLOWS THE SAMPLE: its actual duration in beats at the current tempo
+    // (¼-beat granularity). Dragging the clip longer later auto-loops; shorter cuts.
     const secPerBeat = 60 / engine.arrangement.bpm;
-    const lengthBeats = Math.max(1, Math.round((res.seconds / secPerBeat) * 4) / 4);
-    const audioContent = { kind: "audio" as const, bufId: res.bufId, name: res.name, a: 0, b: 1, gain: 1, cents: 0, semi: 0, snap: true };
+    const lengthBeats = Math.max(0.25, Math.round((res.seconds / secPerBeat) * 4) / 4);
+    const audioContent = {
+      kind: "audio" as const,
+      bufId: res.bufId,
+      name: res.name,
+      a: 0,
+      b: 1,
+      gain: 1,
+      cents: 0,
+      semi: 0,
+      snap: true,
+      rootBpm: res.bpm, // detected native tempo (drives grid-sync)
+      bars: res.bars,
+      key: res.key,
+    };
 
     // over an existing AUDIO clip? → replace its content (keeps its position/length)
     const hit = y >= HEAD_H ? hitClip(x, y) : null;

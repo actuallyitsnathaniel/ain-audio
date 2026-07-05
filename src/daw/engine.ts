@@ -310,7 +310,9 @@ class AudioEngine {
   private _importSeq = 0;
   // audio clips are long one-shots (not per-note events) — track which have been started
   // this playback pass so the lookahead scheduler doesn't retrigger them every tick.
-  private _startedAudio: Record<string, AudioBufferSourceNode> = {};
+  // `synced` clips re-rate live when the tempo changes (the tape-warble effect):
+  // `baseRate` is the rate at `baseBpm`, so a new tempo → baseRate·(bpm/baseBpm). Drift-free.
+  private _startedAudio: Record<string, { src: AudioBufferSourceNode; synced: boolean; baseRate: number; baseBpm: number }> = {};
   private _presetPeaks: Record<string, Float32Array> = {}; // "presetId:zoneIdx" → cached peaks
   private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode; startCtx: number; startOff: number }> = {}; // live looping voices
   private _chNodes: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-channel vol/pan strip
@@ -2389,8 +2391,9 @@ class AudioEngine {
   private applyLoopRegion(src: AudioBufferSourceNode, id: string): number {
     const dur = src.buffer!.duration;
     const st = this.sequence.loops[id];
-    const a = Math.min(0.999, Math.max(0, st?.a ?? 0));
-    const b = Math.max(a + 0.001, Math.min(1, st?.b ?? 1));
+    let a = Math.min(0.999, Math.max(0, st?.a ?? 0));
+    let b = Math.max(a + 0.001, Math.min(1, st?.b ?? 1));
+    if (st?.reverse) [a, b] = [1 - b, 1 - a]; // buffer is reversed → flip the region
     src.loop = true;
     src.loopStart = a * dur;
     src.loopEnd = b * dur;
@@ -2404,9 +2407,10 @@ class AudioEngine {
     const n = this.nodes!;
     this.stopLoops();
     for (const l of this.loops) {
-      const buf = this._loopBufs[l.id];
+      const raw = this._loopBufs[l.id];
       const st = this.sequence.loops[l.id];
-      if (!buf || !st?.on) continue;
+      if (!raw || !st?.on) continue;
+      const buf = st.reverse ? this.reversedBuffer("loop:" + l.id, raw) : raw;
       const gain = c.createGain();
       gain.gain.value = this.loopGain(l.id);
       const src = c.createBufferSource();
@@ -2483,9 +2487,10 @@ class AudioEngine {
   private startOneLoopAligned(id: string) {
     const c = this.ctx!;
     const n = this.nodes!;
-    const buf = this._loopBufs[id];
+    const raw = this._loopBufs[id];
     const l = this.loops.find((x) => x.id === id);
-    if (!buf || !l) return;
+    if (!raw || !l) return;
+    const buf = this.sequence.loops[id]?.reverse ? this.reversedBuffer("loop:" + id, raw) : raw;
     const barBeats = this.sequence.beatsPerBar;
     const beat = this.currentBeat();
     const nextBarBeat = Math.ceil((beat + 0.01) / barBeats) * barBeats;
@@ -2546,6 +2551,19 @@ class AudioEngine {
     if (l && st.sync && !l.rootKnown) l.rootBpm = Math.round(this.bpm);
     const node = this._loopNodes[id];
     if (node && l && this.ctx) node.src.playbackRate.setTargetAtTime(this.loopRate(l), this.ctx.currentTime, 0.02);
+    this.emit("clip");
+  }
+  // Reverse a loop's playback. Swapping the buffer can't be done on a live node, so
+  // if it's playing we stop + restart it aligned to the next bar (a brief gap, like a
+  // re-trigger). Stopped loops just flip the flag and reverse on next start.
+  toggleLoopReverse(id: string) {
+    const st = this.sequence.loops[id];
+    if (!st) return;
+    st.reverse = !st.reverse;
+    if (this._loopNodes[id] && this.beatMode && this.sequencePlaying) {
+      this.stopOneLoop(id);
+      this.startOneLoopAligned(id);
+    }
     this.emit("clip");
   }
   // Set a loop's A→B playback region (fractions 0..1 of the buffer). Re-applies to
@@ -2636,9 +2654,28 @@ class AudioEngine {
     return peaks;
   }
 
+  // Does this audio clip overflow its content (so it auto-loops to fill)? Mirrors the
+  // scheduler's rule: clipLenSec > contentSec at the clip's rate. Used by the editor to
+  // show/hide the loop-seam controls.
+  audioClipLoops(clip: ArrClip): boolean {
+    if (clip.content.kind !== "audio") return false;
+    const cc = clip.content;
+    const buf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
+    if (!buf) return false;
+    const a = Math.min(0.999, Math.max(0, cc.a ?? 0));
+    const b = Math.min(1, Math.max(a + 0.001, cc.b ?? 1));
+    let rate = 1;
+    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.bpm / cc.rootBpm;
+    rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
+    const contentSec = rate > 0 ? ((b - a) * buf.duration) / rate : (b - a) * buf.duration;
+    const clipLenSec = clip.lengthBeats * (60 / this.bpm);
+    return clipLenSec > contentSec + 0.01;
+  }
+
   // ── imported audio clips (session-only file import) ──
-  // Decode a user-picked File into a session buffer; returns its bufId (for the clip).
-  async importAudio(file: File): Promise<{ bufId: string; name: string; seconds: number } | null> {
+  // Decode a user-picked File into a session buffer; returns its bufId + the filename-
+  // detected meta (bpm/key/bars, same parser LoopLanes use), so a dropped clip auto-fills.
+  async importAudio(file: File): Promise<{ bufId: string; name: string; seconds: number; bpm?: number; bars?: number; key?: string } | null> {
     const c = this.ensureCtx();
     try {
       const ab = await file.arrayBuffer();
@@ -2646,10 +2683,28 @@ class AudioEngine {
       const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
       this._importBufs[bufId] = buf;
       this.emit("arrange");
-      return { bufId, name: file.name, seconds: buf.duration };
+      const stem = file.name.replace(/\.[^.]+$/, ""); // drop the extension
+      const meta = parseLoopMeta(stem);
+      return { bufId, name: meta.name || file.name, seconds: buf.duration, bpm: meta.bpm, bars: meta.bars, key: meta.key };
     } catch {
       return null; // undecodable file
     }
+  }
+  // reverse an imported buffer (cached), for reverse playback. Returns a NEW buffer.
+  private _reverseBufs: Record<string, AudioBuffer> = {};
+  private reversedBuffer(bufId: string, src: AudioBuffer): AudioBuffer {
+    const hit = this._reverseBufs[bufId];
+    if (hit) return hit;
+    const c = this.ensureCtx();
+    const out = c.createBuffer(src.numberOfChannels, src.length, src.sampleRate);
+    for (let ch = 0; ch < src.numberOfChannels; ch++) {
+      const inD = src.getChannelData(ch);
+      const outD = out.getChannelData(ch);
+      const N = inD.length;
+      for (let i = 0; i < N; i++) outD[i] = inD[N - 1 - i];
+    }
+    this._reverseBufs[bufId] = out;
+    return out;
   }
   hasImport(bufId: string): boolean {
     return !!this._importBufs[bufId];
@@ -2745,6 +2800,7 @@ class AudioEngine {
 
   setBpm(bpm: number) {
     bpm = Math.min(220, Math.max(40, bpm));
+    const prevBpm = this.bpm; // for live re-rating of synced audio clips
     if (this.sequencePlaying && this.ctx) {
       // re-anchor at "now" so the playhead doesn't jump when tempo changes; keep
       // already-scheduled notes (they were placed at the old tempo) by advancing
@@ -2768,6 +2824,15 @@ class AudioEngine {
       for (const l of this.loops) {
         const node = this._loopNodes[l.id];
         if (node) node.src.playbackRate.setTargetAtTime(this.loopRate(l), tt, 0.02);
+      }
+      // synced audio clips re-rate live: playbackRate ∝ bpm, recomputed from the base
+      // (drift-free across rapid drags). This is the real-time pitch rise/fall while
+      // dragging the tempo — the tape-warble effect.
+      if (bpm !== prevBpm) {
+        for (const key in this._startedAudio) {
+          const a = this._startedAudio[key];
+          if (a.synced && a.baseBpm > 0) a.src.playbackRate.setTargetAtTime(a.baseRate * (bpm / a.baseBpm), tt, 0.02);
+        }
       }
     }
     this.emit("transport");
@@ -2876,7 +2941,7 @@ class AudioEngine {
   // stop + forget any playing audio-clip sources (on stop/seek, so replay re-fires them)
   private stopAudioClips() {
     for (const key in this._startedAudio) {
-      try { this._startedAudio[key].stop(); } catch { /* already ended */ }
+      try { this._startedAudio[key].src.stop(); } catch { /* already ended */ }
     }
     this._startedAudio = {};
   }
@@ -3017,34 +3082,52 @@ class AudioEngine {
   ) {
     if (clip.content.kind !== "audio") return;
     const cc = clip.content;
-    const rawBuf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
-    if (!rawBuf) return; // not imported yet
+    let srcBuf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
+    if (!srcBuf) return; // not imported yet
+    // reverse: swap to the reversed buffer (imports only) and flip the trim/loop fractions
+    // so a/b keep meaning "the region you selected on the forward waveform".
+    const rev = !!cc.reverse && !!cc.bufId;
+    let ta = cc.a ?? 0, tb = cc.b ?? 1;
+    let tla = cc.loopA, tlb = cc.loopB;
+    if (rev) {
+      srcBuf = this.reversedBuffer(cc.bufId!, srcBuf);
+      [ta, tb] = [1 - tb, 1 - ta];
+      if (tla != null && tlb != null) [tla, tlb] = [1 - tlb, 1 - tla];
+    }
+    const rawBuf = srcBuf;
     const braceLen = brace ? brace.end - brace.start : 0;
     // a/b trim (0..1 of the buffer) → seconds; per-clip gain
-    const a = Math.min(0.999, Math.max(0, cc.a ?? 0));
-    const b = Math.min(1, Math.max(a + 0.001, cc.b ?? 1));
+    const a = Math.min(0.999, Math.max(0, ta));
+    const b = Math.min(1, Math.max(a + 0.001, tb));
     const dur = rawBuf.duration;
     const gainVal = cc.gain ?? 1;
-    const clipLenSec = clip.lengthBeats * bd;
     const trimmedSec = (b - a) * dur;
-    // ── rate: sync (fit the trimmed region to the clip length) × varispeed (semi+cents) ──
+    // ── rate: grid-sync (match the arrangement tempo via the sample's native rootBpm,
+    //    same as LoopLanes) × varispeed (semi+cents). No rootBpm ⇒ sync is a no-op. ──
     let rate = 1;
-    if (cc.sync && trimmedSec > 0.001) rate = trimmedSec / clipLenSec;
+    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.bpm / cc.rootBpm;
     rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
-    // ── looping: bake a click-free loop region (defaults to the trim window) ──
-    const looping = !!cc.sampleLoop;
+    // ── auto-loop (Ableton song rule): a clip loops ONLY when it's longer than its
+    //    content. contentSec = how long the trimmed region [a,b] plays in clip seconds;
+    //    if the clip's length exceeds that, loop the loopA/loopB sub-region (default a/b)
+    //    to fill the remainder — re-hashing from the loop start. No user toggle. ──
+    const clipLenSec = clip.lengthBeats * bd;
+    const contentSec = rate > 0 ? trimmedSec / rate : trimmedSec;
+    const looping = clipLenSec > contentSec + 0.01 && !!cc.bufId;
     let buf = rawBuf;
     let loopStartSec = a * dur;
     let loopEndSec = b * dur;
     if (looping && cc.bufId) {
-      let ls = cc.loopA ?? a;
-      let le = cc.loopB ?? b;
+      // loop the sub-region loopA/loopB (defaults to the a/b trim), click-free
+      let ls = tla ?? a; // already flipped for reverse
+      let le = tlb ?? b;
       if (cc.snap !== false) {
         ls = this.snapZeroCross(rawBuf, ls);
         le = this.snapZeroCross(rawBuf, le);
         if (le <= ls) le = Math.min(1, ls + 0.001);
       }
-      buf = this.xfadeLoopBuffer(rawBuf, cc.bufId, 0, ls, le, cc.xfade ?? 0);
+      // distinct xfade cache key when reversed (different buffer, same bufId)
+      buf = this.xfadeLoopBuffer(rawBuf, cc.bufId + (rev ? ":rev" : ""), 0, ls, le, cc.xfade ?? 0);
       loopStartSec = ls * dur;
       loopEndSec = le * dur;
     }
@@ -3064,23 +3147,27 @@ class AudioEngine {
       const when = Math.max(c.currentTime, whenOf(sb + clipOffsetBeats));
       // buffer offset advances at `rate` (buffer seconds per clip second)
       const offSec = a * dur + catchUp * rate;
+      // both paths are hard-cut at the clip's end on the timeline
+      const stopAt = whenOf(sb + clip.lengthBeats);
       if (looping) {
         src.loop = true;
         src.loopStart = loopStartSec;
         src.loopEnd = loopEndSec;
         src.start(when, Math.min(offSec, b * dur - 0.001));
-        // loops forever → stop it at the clip's end on the timeline
-        const stopAt = whenOf(sb + clip.lengthBeats);
         if (stopAt > when) src.stop(stopAt);
       } else {
-        const remain = trimmedSec - catchUp * rate; // buffer seconds left in the window
+        // one-shot: play the trimmed region, but never past the clip end (cut). The
+        // buffer duration to schedule is the smaller of (content left) and (clip left).
+        const bufLeft = trimmedSec - catchUp * rate; // buffer seconds remaining in [a,b]
+        const clipLeft = (stopAt - when) * rate; // buffer seconds until the clip end
+        const remain = Math.min(bufLeft, clipLeft);
         if (remain <= 0.001) return;
         src.start(when, Math.min(offSec, b * dur - 0.001), remain);
       }
       src.onended = () => {
         try { g.disconnect(); } catch { /* fine */ }
       };
-      this._startedAudio[key] = src;
+      this._startedAudio[key] = { src, synced: !!cc.sync, baseRate: rate, baseBpm: this.bpm };
     };
     // brace loop: an instance per pass whose start lands in the window. Without a brace,
     // fire once when startBeat enters the window (or immediately if we began mid-clip).
@@ -3176,7 +3263,8 @@ class AudioEngine {
             const vibLane = clip.content.clip.autos?.find((a) => a.target === "vibrato");
             const runs = this.buildRuns(clip.content.clip.notes);
             const contentLen = Math.max(0.25, clipBeats(clip.content.clip));
-            const reps = clip.loop ? Math.max(1, Math.ceil(clip.lengthBeats / contentLen)) : 1;
+            // song rule: content tiles to fill the clip length automatically (no loop flag)
+            const reps = Math.max(1, Math.ceil(clip.lengthBeats / contentLen));
             for (let r = 0; r < reps; r++) {
               const repOffset = r * contentLen;
               for (const run of runs) {
@@ -3189,7 +3277,8 @@ class AudioEngine {
             const kit = KITS.find((kt) => kt.id === pat.kitId) || this.kit;
             const dest = this.trackStrip(t);
             const contentLen = Math.max(0.25, pat.steps * STEP_BEATS);
-            const reps = clip.loop ? Math.max(1, Math.ceil(clip.lengthBeats / contentLen)) : 1;
+            // song rule: pattern tiles to fill the clip length automatically
+            const reps = Math.max(1, Math.ceil(clip.lengthBeats / contentLen));
             for (let r = 0; r < reps; r++) {
               const repOffset = r * contentLen;
               for (let s = 0; s < pat.steps; s++) {
