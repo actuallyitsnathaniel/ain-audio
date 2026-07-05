@@ -6,6 +6,8 @@
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { PianoRoll } from "../piano-roll/PianoRoll";
+import { DrumClipGrid } from "./DrumClipGrid";
+import { AudioClipEditor } from "./AudioClipEditor";
 
 export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: string }) {
   useEngine(["arrange"]);
@@ -28,10 +30,27 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
     );
   }
 
-  // Phase 3: drum (StepGrid) + audio (LoopWave A/B) editors
+  if (clip.content.kind === "drum") {
+    const pat = clip.content.pattern; // narrow
+    return (
+      <div className="flex flex-col gap-[8px] rounded-[4px] border border-line bg-[#0e0e12] p-[10px]">
+        <span className="font-mono text-[10px] tracking-[0.08em] text-faint">CLIP · {clip.name || "drums"} · click a step · shift-click = accent</span>
+        <DrumClipGrid
+          key={clipId}
+          pattern={pat}
+          startBeat={clip.startBeat}
+          onCommit={(p) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: p })}
+        />
+      </div>
+    );
+  }
+
+  // audio: import a file, trim it, set its level
+  const audio = clip.content; // narrow (kind === "audio")
   return (
-    <div className="rounded-[4px] border border-line bg-[#0e0e12] p-[12px] font-mono text-[10px] text-faint">
-      {clip.content.kind} clip editor coming next — for now, MIDI clips are editable.
+    <div className="flex flex-col gap-[8px] rounded-[4px] border border-line bg-[#0e0e12] p-[10px]">
+      <span className="font-mono text-[10px] tracking-[0.08em] text-faint">CLIP · {clip.name || "audio"}</span>
+      <AudioClipEditor content={audio} onCommit={(c) => engine.setClipContent(trackId, clipId, c)} />
     </div>
   );
 }

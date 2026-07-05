@@ -12,7 +12,31 @@ import type { SequenceClip } from "./kits";
 export type ClipContent =
   | { kind: "midi"; clip: NoteClip } // edited in the PianoRoll
   | { kind: "drum"; pattern: SequenceClip } // edited in the StepGrid
-  | { kind: "audio"; loopId: string; a?: number; b?: number }; // LoopLane ref + A→B region (0..1)
+  // audio: an imported file (bufId → session buffer store) OR a LoopLane ref (loopId).
+  // Full sample-source feature set (union of the synth sampler + beat-maker loop lane):
+  //   a/b        — played-region trim (0..1 of the buffer)
+  //   gain       — per-clip level (0..~2, linear)
+  //   semi/cents — independent varispeed transpose (speed-coupled), default 0
+  //   sync       — tempo-lock: playbackRate stretches so the clip length fits the tempo
+  //   sampleLoop — loop the trimmed region to fill the clip length (vs one-shot)
+  //   loopA/loopB — loop region inside [a,b] (default = a/b); xfade + snap = click-free seam
+  | {
+      kind: "audio";
+      bufId?: string;
+      name?: string;
+      loopId?: string;
+      a?: number;
+      b?: number;
+      gain?: number;
+      semi?: number;
+      cents?: number;
+      sync?: boolean;
+      sampleLoop?: boolean;
+      loopA?: number;
+      loopB?: number;
+      xfade?: number; // loop-seam crossfade, seconds
+      snap?: boolean; // snap loop points to zero-crossings (default on)
+    };
 
 export interface ArrClip {
   id: string;
