@@ -9,7 +9,7 @@
 
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
-import { clipBeats, sampleAuto, VIB_MAX_CENTS, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
+import { clipBeats, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
 import { arrangementBeats, loadArrangement, newClipId, newTrackId, saveArrangement, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
 import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
 import { parseMidi } from "./data/midi-file";
@@ -327,6 +327,15 @@ class AudioEngine {
     const v = parseFloat(localStorage.getItem(LS_WET) || "");
     this.wet = isNaN(v) ? 1 : Math.min(1, Math.max(0, v));
     this.seedPresetPatches(); // sampled presets appear as editable patches
+    // migrate persisted arrangement tracks: a legacy raw preset id → its patch-key
+    // name, so the (now patch-keyed) instrument dropdown matches. ponytail: one-shot,
+    // harmless if it re-runs — patch keys already map to themselves.
+    for (const t of this.arrangement.tracks) {
+      if (t.presetId && !(t.presetId in this.patches)) {
+        const pr = this.samplePresets.find((p) => p.id === t.presetId);
+        if (pr && pr.name in this.patches) t.presetId = pr.name;
+      }
+    }
   }
 
   // ── Section index ───────────────────────────────────────────────────────
@@ -1151,7 +1160,7 @@ class AudioEngine {
     bends?: { toMidi: number; from: number; at: number }[], // hold until `from`, glide to `toMidi` by `at`
     // vibrato: depth follows a clip-global automation curve over the note's window.
     // `whenOfBeat(absClipBeat)` maps a clip beat to absolute ctx time.
-    autoVib?: { points: AutoPoint[]; startBeat: number; endBeat: number; whenOfBeat: (b: number) => number },
+    autoVib?: { points: AutoPoint[]; startBeat: number; endBeat: number; whenOfBeat: (b: number) => number; rate?: number; intensity?: number },
   ): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
@@ -1183,20 +1192,24 @@ class AudioEngine {
     const addVibrato = (targets: AudioParam[]): OscillatorNode | undefined => {
       if (!autoVib || !autoVib.points.length) return undefined;
       const { points, startBeat, endBeat, whenOfBeat } = autoVib;
+      // per-clip vibrato speed (Hz) + intensity (depth scale). Defaults preserve the
+      // old fixed feel: rate = VIB_RATE, intensity = 1.
+      const rate = autoVib.rate ?? AudioEngine.VIB_RATE;
+      const scale = (autoVib.intensity ?? 1) * VIB_MAX_CENTS;
       // breakpoints inside the note's window, plus the window edges, give the ramp set
       const edges = [startBeat, ...points.map((p) => p.beat).filter((b) => b > startBeat && b < endBeat), endBeat];
       let anyDepth = false;
       const depth = c.createGain();
-      depth.gain.setValueAtTime(sampleAuto(points, startBeat) * VIB_MAX_CENTS, t);
+      depth.gain.setValueAtTime(sampleAuto(points, startBeat) * scale, t);
       for (const b of edges) {
-        const cents = sampleAuto(points, b) * VIB_MAX_CENTS;
+        const cents = sampleAuto(points, b) * scale;
         if (cents > 0.01) anyDepth = true;
         depth.gain.linearRampToValueAtTime(cents, Math.max(t, whenOfBeat(b)));
       }
       if (!anyDepth) return undefined; // curve is flat-zero over this note → skip
       const lfo = c.createOscillator();
       lfo.type = "sine";
-      lfo.frequency.value = AudioEngine.VIB_RATE;
+      lfo.frequency.value = rate;
       lfo.connect(depth);
       targets.forEach((p) => depth.connect(p));
       lfo.start(t);
@@ -1445,10 +1458,21 @@ class AudioEngine {
     // no explicit channel ⇒ the global keyboard, which follows the armed channel
     const cid = channelId ?? this.armedChannel ?? undefined;
     this.noteOff(midi, true, cid);
-    const ch = cid ? this.sequence.channels.find((c) => c.id === cid) : undefined;
-    const sel = ch ? this.channelVoice(ch) : undefined;
+    // `cid` may name a beat-maker channel OR an arrangement track — resolve whichever
+    // it is so previewing a note in the piano roll auditions that instrument, not the
+    // global Audio-Lab patch. (ids don't collide: "ch…" vs "t…".)
+    const sel = this.voiceForId(cid);
     this._liveVoices[this.liveKey(midi, cid)] = this.startVoiceAt(midi, vel, this.ctx!.currentTime, sel);
     this.emit("synth");
+  }
+  // resolve a channel/track id to its voice selection (undefined = global patch)
+  private voiceForId(id: string | undefined): VoiceSel | undefined {
+    if (!id) return undefined;
+    const ch = this.sequence.channels.find((c) => c.id === id);
+    if (ch) return this.channelVoice(ch);
+    const t = this.arrangement.tracks.find((tr) => tr.id === id);
+    if (t && t.kind === "midi") return this.trackVoice(t);
+    return undefined;
   }
 
   noteOff(midi: number, instant?: boolean, channelId?: string) {
@@ -1645,7 +1669,7 @@ class AudioEngine {
   addChannel(): MidiChannel | null {
     const chans = this.sequence.channels;
     if (chans.length >= AudioEngine.MAX_CHANNELS) return null;
-    const presetId = this.samplePresets[0]?.id || this.synthPatches[0];
+    const presetId = this.synthPatches[0]; // a unified patch key (built-in / user / preset-patch)
     const ch: MidiChannel = {
       id: "ch" + ++this._chSeq + Date.now().toString(36),
       name: "channel " + (chans.length + 1),
@@ -1681,7 +1705,7 @@ class AudioEngine {
     const ch = this.sequence.channels.find((c) => c.id === id);
     if (!ch) return;
     ch.presetId = presetId;
-    if (this.samplePresets.some((pr) => pr.id === presetId)) void this.loadPreset(presetId);
+    this.warmPatch(this.resolvePatch(presetId)); // decode a sampled patch's zones ahead of play
     this.emit("clip");
   }
   setChannelClip(id: string, clip: NoteClip) {
@@ -1819,14 +1843,14 @@ class AudioEngine {
       id: newTrackId(),
       name: name || (kind === "midi" ? "midi " + n : kind === "drum" ? "drums " + n : "audio " + n),
       kind,
-      presetId: kind === "midi" ? this.samplePresets[0]?.id || this.synthPatches[0] : undefined,
+      presetId: kind === "midi" ? this.synthPatches[0] : undefined, // unified patch key
       mute: false,
       solo: false,
       vol: 0.8,
       pan: 0,
       clips: [],
     };
-    if (t.presetId && this.samplePresets.some((p) => p.id === t.presetId)) void this.loadPreset(t.presetId);
+    if (t.presetId) this.warmPatch(this.resolvePatch(t.presetId));
     this.arrangement.tracks.push(t);
     this.saveArr();
     return t;
@@ -1857,7 +1881,7 @@ class AudioEngine {
     const t = this.findTrack(id);
     if (!t) return;
     t.presetId = presetId;
-    if (this.samplePresets.some((p) => p.id === presetId)) void this.loadPreset(presetId);
+    this.warmPatch(this.resolvePatch(presetId)); // decode a sampled patch's zones ahead of play
     this.saveArr();
   }
   setTrackVol(id: string, vol: number) {
@@ -2796,7 +2820,7 @@ class AudioEngine {
       // window. With the loop brace, an event only fires if it lives inside the
       // brace, and it repeats every braceLen — so we scan the wrap iterations `k`
       // that land in the window (mirrors the loop grid's k*total wrap).
-      const emitRun = (run: NoteRun, timelineBeat: number, sel: VoiceSel, vibPts?: AutoPoint[]) => {
+      const emitRun = (run: NoteRun, timelineBeat: number, sel: VoiceSel, vibLane?: AutoLane) => {
         if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end)) return;
         let k = brace ? Math.floor((fromBeatAbs - timelineBeat) / braceLen) : 0;
         for (; ; k++) {
@@ -2811,7 +2835,7 @@ class AudioEngine {
           const bends = run.bends.length
             ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
             : undefined;
-          const autoVib = vibPts?.length ? { points: vibPts, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd } : undefined;
+          const autoVib = vibLane?.points.length ? { points: vibLane.points, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd, rate: vibLane.rate, intensity: vibLane.intensity } : undefined;
           const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, autoVib);
           this.releaseVoice(h, off);
           this._seqVoices.push(h);
@@ -2823,7 +2847,7 @@ class AudioEngine {
         for (const clip of t.clips) {
           if (clip.content.kind !== "midi") continue; // Phase 1: MIDI only
           const sel = this.trackVoice(t);
-          const vibPts = clip.content.clip.autos?.find((a) => a.target === "vibrato")?.points;
+          const vibLane = clip.content.clip.autos?.find((a) => a.target === "vibrato");
           const runs = this.buildRuns(clip.content.clip.notes);
           const contentLen = Math.max(0.25, clipBeats(clip.content.clip));
           const reps = clip.loop ? Math.max(1, Math.ceil(clip.lengthBeats / contentLen)) : 1;
@@ -2831,7 +2855,7 @@ class AudioEngine {
             const repOffset = r * contentLen;
             for (const run of runs) {
               if (run.startBeat + repOffset >= clip.lengthBeats) continue; // past the clip length
-              emitRun(run, clip.startBeat + run.startBeat + repOffset, sel, vibPts);
+              emitRun(run, clip.startBeat + run.startBeat + repOffset, sel, vibLane);
             }
           }
         }
@@ -2876,7 +2900,7 @@ class AudioEngine {
         const span = ch.loop ? clipBeats(ch.clip) : total;
         const wrap = ch.loop || this.loopOn; // repeat if the channel or transport loops
         if (span <= 0) continue;
-        const vibPts = ch.clip.autos?.find((a) => a.target === "vibrato")?.points;
+        const vibLane = ch.clip.autos?.find((a) => a.target === "vibrato");
         // group into legato runs so `slide` notes bend the previous voice (FL-style)
         // instead of articulating a new one. One voice per run, per wrap pass.
         for (const run of this.buildRuns(ch.clip.notes)) {
@@ -2895,8 +2919,8 @@ class AudioEngine {
             const bends = run.bends.length
               ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
               : undefined;
-            const autoVib = vibPts?.length
-              ? { points: vibPts, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd }
+            const autoVib = vibLane?.points.length
+              ? { points: vibLane.points, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd, rate: vibLane.rate, intensity: vibLane.intensity }
               : undefined;
             const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, autoVib);
             this.releaseVoice(h, off);
@@ -2920,7 +2944,7 @@ class AudioEngine {
       this._scheduledThrough = horizon;
       return;
     }
-    const clipVibPts = clip.autos?.find((a) => a.target === "vibrato")?.points;
+    const clipVibLane = clip.autos?.find((a) => a.target === "vibrato");
     for (const run of this.buildRuns(clip.notes)) {
       let k = Math.floor((fromBeatAbs - run.startBeat) / total);
       if (!this.loopOn) k = 0;
@@ -2936,8 +2960,8 @@ class AudioEngine {
         const bends = run.bends.length
           ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
           : undefined;
-        const autoVib = clipVibPts?.length
-          ? { points: clipVibPts, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd }
+        const autoVib = clipVibLane?.points.length
+          ? { points: clipVibLane.points, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd, rate: clipVibLane.rate, intensity: clipVibLane.intensity }
           : undefined;
         const h = this.startVoiceAt(run.pitch, run.vel, when, undefined, bends, autoVib);
         this.releaseVoice(h, off);

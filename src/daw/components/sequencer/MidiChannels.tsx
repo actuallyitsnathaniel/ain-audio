@@ -130,7 +130,7 @@ function ChannelMarker({ ch }: { ch: MidiChannel }) {
 }
 
 function ChannelRow({ ch, armed, onArm }: { ch: MidiChannel; armed: boolean; onArm: (id: string | null) => void }) {
-  const eng = useEngine(["clip", "preset"]);
+  const eng = useEngine(["clip", "preset", "patch"]);
   const [editing, setEditing] = useState(false);
   const rollWrap = useRef<HTMLDivElement>(null);
   const canvasEl = () => rollWrap.current?.querySelector("canvas") || null;
@@ -220,9 +220,9 @@ function ChannelRow({ ch, armed, onArm }: { ch: MidiChannel; armed: boolean; onA
 
         <span className="relative inline-flex items-center">
           <select value={ch.presetId} onChange={(e) => engine.setChannelPreset(ch.id, e.target.value)} aria-label={`${ch.name} instrument`} className={selectCls}>
-            {eng.samplePresets.map((p) => (
-              <option key={p.id} value={p.id} className="bg-panel2 text-daw-text">
-                {p.name}
+            {eng.synthPatches.map((key) => (
+              <option key={key} value={key} className="bg-panel2 text-daw-text">
+                {key}
               </option>
             ))}
           </select>

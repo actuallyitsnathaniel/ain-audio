@@ -154,7 +154,11 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
   curve** — `AutoLane{target:"vibrato", points:[{beat,value 0..1}]}` on `NoteClip.autos`; click to add a
   breakpoint, drag to move, ⌘/ctrl-drag to freehand, right-click/⌥ to delete. The engine samples it
   (`sampleAuto`, piecewise-linear) and schedules the **vibrato LFO depth** along the curve over each
-  note's window (`VIB_MAX_CENTS` at value 1, fixed `VIB_RATE`). `Drag` modes `"vel" | "auto" | "autoDraw"`.
+  note's window (`VIB_MAX_CENTS` at value 1). Two knobs overlay the lane (shown when VIB is open):
+  **speed** (`AutoLane.rate` Hz, default `VIB_RATE` 5.5) and **depth** (`AutoLane.intensity`, 0..2 scale on
+  the curve, default 1) — clip-global, set on the lane (not its points), copied by `cloneClip`, threaded
+  through all three scheduler call sites (arrangement / beat channels / piano-roll).
+  `Drag` modes `"vel" | "auto" | "autoDraw"`.
 - **Portamento (FL-style, `Note.slide`)** — a `slide` note does **not** articulate a new voice; it bends
   the **previous note's still-ringing voice** to its pitch (no re-attack). The scheduler groups each
   clip into legato **voice runs** via `buildRuns()` (head note + chained slide bends), emitting **one
@@ -222,10 +226,10 @@ scheduler** — `beatMode` flips `schedTick` from walking the note clip to walki
 channel is its own instrument + `NoteClip`, scheduled on the **same clock** as the drums: `schedTick`'s
 beat branch walks `seq.channels` after the drum loop, wrapping each clip's notes against the grid total.
 - **Per-channel voice** — the voice factory `startVoiceAt(midi, vel, when, sel?)` takes an optional
-  resolved `VoiceSel = { preset?, patch, dest? }`. No `sel` ⇒ global live-keyboard/Audio-Lab selection
-  (unchanged); a channel passes `channelVoice(ch)` so each channel sounds its own preset/patch and routes
-  to its own strip (`dest`). Sample buffers are cached by **preset id** (`_sampleBufs[id]`), so two
-  channels on the same preset share one decode.
+  resolved `VoiceSel = { patch: SynthPatch; dest? }`. No `sel` ⇒ global live-keyboard/Audio-Lab selection
+  (unchanged); a channel passes `channelVoice(ch)` = `{ patch: resolvePatch(ch.presetId), dest }` so each
+  channel sounds its own instrument and routes to its own strip. Sample buffers are cached by **preset id**
+  (`_sampleBufs[id]`), so channels sharing a sampled patch share one decode.
 - **Vol / pan strip** — `channelStrip(ch)` lazily builds `gain → StereoPanner → n.sum` per channel
   (`_chNodes[id]`); voices connect to its gain (the `dest`). `setChannelVol`/`setChannelPan` ramp the
   live nodes; mute/solo fold into the gain via `refreshChannelGains`. `removeChannel`/`setSequence` tear
@@ -269,34 +273,60 @@ rootBpm` so it locks to tempo; per-loop toggle / level / mute / solo; `setBpm` r
 **Not yet wired to UI** (engine seams exist, no callers): `loadReverbIR`/`useSynthReverbIR`
 (real IR files).
 
-## Preset sampler
+## Preset sampler (the sample *catalog* — how zones decode)
 
-Selecting a preset (`setSynthPatch(id)`) lazily fetches + decodes its zone files
-(`loadPreset` mirrors `fetchBuf`). `noteOn(midi, vel)` branches: if the current preset has a
-decoded zone, it plays an `AudioBufferSourceNode` pitch-shifted by `playbackRate` from the
-zone's root (`pickZone` = nearest-root + a ±7-semitone shift cap), wrapped in an amp ADSR,
-`→ sum` (so it shares the FX rack). No decoded zone ⇒ falls back to the **synth** (below).
+`SampledPreset`s are the **source catalog** for the sample voice source (not a parallel current-instrument
+selector). Each is seeded into `engine.patches` as an editable patch at boot (see the unified-instrument
+section). `loadPreset`/`warmPreset` lazily fetch + decode a preset's zone files (`fetchBuf`);
+`pickZone(preset, midi)` picks the nearest-root zone (±7-semitone shift cap) and playback uses
+`playbackRate` from that root. There is **no separate sampled voice branch** anymore — a sampled patch's
+`sample` source runs through the same filter + envelopes + LFO as the oscillators (`startVoiceAt`).
 Presets are **auto-discovered** from `src/assets/presets/` at build time — see
 [../assets/presets/README.md](../assets/presets/README.md) for the folder/file convention,
-multisampling, and formats.
+multisampling, and formats. `presetC4Zone`/`presetPeaks` back the C4 waveform strip.
 
-## Subtractive synth (`data/patches.ts` + `startVoiceAt` synth branch + SynthEditor)
+## Unified instrument — subtractive synth + sample source (`data/patches.ts` + `startVoiceAt`)
 
-A designable voice, not just preset fallbacks: **osc1 + osc2 + sub + noise → per-source level gain →
-multi-mode filter → amp gain → dest**. Two independent ADSRs (filter env on cutoff with `amt` + key-track;
-amp env on the gain) and **one routable LFO** (off / pitch→detune / cutoff→`filter.frequency` /
-amp→`gain`). Portamento `applyBends` drives **every** pitched source's frequency; per-note vibrato and the
-patch LFO coexist (both can reach detune). Noise buffers (white / Paul-Kellet pink) are built **once**
-and cached. `releaseVoice` stops oscs + sub + noise + all LFOs. A voice is ≤ ~14 nodes (bounded vs. the
-256-voice cap).
-- **Patch store** — `engine.patches` = `BUILTIN_PATCHES` (glass pad / neon pluck / sub bass, ids kept so
-  `fallbackPatch` still resolves) merged over user patches in `localStorage["ain-synth-patches"]`.
-  API (all emit `patch`): `updateActivePatch(deepPartial)` (live edit, latched per next note),
-  `saveUserPatch(name)`, `deleteUserPatch`, `revertPatch` (built-in → factory), `isBuiltinPatch`.
-  **Built-ins edit live but never persist** — they reset to factory on reload; save-as to keep a sound.
-- **Editor** — [components/audio-lab/SynthEditor.tsx](components/audio-lab/SynthEditor.tsx): knob panel
-  (OSC1 · OSC2 · SUB · NOISE · FILTER · AMP ENV · FILTER ENV · LFO) + patch bar (select / save / save-as /
-  delete / revert). Mounted in the Audio Lab under the Preset Lab; subscribes to `["patch","synth"]`.
+**One voice path, one instrument model.** There is no longer a separate sampled branch: a sampled
+multisample is just another source into the shared spine. Every instrument — built-in, user-designed, or
+sampled preset — is a `SynthPatch`.
+
+**Signal path:** **osc1 + osc2 + sub + noise + SAMPLE → per-source level gain → multi-mode filter →
+amp gain → dest**. Two independent ADSRs (filter env on cutoff with `amt` + key-track; amp env on the
+gain) and **one routable LFO** (off / pitch→detune / cutoff→`filter.frequency` / amp→`gain`). Portamento
+`applyBends` drives **every** pitched source (osc frequency + sample detune); per-note vibrato and the
+patch LFO coexist. Noise buffers (white / Paul-Kellet pink) are built **once** and cached. `releaseVoice`
+stops oscs + sub + noise + **sampleSrc** + all LFOs. A voice is ≤ ~14 nodes (bounded vs. the 256-voice cap).
+
+- **Sample source** (`SynthPatch.sample: SampleSource`) — a `SampledPreset`'s multisample used like an
+  oscillator, through the SAME filter + envelopes + LFO as the oscs. Fields: `presetId`, `level` (0..4 —
+  **>1 is makeup gain**, up to +12 dB), `loop` (one-shot vs. sustained), `semi`/`cents`
+  (**independent varispeed transpose**, speed-coupled — pitch and duration move together, decoupled from
+  the played note), `start`/`end` (0..1 playback window into the buffer), `loopStart`/`loopEnd` (0..1,
+  default to the window). Zone pitch comes from the picked zone's root via `playbackRate`; the window is
+  applied through `s.start(t, offset, duration)` (one-shot) or `s.start(t, offset)` + `s.loop` (sustain).
+  Buffers cached by **preset id** (`_sampleBufs[id]`), so instruments sharing a preset share one decode.
+- **Filter ON/OFF** — `filter.on` (omitted = enabled). Bypass swaps the biquad to `allpass` (flat
+  magnitude, path shape unchanged); the cutoff envelope + cutoff-LFO are skipped.
+- **Patch store** — `engine.patches` = `BUILTIN_PATCHES` (glass pad / neon pluck / sub bass) merged over
+  user patches (`localStorage["ain-synth-patches"]`), **plus one seeded patch per sampled preset**
+  (`seedPresetPatches`, keyed by preset name, `patchFromPreset` → sample source on). `engine.synthPatches`
+  (the keys) is the **single unified instrument list** used everywhere. `resolvePatch(id)` accepts a patch
+  key OR a legacy raw preset id (resolves to the seeded name-patch); `warmPatch`/`warmPreset` pre-decode
+  zones. API (all emit `patch`): `updateActivePatch(deepPartial)` (live edit, latched per next note),
+  `saveUserPatch`, `deleteUserPatch`, `revertPatch`, `isBuiltinPatch`. Built-ins edit live but never persist.
+- **INSTRUMENT panel** — [components/audio-lab/Instrument.tsx](components/audio-lab/Instrument.tsx) merges
+  the old PRESET LAB + SYNTH into one panel: instrument selector (`synthPatches`) + patch bar + on-screen
+  `PresetKeyboard` + a **tabbed dashboard** (SOURCES / FILTER / AMP / LFO). Live visuals:
+  [EnvGraph](components/audio-lab/EnvGraph.tsx) (ADSR curve, on AMP + FILTER tabs),
+  [FilterGraph](components/audio-lab/FilterGraph.tsx) (|H(f)| response via RBJ biquad math in
+  [filter-math.ts](components/audio-lab/filter-math.ts), no AudioContext), and
+  [SampleWave](components/audio-lab/SampleWave.tsx) (C4 waveform with **draggable start/end + loop
+  handles**). Subscribes to `["patch","synth","preset","midi"]`.
+- **Alignment** — the beat-maker channel picker (`MidiChannels`) and arrangement track picker
+  (`ArrangementPage`) list the same `synthPatches`; `setChannelPreset`/`setTrackPreset` store a patch key
+  and `warmPatch` it. `channelVoice`/`trackVoice` → `{ patch: resolvePatch(presetId), dest }`. Legacy
+  arrangement `presetId`s (raw preset ids) are migrated to patch-key names at boot.
 
 ## Reverb impulse response
 
@@ -308,7 +338,7 @@ preset assets and be loaded on demand (no fixed convention wired yet — add one
 
 ## Events (`EngineEvent`)
 
-`state | wet | fx | track | ready | synth | preset | transport | clip`. Subscribe with
+`state | wet | fx | track | ready | synth | preset | transport | clip | midi | patch | arrange`. Subscribe with
 `useEngine([...])` (the hook force-re-renders on those events). **The union is duplicated** in
 [hooks/useEngine.ts](hooks/useEngine.ts) — update both when adding an event.
 
