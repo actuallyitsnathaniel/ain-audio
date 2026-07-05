@@ -14,6 +14,7 @@ import { SectionHead } from "../SectionHead";
 import { TrackSection } from "../TrackSection";
 import { Knob } from "../Knob";
 import { FxRack } from "../audio-lab/FxRack";
+import { Instrument } from "../audio-lab/Instrument";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
@@ -140,12 +141,16 @@ function TrackHeader({ t, armed, onArm }: { t: ArrTrack; armed: boolean; onArm: 
 }
 
 export function ArrangementPage() {
-  const eng = useEngine(["arrange", "transport", "preset", "patch"]);
+  const eng = useEngine(["arrange", "transport", "preset", "patch", "synth"]);
   const tracks = eng.arrangement.tracks;
   const [rawSel, setSel] = useState<{ trackId: string; clipId: string } | null>(null);
   // derive validity during render (no setState-in-effect); a stale selection just
   // resolves to null until the next selection.
   const sel = rawSel && engine.getArrClip(rawSel.trackId, rawSel.clipId) ? rawSel : null;
+  // the MIDI track whose clip is selected — its instrument is what the INSTRUMENT
+  // panel edits (patches are shared by key, so editing here changes that track's sound).
+  const selTrack = sel ? tracks.find((t) => t.id === sel.trackId) : undefined;
+  const selMidiTrack = selTrack?.kind === "midi" ? selTrack : undefined;
 
   useEffect(() => {
     engine.warmArrangement(); // decode restored tracks' instruments up front
@@ -153,6 +158,17 @@ export function ArrangementPage() {
       if (engine.arrangeMode) engine.stopArrangement();
     };
   }, []);
+
+  // focus the selected MIDI track's patch in the shared instrument editor
+  useEffect(() => {
+    if (selMidiTrack?.presetId) engine.setSynthPatch(selMidiTrack.presetId);
+  }, [selMidiTrack?.id, selMidiTrack?.presetId]);
+
+  // …and mirror the other way: if the INSTRUMENT selector switches patch while a track
+  // is focused, assign that patch to the track. Guarded by inequality → converges, no loop.
+  useEffect(() => {
+    if (selMidiTrack && eng.synthPatch !== selMidiTrack.presetId) engine.setTrackPreset(selMidiTrack.id, eng.synthPatch);
+  }, [eng.synthPatch, selMidiTrack]);
 
   const addTrack = (kind: TrackKind) => {
     engine.addTrack(kind);
@@ -195,6 +211,8 @@ export function ArrangementPage() {
             </div>
           </div>
 
+          {/* selected MIDI track's instrument designer (edits that track's patch) */}
+          {selMidiTrack && <Instrument />}
           {/* selected-clip editor + fx */}
           {sel && <ClipEditor trackId={sel.trackId} clipId={sel.clipId} />}
           <FxRack />

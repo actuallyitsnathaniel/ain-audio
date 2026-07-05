@@ -27,6 +27,8 @@ export interface SampleSource {
   end?: number; // 0..1 — playback window end
   loopStart?: number; // 0..1 fraction of the buffer (defaults to start)
   loopEnd?: number; //   "                            (defaults to end)
+  xfade?: number; // loop-seam crossfade in seconds (0 / absent = hard loop, may click)
+  snap?: boolean; // snap loop points to zero-crossings (default on) → click-free seam
 }
 
 export interface SynthPatch {

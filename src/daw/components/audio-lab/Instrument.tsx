@@ -265,6 +265,18 @@ export function Instrument() {
               </span>
               <Seg value={p.sample?.loop ? "loop" : "one-shot"} options={["one-shot", "loop"] as const} onChange={(m) => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: p.sample?.level ?? 1, loop: m === "loop" } })} />
               <Knob size={34} label="level" value={p.sample?.level ?? 0} min={0} max={4} defaultValue={0} onChange={(v) => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: v, loop: p.sample?.loop ?? false } })} fmt={(v) => (v <= 0 ? "-∞" : (20 * Math.log10(v)).toFixed(1) + "dB")} />
+              {sampleOn && p.sample?.loop && (
+                <>
+                  <button
+                    onClick={() => us({ snap: p.sample!.snap === false })}
+                    title="snap loop points to zero-crossings (click-free seam)"
+                    className={"self-end rounded-[3px] border px-[6px] py-[3px] font-mono text-[9px] transition-colors " + (p.sample.snap !== false ? "border-accent text-accent" : "border-line text-faint")}
+                  >
+                    snap {p.sample.snap !== false ? "on" : "off"}
+                  </button>
+                  <Knob size={34} label="xfade" value={p.sample.xfade ?? 0} min={0} max={0.2} defaultValue={0} onChange={(v) => us({ xfade: v })} fmt={(v) => (v <= 0 ? "off" : Math.round(v * 1000) + "ms")} />
+                </>
+              )}
               {sampleOn && p.sample && (
                 <>
                   <Knob size={34} label="semi" value={p.sample.semi ?? 0} min={-24} max={24} defaultValue={0} bipolar onChange={(v) => us({ semi: Math.round(v) })} fmt={(v) => (Math.round(v) > 0 ? "+" : "") + Math.round(v)} />
