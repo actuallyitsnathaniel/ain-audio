@@ -19,7 +19,6 @@ const ROW_H = 56; // track lane height
 const KEY_W = 0; // no gutter (headers are a separate column)
 const MIN_PPB = 4;
 const MAX_PPB = 64;
-const SNAP = 1; // snap to the beat by default (⌘ = free)
 
 const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#54adbd";
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -43,7 +42,11 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
   const xToBeat = (x: number) => (x - KEY_W + view.current.scrollX) / view.current.ppb;
   const trackYOf = (i: number) => HEAD_H + i * ROW_H;
   const yToTrackIndex = (y: number) => Math.floor((y - HEAD_H) / ROW_H);
-  const snapBeat = (b: number, free: boolean) => (free ? b : Math.round(b / SNAP) * SNAP);
+  // snap grid from the playback pane (engine.snapBeats; 0 or ⌘ = free)
+  const snapBeat = (b: number, free: boolean) => {
+    const g = engine.snapBeats;
+    return free || g <= 0 ? b : Math.round(b / g) * g;
+  };
   const totalBeats = () => Math.max(arrangementBeats(engine.arrangement), 16);
 
   // hit-test a clip at (x,y): returns {track, clip, edge} or null
@@ -257,6 +260,17 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     const g = cv.getContext("2d");
     if (!g) return;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // follow-playhead: keep the playhead within a comfortable band by scrolling the view
+    // (only while playing, following, and not mid-drag so it never fights a user scroll).
+    if (engine.followPlayhead && engine.sequencePlaying && engine.arrangeMode && !drag.current) {
+      const v = view.current;
+      const px = KEY_W + engine.arrangementPosition() * v.ppb - v.scrollX;
+      const lead = w * 0.15; // keep ~15% margin on the trailing edge
+      if (px > w - lead || px < KEY_W) {
+        // recenter so the playhead sits at the left-lead position
+        v.scrollX = Math.max(0, engine.arrangementPosition() * v.ppb - lead);
+      }
+    }
     g.clearRect(0, 0, w, h);
     g.fillStyle = "#0c0c10";
     g.fillRect(0, 0, w, h);
