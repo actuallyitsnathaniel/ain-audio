@@ -1965,6 +1965,8 @@ class AudioEngine {
     return t;
   }
   removeTrack(id: string) {
+    const t = this.findTrack(id);
+    if (t) for (const c of t.clips) this.stopAudioForClip(c.id); // stop any live audio
     this.arrangement.tracks = this.arrangement.tracks.filter((t) => t.id !== id);
     const s = this._arrStrips[id];
     if (s) {
@@ -2056,16 +2058,18 @@ class AudioEngine {
       const cs = c.startBeat;
       const ce = c.startBeat + c.lengthBeats;
       if (ce <= ks || cs >= ke) { out.push(c); continue; } // no overlap
-      if (cs >= ks && ce <= ke) continue; // fully covered → drop
+      if (cs >= ks && ce <= ke) { this.stopAudioForClip(c.id); continue; } // fully covered → drop
       if (cs < ks && ce > ks) {
         // front overlap → shorten to end at ks (and if it ALSO pokes out the back past
         // ke, we lose that tail; a split is out of scope — trimming is the simple rule)
         c.lengthBeats = Math.max(0.25, ks - cs);
+        this.stopAudioForClip(c.id); // its geometry changed → re-fire fresh
         out.push(c);
       } else if (cs < ke && ce > ke) {
         // back overlap → push start to ke, keep the remaining tail length
         c.lengthBeats = Math.max(0.25, ce - ke);
         c.startBeat = ke;
+        this.stopAudioForClip(c.id);
         out.push(c);
       } else {
         out.push(c);
@@ -2076,6 +2080,7 @@ class AudioEngine {
   removeClip(trackId: string, clipId: string) {
     const t = this.findTrack(trackId);
     if (t) t.clips = t.clips.filter((c) => c.id !== clipId);
+    this.stopAudioForClip(clipId); // kill its live source so deleting stops the sound
     this.saveArr();
   }
   // move a clip (optionally to another track); startBeat clamped ≥ 0
@@ -2093,6 +2098,7 @@ class AudioEngine {
         dest = to;
       }
     }
+    this.stopAudioForClip(clipId); // re-fire at the new position/track next tick
     this.resolveOverlaps(dest, c);
     this.saveArr();
   }
@@ -2100,6 +2106,7 @@ class AudioEngine {
     const found = this.findClip(trackId, clipId);
     if (!found) return;
     found[1].lengthBeats = Math.max(0.25, lengthBeats);
+    this.stopAudioForClip(clipId); // re-fire with the new length (fixes stale stop time)
     this.resolveOverlaps(found[0], found[1]);
     this.saveArr();
   }
@@ -2116,7 +2123,37 @@ class AudioEngine {
   // write back edited clip content (from the piano roll / step grid / loop editor)
   setClipContent(trackId: string, clipId: string, content: ArrClip["content"]) {
     const found = this.findClip(trackId, clipId);
+    const prev = found?.[1].content;
     if (found) found[1].content = content;
+    // Reflect the edit on a clip that's playing RIGHT NOW:
+    //  · RATE-only change (sync / semi / cents) → smoothly re-rate the live source (no
+    //    gap) so a knob drag warbles continuously.
+    //  · STRUCTURAL change (trim a/b, reverse, loop region, the buffer/source itself)
+    //    can't be patched on a live node → stop it so the scheduler re-fires it fresh.
+    if (content.kind === "audio" && this.ctx && prev?.kind === "audio") {
+      const structural =
+        prev.bufId !== content.bufId ||
+        prev.loopId !== content.loopId ||
+        prev.reverse !== content.reverse ||
+        (prev.a ?? 0) !== (content.a ?? 0) ||
+        (prev.b ?? 1) !== (content.b ?? 1) ||
+        prev.loopA !== content.loopA ||
+        prev.loopB !== content.loopB;
+      if (structural) {
+        this.stopAudioForClip(clipId); // re-fire with the new trim/reverse/loop next tick
+      } else {
+        const rate = this.audioClipRate(content);
+        const tt = this.ctx.currentTime;
+        for (const key in this._startedAudio) {
+          if (!key.startsWith(clipId + "@")) continue;
+          const a = this._startedAudio[key];
+          a.src.playbackRate.setTargetAtTime(rate, tt, 0.02);
+          a.synced = !!content.sync;
+          a.baseRate = rate;
+          a.baseBpm = this.bpm; // re-base so future tempo drags scale from here
+        }
+      }
+    }
     this.saveArr();
   }
   toggleClipLoop(trackId: string, clipId: string) {
@@ -2960,6 +2997,17 @@ class AudioEngine {
     }
     this._startedAudio = {};
   }
+  // Stop + forget any playing audio source(s) for ONE clip, so the scheduler re-fires it
+  // fresh at the next tick with its new geometry. Called whenever a clip's position /
+  // length changes, it's removed, or an overlap trims it — otherwise the old long-held
+  // AudioBufferSourceNode keeps playing at the stale position/routing (ghost audio).
+  private stopAudioForClip(clipId: string) {
+    for (const key in this._startedAudio) {
+      if (!key.startsWith(clipId + "@")) continue;
+      try { this._startedAudio[key].src.stop(); } catch { /* already ended */ }
+      delete this._startedAudio[key];
+    }
+  }
 
   // piano-roll transport (clears beat mode so the scheduler walks the note clip)
   toggleSequence() {
@@ -3081,6 +3129,15 @@ class AudioEngine {
     else this.emit("clip");
   }
 
+  // playbackRate for an audio clip: grid-sync (bpm/rootBpm) × varispeed (semi+cents).
+  // The single source of truth for rate, shared by the scheduler and live re-rating.
+  private audioClipRate(cc: { sync?: boolean; rootBpm?: number; semi?: number; cents?: number }): number {
+    let rate = 1;
+    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.bpm / cc.rootBpm;
+    rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
+    return rate;
+  }
+
   // Start an audio clip's decoded buffer at its timeline position. Unlike note/drum
   // events (many short voices), an audio clip is ONE long source, so we fire it once
   // per playback pass (deduped in _startedAudio) when its start beat enters the window
@@ -3119,9 +3176,7 @@ class AudioEngine {
     const trimmedSec = (b - a) * dur;
     // ── rate: grid-sync (match the arrangement tempo via the sample's native rootBpm,
     //    same as LoopLanes) × varispeed (semi+cents). No rootBpm ⇒ sync is a no-op. ──
-    let rate = 1;
-    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.bpm / cc.rootBpm;
-    rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
+    const rate = this.audioClipRate(cc);
     // ── auto-loop (Ableton song rule): a clip loops ONLY when it's longer than its
     //    content. contentSec = how long the trimmed region [a,b] plays in clip seconds;
     //    if the clip's length exceeds that, loop the loopA/loopB sub-region (default a/b)
