@@ -12,7 +12,7 @@ import { engine } from "../../engine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { openContextMenu } from "../context-menu-bus";
 import { clipBeats } from "../../data/clips";
-import { arrangementBeats, type ArrClip, type ArrTrack } from "../../data/arrangement";
+import { type ArrClip, type ArrTrack } from "../../data/arrangement";
 
 const HEAD_H = 22; // ruler height
 const ROW_H = 56; // track lane height
@@ -32,10 +32,10 @@ type Drag =
   | { mode: "brace"; anchor: number }
   | null;
 
-export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?: number; selectedClip: string | null; onSelectClip: (trackId: string, clipId: string) => void }) {
+export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?: number; selectedClip: string | null; onSelectClip: (trackId: string | null, clipId: string | null) => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag>(null);
-  const view = useRef({ scrollX: 0, ppb: 16 });
+  const view = useRef({ scrollX: 0, ppb: 24 });
 
   const tracks = () => engine.arrangement.tracks;
   const beatToX = (b: number) => KEY_W + b * view.current.ppb - view.current.scrollX;
@@ -47,7 +47,6 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     const g = engine.snapBeats;
     return free || g <= 0 ? b : Math.round(b / g) * g;
   };
-  const totalBeats = () => Math.max(arrangementBeats(engine.arrangement), 16);
 
   // hit-test a clip at (x,y): returns {track, clip, edge} or null
   const hitClip = (x: number, y: number): { t: ArrTrack; c: ArrClip; edge: boolean } | null => {
@@ -100,20 +99,23 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       return;
     }
 
-    // empty lane: place a new clip here (1 bar) on that track
-    const ti = yToTrackIndex(y);
-    const t = tracks()[ti];
-    if (t && e.button === 0) {
-      const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
-      const bpb = engine.arrangement.beatsPerBar;
-      const created = engine.addClip(t.id, {
-        startBeat: beat,
-        lengthBeats: bpb,
-        loop: false,
-        content: t.kind === "midi" ? { kind: "midi", clip: { bars: 1, beatsPerBar: bpb, notes: [] } } : t.kind === "drum" ? { kind: "drum", pattern: emptyDrumPattern(bpb) } : { kind: "audio", loopId: "" },
-      });
-      if (created) onSelectClip(t.id, created.id);
+    // empty lane, bare click: place the insert marker + clear the clip selection.
+    // (creation is an explicit act — double-click, per Ableton; a click never creates.)
+    if (e.button === 0) {
+      engine.setInsertBeat(Math.max(0, snapBeat(xToBeat(x), cmd(e))));
+      onSelectClip(null, null);
     }
+  };
+  // create an (empty) clip on a track at a beat — the double-click gesture
+  const createClipAt = (t: ArrTrack, beat: number) => {
+    const bpb = engine.arrangement.beatsPerBar;
+    const created = engine.addClip(t.id, {
+      startBeat: Math.max(0, beat),
+      lengthBeats: bpb,
+      loop: false,
+      content: t.kind === "midi" ? { kind: "midi", clip: { bars: 1, beatsPerBar: bpb, notes: [] } } : t.kind === "drum" ? { kind: "drum", pattern: emptyDrumPattern(bpb) } : { kind: "audio", loopId: "" },
+    });
+    if (created) onSelectClip(t.id, created.id);
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -155,9 +157,18 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
 
   const onDoubleClick = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = localXY(e);
-    if (y < HEAD_H) return;
+    if (y < HEAD_H) {
+      engine.setInsertBeat(0); // double-click the ruler → insert marker back to start
+      return;
+    }
     const hit = hitClip(x, y);
-    if (hit) onSelectClip(hit.t.id, hit.c.id); // the bottom editor opens it
+    if (hit) {
+      onSelectClip(hit.t.id, hit.c.id); // opens the editor below
+    } else {
+      // double-click empty lane → CREATE a clip here (the create gesture)
+      const t = tracks()[yToTrackIndex(y)];
+      if (t) createClipAt(t, snapBeat(xToBeat(x), cmd(e)));
+    }
   };
 
   const onContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -276,7 +287,14 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     g.fillRect(0, 0, w, h);
     const ac = accent();
     const bpb = engine.arrangement.beatsPerBar;
-    const tb = totalBeats();
+    // Draw the grid across the VISIBLE viewport, not a fixed content length — the
+    // timeline extends indefinitely. Only on-screen beats are iterated, so it's free.
+    const firstBeat = Math.max(0, Math.floor(xToBeat(KEY_W)));
+    const lastBeat = Math.ceil(xToBeat(w)) + 1;
+    // label every beat only if there's room (~24px), else only bar downbeats
+    const beatPx = view.current.ppb;
+    const labelEveryBeat = beatPx >= 22;
+    const showBeatLines = beatPx >= 12;
 
     // track lane backgrounds + separators
     tracks().forEach((_, i) => {
@@ -287,25 +305,14 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       g.fillRect(0, y + ROW_H - 1, w, 1);
     });
 
-    // bar gridlines
-    for (let b = 0; b <= tb; b += bpb) {
+    // gridlines across the visible range (labels drawn later, over the ruler bg)
+    for (let b = firstBeat; b <= lastBeat; b++) {
       const x = beatToX(b);
-      if (x < -1 || x > w) continue;
-      g.fillStyle = "rgba(255,255,255,0.12)";
+      if (x < KEY_W - 1 || x > w) continue;
+      const isBar = b % bpb === 0;
+      if (!isBar && !showBeatLines) continue; // too zoomed out to show beat lines
+      g.fillStyle = isBar ? "rgba(255,255,255,0.13)" : "rgba(255,255,255,0.045)";
       g.fillRect(x, HEAD_H, 1, h - HEAD_H);
-      g.fillStyle = "#4a4a52";
-      g.font = "8px ui-monospace, monospace";
-      g.fillText(String(b / bpb + 1), x + 3, HEAD_H - 6);
-    }
-    // beat sub-lines when zoomed in
-    if (view.current.ppb >= 24) {
-      for (let b = 0; b <= tb; b++) {
-        if (b % bpb === 0) continue;
-        const x = beatToX(b);
-        if (x < 0 || x > w) continue;
-        g.fillStyle = "rgba(255,255,255,0.04)";
-        g.fillRect(x, HEAD_H, 1, h - HEAD_H);
-      }
     }
 
     // ruler bg + loop brace
@@ -313,6 +320,18 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     g.fillRect(0, 0, w, HEAD_H);
     g.fillStyle = "rgba(255,255,255,0.08)";
     g.fillRect(0, HEAD_H - 1, w, 1);
+    // bar.beat labels ON the ruler (1-based both) — bars always, beats when there's room
+    g.font = "8px ui-monospace, monospace";
+    for (let b = firstBeat; b <= lastBeat; b++) {
+      const x = beatToX(b);
+      if (x < KEY_W - 1 || x > w) continue;
+      const isBar = b % bpb === 0;
+      if (!isBar && !labelEveryBeat) continue;
+      const bar = Math.floor(b / bpb) + 1;
+      const beat = (b % bpb) + 1;
+      g.fillStyle = isBar ? "#7a7a86" : "#4a4a52";
+      g.fillText(`${bar}.${beat}`, x + 3, HEAD_H - 6);
+    }
     const loop = engine.arrangement.loop;
     if (loop?.on) {
       const lx = beatToX(loop.start);
@@ -373,6 +392,21 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       });
     });
 
+    // insert marker (the shared cursor — where paste / create / split reference)
+    const ix = beatToX(engine.insertBeat);
+    if (ix >= KEY_W && ix <= w) {
+      g.strokeStyle = ac;
+      g.globalAlpha = 0.85;
+      g.setLineDash([2, 3]);
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(ix, HEAD_H);
+      g.lineTo(ix, h);
+      g.stroke();
+      g.setLineDash([]);
+      g.globalAlpha = 1;
+    }
+
     // playhead
     const pos = engine.arrangementPosition();
     const px = beatToX(pos);
@@ -388,7 +422,7 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       g.fillStyle = "#3a3a42";
       g.font = "11px ui-monospace, monospace";
       g.textAlign = "center";
-      g.fillText("add a track, then click here to place a clip", w / 2, (HEAD_H + h) / 2);
+      g.fillText("add a track, then double-click a lane to create a clip", w / 2, (HEAD_H + h) / 2);
       g.textAlign = "left";
     }
   });

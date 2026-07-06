@@ -5,7 +5,7 @@
 // vocabulary (name/mute/solo/vol/pan/preset). The timeline schedules from the
 // engine's arrangement; everything auto-saves to localStorage.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
@@ -113,6 +113,49 @@ export function ArrangementPage() {
     };
   }, []);
 
+  // ── the arrangement is the KEYBOARD AUTHORITY (not DOM focus) ──
+  // A single page-level handler routes transport + edit keys, so Space always plays and
+  // Delete always deletes the SELECTION — regardless of which button the mouse last
+  // touched. We only defer to the browser when the user is genuinely typing in a field.
+  // selRef mirrors the current selection so the (mount-once) handler always sees it.
+  const selRef = useRef(sel);
+  useEffect(() => {
+    selRef.current = sel;
+  }, [sel]);
+  useEffect(() => {
+    const typing = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      const tag = (el?.tagName || "").toLowerCase();
+      return tag === "input" || tag === "textarea" || !!el?.isContentEditable;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (typing(e.target)) return;
+      const meta = e.metaKey || e.ctrlKey;
+      const s = selRef.current;
+      // transport
+      if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
+      if (e.code === "Home") { e.preventDefault(); engine.returnToStart(); return; }
+      if (e.key.toLowerCase() === "l" && !meta) {
+        e.preventDefault();
+        const l = engine.arrangement.loop;
+        if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
+        else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
+        return;
+      }
+      // selection edits (Phase 1: delete + duplicate; more in later phases)
+      if ((e.key === "Delete" || e.key === "Backspace") && s) { e.preventDefault(); engine.removeClip(s.trackId, s.clipId); setSel(null); return; }
+      if (meta && e.key.toLowerCase() === "d" && s) {
+        e.preventDefault();
+        const copy = engine.duplicateClip(s.trackId, s.clipId);
+        if (copy) setSel({ trackId: s.trackId, clipId: copy.id });
+        return;
+      }
+      if (e.key === "Escape") { setSel(null); return; }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // focus the selected MIDI track's patch in the shared instrument editor
   useEffect(() => {
     if (selMidiTrack?.presetId) engine.setSynthPatch(selMidiTrack.presetId);
@@ -158,10 +201,10 @@ export function ArrangementPage() {
               {tracks.map((t) => (
                 <TrackHeader key={t.id} t={t} armed={eng.armedChannel === t.id} onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)} />
               ))}
-              {tracks.length === 0 && <div className="p-[10px] font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then click a lane to place a clip.</div>}
+              {tracks.length === 0 && <div className="p-[10px] font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
             </div>
             <div className="min-w-0 flex-1">
-              <Timeline height={Math.max(160, HEAD_H + tracks.length * ROW_H)} selectedClip={sel?.clipId ?? null} onSelectClip={(trackId, clipId) => setSel({ trackId, clipId })} />
+              <Timeline height={Math.max(160, HEAD_H + tracks.length * ROW_H)} selectedClip={sel?.clipId ?? null} onSelectClip={(trackId, clipId) => setSel(trackId && clipId ? { trackId, clipId } : null)} />
             </div>
           </div>
 
@@ -176,7 +219,7 @@ export function ArrangementPage() {
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>click a lane to place a clip · drag to move · drag its right edge to resize · double-click a MIDI clip to edit · shift+drag the ruler = loop brace.</span>
+          <span>double-click a lane = create · click = insert marker · drag a clip = move (⌘ = free) · ⌥-drag = duplicate · drag edge = resize · space = play · ⌫ = delete · ⌘D = duplicate · shift+drag ruler = loop.</span>
         </div>
       </TrackSection>
     </main>

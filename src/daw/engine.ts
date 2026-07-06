@@ -302,6 +302,7 @@ class AudioEngine {
   countInBars = 0; // bars of count-in click before the transport rolls (0 = off)
   followPlayhead = true; // timeline auto-scrolls to keep the playhead in view (UI reads it)
   snapBeats = 1; // timeline clip snap grid in beats (0 = off/free); UI reads it
+  insertBeat = 0; // the arrangement "insert marker" — where paste/create/split reference
   private _metroThrough = -1; // last beat we've scheduled a click for (arrangement clock)
   arrangement: Arrangement = loadArrangement();
   private _arrStrips: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-track vol/pan strip
@@ -3172,6 +3173,12 @@ class AudioEngine {
   setSnapBeats(beats: number) {
     this.snapBeats = Math.max(0, beats);
     this.emit("transport");
+  }
+  // the insert marker: shared cursor for paste / create / split. Emits `arrange` so the
+  // timeline redraws it.
+  setInsertBeat(beat: number) {
+    this.insertBeat = Math.max(0, beat);
+    this.emit("arrange");
   }
   // tap tempo: average the intervals between recent taps (drops stale/outlier taps)
   private _taps: number[] = [];

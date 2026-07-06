@@ -3,7 +3,7 @@
 // bars.beats + mm:ss readout, tempo (+ tap), time signature, loop (toggle + numeric
 // range), metronome (+ count-in), follow-playhead. Spacebar/Home/L keyboard transport.
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
@@ -67,30 +67,13 @@ export function PlaybackPane() {
     }
   });
 
+  // keyboard transport lives in ArrangementPage (the page-level key authority), so it
+  // works regardless of DOM focus. Buttons here just call the same engine verbs.
   const toggleLoop = () => {
     const l = engine.arrangement.loop;
     if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
     else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
   };
-
-  // keyboard transport — space = play/stop, Home = return-to-start, L = loop
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      const tag = (t.tagName || "").toLowerCase();
-      if (tag === "input" || tag === "textarea" || t.isContentEditable) return;
-      if (e.code === "Space") { e.preventDefault(); engine.toggleArrangement(); }
-      else if (e.code === "Home") { e.preventDefault(); engine.returnToStart(); }
-      else if (e.key.toLowerCase() === "l" && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        const l = engine.arrangement.loop;
-        if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
-        else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   // loop range as bar numbers (1-based)
   const loopBar = (beat: number) => Math.round(beat / bpb) + 1;
