@@ -127,6 +127,18 @@ re-anchor the clock so the playhead doesn't jump. API: `setActiveClip`/`getClip`
 `pause()` (track playback feeds the taps; the sequencer feeds `sum` — both at once double-sums and
 corrupts metering); `play()` calls `stopSequence()`.
 
+**Playback pane** ([components/arrangement/PlaybackPane.tsx](components/arrangement/PlaybackPane.tsx))
+— the arrangement transport. Verbs: `toggleArrangement` (play/stop), `playArrangementFromCursor`,
+`pauseArrangement` (hold position in `_pendingSeekBeat`), `stopArrangementToStart`/`returnToStart`
+(home = loop-brace start if looping else 0). `setBeatsPerBar` (time sig), `setArrangementBpm` +
+`tapTempo` (averages recent tap intervals), `setArrangementLoop` (numeric bar range or shift-drag),
+`setSnapBeats` (Timeline clip snap grid; 0/⌘ = free), `setFollowPlayhead` (Timeline auto-scrolls to
+keep the playhead in a band). **Metronome**: `metronome`/`metronomeVol` → `metroClick` (square blip,
+2 kHz accent on the bar downbeat / 1.4 kHz else) fired per integer beat in the arrangement branch,
+deduped via `_metroThrough`. **Count-in**: `countInBars` (0–2) pre-schedules that many bars of click
+before the anchor, pushing `_seqAnchorTime` forward. Keyboard: Space = play/stop, Home = return, L =
+loop.
+
 **The editor** ([components/piano-roll/PianoRoll.tsx](components/piano-roll/PianoRoll.tsx)). One
 `<canvas>` over the full MIDI range (C0–C8) with a **scroll-aware single coordinate system** for
 grid + notes (`pitchToY(p) = (HI_MIDI - p)*ROW_H - scrollY`) — no squashing, so rows and notes

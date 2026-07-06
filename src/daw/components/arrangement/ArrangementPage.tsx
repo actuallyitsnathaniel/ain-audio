@@ -5,11 +5,10 @@
 // vocabulary (name/mute/solo/vol/pan/preset). The timeline schedules from the
 // engine's arrangement; everything auto-saves to localStorage.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
-import { useRafLoop } from "../../hooks/useRafLoop";
 import { SectionHead } from "../SectionHead";
 import { TrackSection } from "../TrackSection";
 import { Knob } from "../Knob";
@@ -17,6 +16,7 @@ import { FxRack } from "../audio-lab/FxRack";
 import { Instrument } from "../audio-lab/Instrument";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
+import { PlaybackPane } from "./PlaybackPane";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
 const HEAD_H = 22; // must match Timeline
@@ -29,52 +29,6 @@ const chip = (active: boolean, danger?: boolean) =>
       : "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent"
     : "border-line text-faint hover:text-dim");
 
-function ArrTransport() {
-  const eng = useEngine(["transport", "arrange"]);
-  const playing = eng.sequencePlaying && eng.arrangeMode;
-  const readout = useRef<HTMLSpanElement>(null);
-  useRafLoop(() => {
-    const el = readout.current;
-    if (!el) return;
-    const bpb = engine.arrangement.beatsPerBar;
-    const beat = engine.arrangementPosition();
-    el.textContent = `${Math.floor(beat / bpb) + 1}.${Math.floor(beat % bpb) + 1}`;
-  });
-  return (
-    <div className="flex flex-wrap items-center gap-3">
-      <button
-        className={
-          "flex items-center gap-2 rounded-[3px] border px-[14px] py-[7px] font-mono text-[11px] transition-colors " +
-          (playing ? "border-accent bg-accent text-[#111]" : "border-line2 text-dim hover:border-accent hover:text-accent")
-        }
-        onClick={() => engine.toggleArrangement()}
-      >
-        <span className={playing ? "icon-pause small" : "icon-play small"} aria-hidden />
-        {playing ? "stop" : "play"}
-      </button>
-      <span className="font-mono text-[11px] tabular-nums text-accent" ref={readout}>
-        1.1
-      </span>
-      <button
-        className={
-          "rounded-[3px] border px-[10px] py-[6px] font-mono text-[10.5px] transition-colors " +
-          (eng.arrangement.loop?.on ? "border-accent text-accent" : "border-line text-faint hover:text-dim")
-        }
-        onClick={() => {
-          const l = engine.arrangement.loop;
-          if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
-          else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
-        }}
-        title="toggle the loop brace (shift+drag the ruler to set it)"
-      >
-        loop
-      </button>
-      <span className="ml-auto flex items-center gap-3">
-        <Knob value={eng.arrangement.bpm} min={40} max={220} defaultValue={120} size={40} onChange={(v) => engine.setArrangementBpm(v)} label="tempo" fmt={(v) => Math.round(v) + " bpm"} />
-      </span>
-    </div>
-  );
-}
 
 function TrackHeader({ t, armed, onArm }: { t: ArrTrack; armed: boolean; onArm: (id: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -180,7 +134,7 @@ export function ArrangementPage() {
         <SectionHead num="05" title="arrangement" sub="linear timeline · place clips on tracks · runs through the fx rack" />
 
         <div className="flex flex-col gap-[12px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]">
-          <ArrTransport />
+          <PlaybackPane />
 
           {/* add-track toolbar (kept OUT of the ruler-aligned strip below) */}
           <div className="flex flex-wrap items-center gap-[6px]">

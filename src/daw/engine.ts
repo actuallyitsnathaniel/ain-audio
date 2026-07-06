@@ -296,6 +296,13 @@ class AudioEngine {
   // drum sequence clip. Only one plays at a time.
   beatMode = false;
   arrangeMode = false; // scheduler walks the linear arrangement (vs the loop grid)
+  // ── transport / playback pane ──
+  metronome = false; // click on each beat (accent on bar 1) during arrangement playback
+  metronomeVol = 0.6; // 0..1
+  countInBars = 0; // bars of count-in click before the transport rolls (0 = off)
+  followPlayhead = true; // timeline auto-scrolls to keep the playhead in view (UI reads it)
+  snapBeats = 1; // timeline clip snap grid in beats (0 = off/free); UI reads it
+  private _metroThrough = -1; // last beat we've scheduled a click for (arrangement clock)
   arrangement: Arrangement = loadArrangement();
   private _arrStrips: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-track vol/pan strip
   kit: DrumKit = DEFAULT_KIT;
@@ -2212,6 +2219,28 @@ class AudioEngine {
     }
   }
 
+  // metronome click: a short pitched blip → straight to master (not through a track
+  // strip, so mute/solo/FX don't touch it). Accent = higher pitch on the bar downbeat.
+  private metroClick(when: number, accent: boolean) {
+    const c = this.ensureCtx();
+    const n = this.nodes!;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = "square";
+    o.frequency.value = accent ? 2000 : 1400;
+    const peak = this.metronomeVol * 0.5;
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(peak, when + 0.001);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+    o.connect(g);
+    g.connect(n.sum);
+    o.start(when);
+    o.stop(when + 0.05);
+    o.onended = () => {
+      try { g.disconnect(); } catch { /* fine */ }
+    };
+  }
+
   // ── drum lane mute/solo (solo is global across the beatmaker — see anyBeatSolo) ──
   // 1 normally; 0 if this lane is muted, or a global solo is up and this isn't soloed.
   private drumGain(laneId: string): number {
@@ -2963,11 +2992,21 @@ class AudioEngine {
     if (this.playing) this.pause();
     this.transportMode = "sequence";
     this.sequencePlaying = true;
-    const start = c.currentTime + 0.08; // small headroom before first note
+    let start = c.currentTime + 0.08; // small headroom before first note
+    // count-in: schedule N bars of metronome click BEFORE the transport rolls, and push
+    // the anchor forward by that duration so playback starts on the downbeat after it.
+    if (this.arrangeMode && this.countInBars > 0) {
+      const bpb = this.arrangement.beatsPerBar;
+      const bd = 60 / this.arrangement.bpm;
+      const beats = this.countInBars * bpb;
+      for (let i = 0; i < beats; i++) this.metroClick(start + i * bd, i % bpb === 0);
+      start += beats * bd;
+    }
     this._seqAnchorTime = start;
     this._seqAnchorBeat = this.arrangeMode ? fromBeat || this._pendingSeekBeat : 0;
     this._pendingSeekBeat = 0;
     this._scheduledThrough = start;
+    this._metroThrough = this._seqAnchorBeat - 1; // so the first in-song beat clicks
     if (this._schedTimer) clearInterval(this._schedTimer);
     this._schedTimer = window.setInterval(() => this.schedTick(), AudioEngine.SCHED_INTERVAL);
     this.schedTick();
@@ -3081,6 +3120,74 @@ class AudioEngine {
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
     else this.playArrangement();
   }
+  // ── transport verbs (playback pane) ──
+  // play from the current playhead (a prior seek / where it was paused), not always 0
+  playArrangementFromCursor() {
+    if (this.sequencePlaying && this.arrangeMode) return;
+    this.playArrangement(this._pendingSeekBeat);
+  }
+  // pause: stop the clock but REMEMBER the position (resume from here)
+  pauseArrangement() {
+    if (!(this.sequencePlaying && this.arrangeMode)) return;
+    const at = this.currentBeat();
+    this.stopArrangement();
+    this._pendingSeekBeat = Math.max(0, at);
+    this.emit("transport");
+  }
+  // stop: halt and return the playhead to the start (loop-brace start if looping, else 0)
+  stopArrangementToStart() {
+    const home = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop.start : 0;
+    if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
+    this._pendingSeekBeat = home;
+    this.emit("transport");
+  }
+  // return-to-start without stopping playback (⏮): seek to home
+  returnToStart() {
+    const home = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop.start : 0;
+    this.seekArrangement(home);
+  }
+  // time signature: beats per bar (drives the ruler grid + bar math everywhere)
+  setBeatsPerBar(n: number) {
+    this.arrangement.beatsPerBar = Math.min(12, Math.max(1, Math.round(n)));
+    this.saveArr();
+    this.emit("arrange");
+    this.emit("transport");
+  }
+  setMetronome(on: boolean) {
+    this.metronome = on;
+    this.emit("transport");
+  }
+  setMetronomeVol(v: number) {
+    this.metronomeVol = Math.min(1, Math.max(0, v));
+    this.emit("transport");
+  }
+  setCountInBars(bars: number) {
+    this.countInBars = Math.min(2, Math.max(0, Math.round(bars)));
+    this.emit("transport");
+  }
+  setFollowPlayhead(on: boolean) {
+    this.followPlayhead = on;
+    this.emit("transport");
+  }
+  setSnapBeats(beats: number) {
+    this.snapBeats = Math.max(0, beats);
+    this.emit("transport");
+  }
+  // tap tempo: average the intervals between recent taps (drops stale/outlier taps)
+  private _taps: number[] = [];
+  tapTempo() {
+    const now = (this.ctx?.currentTime ?? performance.now() / 1000);
+    const last = this._taps[this._taps.length - 1];
+    if (last != null && now - last > 2.5) this._taps = []; // gap → start a new set
+    this._taps.push(now);
+    if (this._taps.length > 5) this._taps.shift();
+    if (this._taps.length >= 2) {
+      let sum = 0;
+      for (let i = 1; i < this._taps.length; i++) sum += this._taps[i] - this._taps[i - 1];
+      const avg = sum / (this._taps.length - 1);
+      if (avg > 0) this.setArrangementBpm(Math.round(60 / avg));
+    }
+  }
   // move the playhead to `beat` while playing, via the re-anchor trick (same as
   // setBpm): anchor the clock at the target beat now, re-schedule from here.
   seekArrangement(beat: number) {
@@ -3094,6 +3201,7 @@ class AudioEngine {
       this._seqAnchorBeat = beat;
       this._seqAnchorTime = now;
       this._scheduledThrough = now;
+      this._metroThrough = Math.ceil(beat) - 1; // re-align clicks to the new position
       this.schedTick();
     } else {
       this._pendingSeekBeat = beat; // remembered until play (start from here)
@@ -3375,6 +3483,17 @@ class AudioEngine {
           } else if (clip.content.kind === "audio") {
             this.scheduleAudioClip(t, clip, fromBeatAbs, toBeatAbs, whenOf, bd, brace);
           }
+        }
+      }
+      // metronome: a click on every integer beat in this window (accent on the bar
+      // downbeat). Tracked in _metroThrough so a click is scheduled exactly once even as
+      // the lookahead window slides. Ignores the loop brace (counts absolute beats).
+      if (this.metronome) {
+        const bpb = this.arrangement.beatsPerBar;
+        const first = Math.max(Math.ceil(fromBeatAbs - 1e-6), Math.floor(this._metroThrough) + 1);
+        for (let beat = first; beat < toBeatAbs; beat++) {
+          this.metroClick(whenOf(beat), ((beat % bpb) + bpb) % bpb === 0);
+          this._metroThrough = beat;
         }
       }
       if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
