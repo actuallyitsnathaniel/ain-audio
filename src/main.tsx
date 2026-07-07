@@ -1,6 +1,6 @@
 import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom";
 import { createHead, UnheadProvider } from "@unhead/react/client";
 import Root from "../src/routes/root";
 import Secret from "../src/routes/secret";
@@ -12,7 +12,7 @@ const ProjectPage = lazy(() => import("../src/routes/music/project-page"));
 // eslint-disable-next-line react-refresh/only-export-components
 const EventsPage = lazy(() => import("../src/routes/events"));
 // eslint-disable-next-line react-refresh/only-export-components
-const BeatmakerPage = lazy(() => import("../src/routes/beatmaker"));
+const StudioPage = lazy(() => import("../src/routes/studio"));
 
 // Mobile debugging - log device and browser info
 console.log("User Agent:", navigator.userAgent);
@@ -59,7 +59,7 @@ const router = createBrowserRouter([
     errorElement: <ErrorPage />,
   },
   {
-    path: "/beatmaker",
+    path: "/studio",
     element: (
       <Suspense
         fallback={
@@ -68,11 +68,13 @@ const router = createBrowserRouter([
           </div>
         }
       >
-        <BeatmakerPage />
+        <StudioPage />
       </Suspense>
     ),
     errorElement: <ErrorPage />,
   },
+  // legacy path → studio (keep old links/bookmarks working)
+  { path: "/beatmaker", element: <Navigate to="/studio" replace />, errorElement: <ErrorPage /> },
   { path: "/secret", element: <Secret />, errorElement: <ErrorPage /> },
 ]);
 

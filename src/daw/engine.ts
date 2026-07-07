@@ -11,9 +11,9 @@ import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
 import { clipBeats, newNoteId, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
 import { DRUM_BASE } from "./data/drum-midi";
-import { arrangementBeats, loadArrangement, newClipId, newTrackId, saveArrangement, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
+import { arrangementBeats, emptyArrangement, loadArrangement, newClipId, newTrackId, saveArrangement, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
 import { splitContent } from "./data/clip-split";
-import { putAudio, allAudio, pruneAudio } from "./data/audio-store";
+import { putAudio, allAudio, pruneAudio, clearAudio } from "./data/audio-store";
 import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
 import { parseMidi } from "./data/midi-file";
 import { DEFAULT_KIT, defaultSequence, KITS, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumLane, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
@@ -2787,6 +2787,28 @@ class AudioEngine {
       return null; // undecodable file
     }
   }
+  // New project: wipe the arrangement + all imported audio (localStorage + IndexedDB, in
+  // sync so no clip is left with a dangling bufId) and reset to a blank studio. Stops
+  // playback and clears selection/undo/clipboard.
+  async newProject(): Promise<void> {
+    if (this.sequencePlaying) this.stopArrangement();
+    this.stopAudioClips();
+    this._importBufs = {};
+    this._reverseBufs = {};
+    this.arrangement = emptyArrangement();
+    saveArrangement(this.arrangement);
+    this.insertBeat = 0;
+    this._pendingSeekBeat = 0;
+    this.clearSelection();
+    this._undo = [];
+    this._redo = [];
+    this._clipboard = null;
+    await clearAudio(); // wipe the persisted audio bytes
+    this.emit("arrange");
+    this.emit("select");
+    this.emit("transport");
+  }
+
   // Re-hydrate persisted imports on boot: decode each stored file into _importBufs, then
   // prune any that no clip references. Called once from the arrangement page on mount.
   async loadPersistedAudio(): Promise<void> {

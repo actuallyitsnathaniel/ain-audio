@@ -228,8 +228,8 @@ export function ArrangementPage() {
 
   return (
     <main className="relative z-[1] pt-[64px]">
-      <TrackSection id="beatmaker" label="arrangement" rail="05">
-        <SectionHead num="05" title="arrangement" sub="linear timeline · place clips on tracks · runs through the fx rack" />
+      <TrackSection id="studio" label="studio" rail="05">
+        <SectionHead num="05" title="studio" sub="linear timeline · place midi, drum + audio clips on tracks · runs through the fx rack" />
 
         <div className="flex flex-col gap-[12px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]">
           <PlaybackPane />
@@ -245,6 +245,18 @@ export function ArrangementPage() {
             </button>
             <button className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("audio")}>
               + audio
+            </button>
+            <button
+              className="ml-auto rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]"
+              onClick={() => {
+                if (window.confirm("New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?")) {
+                  void engine.newProject();
+                  setEditSel(null);
+                }
+              }}
+              title="clear the studio + all imported audio, start fresh"
+            >
+              new project
             </button>
           </div>
 
