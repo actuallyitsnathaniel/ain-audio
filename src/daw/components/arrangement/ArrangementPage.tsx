@@ -5,7 +5,7 @@
 // vocabulary (name/mute/solo/vol/pan/preset). The timeline schedules from the
 // engine's arrangement; everything auto-saves to localStorage.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
@@ -17,6 +17,7 @@ import { Instrument } from "../audio-lab/Instrument";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
 import { PlaybackPane } from "./PlaybackPane";
+import { openContextMenu } from "../context-menu-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
 const HEAD_H = 22; // must match Timeline
@@ -30,10 +31,36 @@ const chip = (active: boolean, danger?: boolean) =>
     : "border-line text-faint hover:text-dim");
 
 
-function TrackHeader({ t, armed, onArm }: { t: ArrTrack; armed: boolean; onArm: (id: string) => void }) {
+function TrackHeader({ t, armed, selected, onArm }: { t: ArrTrack; armed: boolean; selected: boolean; onArm: (id: string) => void }) {
   const [editing, setEditing] = useState(false);
   return (
-    <div className="flex flex-col justify-center gap-[3px] border-b border-line px-[8px]" style={{ height: ROW_H }}>
+    <div
+      className={"flex flex-col justify-center gap-[3px] border-b border-line px-[8px] transition-colors " + (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")}
+      style={{ height: ROW_H }}
+      onPointerDown={(e) => {
+        // click the header background (not a button/input/knob) → select the whole track
+        const el = e.target as HTMLElement;
+        if (el.closest("button,input,select,svg")) return;
+        engine.selectTrack(t.id);
+      }}
+      onContextMenu={(e) => {
+        if (e.shiftKey) return;
+        e.preventDefault();
+        engine.selectTrack(t.id);
+        openContextMenu({
+          x: e.clientX,
+          y: e.clientY,
+          title: t.name,
+          items: [
+            { label: "select all clips", onClick: () => engine.selectTrack(t.id) },
+            { label: t.mute ? "unmute" : "mute", onClick: () => engine.toggleTrackMute(t.id) },
+            { label: t.solo ? "unsolo" : "solo", onClick: () => engine.toggleTrackSolo(t.id) },
+            { separator: true },
+            { label: "delete track", danger: true, onClick: () => engine.removeTrack(t.id) },
+          ],
+        });
+      }}
+    >
       <div className="flex items-center gap-[5px]">
         {editing ? (
           <input
@@ -95,18 +122,21 @@ function TrackHeader({ t, armed, onArm }: { t: ArrTrack; armed: boolean; onArm: 
 }
 
 export function ArrangementPage() {
-  const eng = useEngine(["arrange", "transport", "preset", "patch", "synth"]);
+  const eng = useEngine(["arrange", "transport", "preset", "patch", "synth", "select"]);
   const tracks = eng.arrangement.tracks;
-  const [rawSel, setSel] = useState<{ trackId: string; clipId: string } | null>(null);
-  // derive validity during render (no setState-in-effect); a stale selection just
-  // resolves to null until the next selection.
-  const sel = rawSel && engine.getArrClip(rawSel.trackId, rawSel.clipId) ? rawSel : null;
-  // the MIDI track whose clip is selected — its instrument is what the INSTRUMENT
+  // The bottom editor follows the SELECTION: whenever exactly one clip is selected (click,
+  // arrow-key, split result…), it edits that clip. A multi-selection keeps the last single
+  // editor open. `editSel` is a local fallback (e.g. a double-clicked clip within a multi).
+  const [editSel, setEditSel] = useState<{ trackId: string; clipId: string } | null>(null);
+  const primary = eng.selClips.size === 1 ? engine.primaryClip() : null;
+  const sel = primary ?? (editSel && engine.getArrClip(editSel.trackId, editSel.clipId) ? editSel : null);
+  // the MIDI track whose clip is being edited — its instrument is what the INSTRUMENT
   // panel edits (patches are shared by key, so editing here changes that track's sound).
   const selTrack = sel ? tracks.find((t) => t.id === sel.trackId) : undefined;
   const selMidiTrack = selTrack?.kind === "midi" ? selTrack : undefined;
 
   useEffect(() => {
+    void engine.loadPersistedAudio(); // re-hydrate imported audio clips from IndexedDB
     engine.warmArrangement(); // decode restored tracks' instruments up front
     return () => {
       if (engine.arrangeMode) engine.stopArrangement();
@@ -116,12 +146,8 @@ export function ArrangementPage() {
   // ── the arrangement is the KEYBOARD AUTHORITY (not DOM focus) ──
   // A single page-level handler routes transport + edit keys, so Space always plays and
   // Delete always deletes the SELECTION — regardless of which button the mouse last
-  // touched. We only defer to the browser when the user is genuinely typing in a field.
-  // selRef mirrors the current selection so the (mount-once) handler always sees it.
-  const selRef = useRef(sel);
-  useEffect(() => {
-    selRef.current = sel;
-  }, [sel]);
+  // touched. Operates on engine.selClips (the multi-selection). Defers only when the
+  // user is genuinely typing in a field.
   useEffect(() => {
     const typing = (t: EventTarget | null) => {
       const el = t as HTMLElement | null;
@@ -131,7 +157,6 @@ export function ArrangementPage() {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e.target)) return;
       const meta = e.metaKey || e.ctrlKey;
-      const s = selRef.current;
       // transport
       if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
       if (e.code === "Home") { e.preventDefault(); engine.returnToStart(); return; }
@@ -142,15 +167,45 @@ export function ArrangementPage() {
         else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
         return;
       }
-      // selection edits (Phase 1: delete + duplicate; more in later phases)
-      if ((e.key === "Delete" || e.key === "Backspace") && s) { e.preventDefault(); engine.removeClip(s.trackId, s.clipId); setSel(null); return; }
-      if (meta && e.key.toLowerCase() === "d" && s) {
+      // select-all
+      if (meta && e.key.toLowerCase() === "a") { e.preventDefault(); engine.selectAllClips(); return; }
+      // delete every selected clip
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const ids = [...engine.selClips];
+        if (!ids.length) return;
         e.preventDefault();
-        const copy = engine.duplicateClip(s.trackId, s.clipId);
-        if (copy) setSel({ trackId: s.trackId, clipId: copy.id });
+        engine.deleteSelectedClips();
+        setEditSel(null);
         return;
       }
-      if (e.key === "Escape") { setSel(null); return; }
+      // duplicate every selected clip (⌘D)
+      if (meta && e.key.toLowerCase() === "d") {
+        if (!engine.selClips.size) return;
+        e.preventDefault();
+        engine.duplicateSelectedClips();
+        return;
+      }
+      // time-editing: ⌘E split · ⌘J consolidate · ⌘I insert silence (at the insert marker)
+      if (meta && e.key.toLowerCase() === "e") { e.preventDefault(); engine.splitAtInsert(); return; }
+      if (meta && e.key.toLowerCase() === "j") { e.preventDefault(); engine.consolidateSelection(); return; }
+      if (meta && e.key.toLowerCase() === "i") { e.preventDefault(); engine.insertSilence(); return; }
+      // clipboard: ⌘C copy · ⌘X cut · ⌘V paste (at the insert marker)
+      if (meta && e.key.toLowerCase() === "c") { if (engine.selClips.size) { e.preventDefault(); engine.copySelection(); } return; }
+      if (meta && e.key.toLowerCase() === "x") { if (engine.selClips.size) { e.preventDefault(); engine.cutSelection(); setEditSel(null); } return; }
+      if (meta && e.key.toLowerCase() === "v") { if (engine.hasClipboard()) { e.preventDefault(); engine.pasteClipboard(); } return; }
+      // undo / redo: ⌘Z · ⌘⇧Z (or ⌘Y)
+      if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) engine.redo(); else engine.undo(); setEditSel(null); return; }
+      if (meta && e.key.toLowerCase() === "y") { e.preventDefault(); engine.redo(); setEditSel(null); return; }
+      // arrow keys on the selection (need a selection to matter)
+      if (engine.selClips.size) {
+        const step = meta ? 0.25 : engine.snapBeats > 0 ? engine.snapBeats : 1; // ⌘ = fine (1/16)
+        if (e.key === "ArrowLeft") { e.preventDefault(); if (e.shiftKey) engine.resizeSelection(-step); else engine.nudgeSelection(-step); return; }
+        if (e.key === "ArrowRight") { e.preventDefault(); if (e.shiftKey) engine.resizeSelection(step); else engine.nudgeSelection(step); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); engine.moveSelectionTracks(-1); return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); engine.moveSelectionTracks(1); return; }
+        if (e.key.toLowerCase() === "r" && !meta) { e.preventDefault(); engine.reverseSelection(); return; }
+      }
+      if (e.key === "Escape") { engine.clearSelection(); setEditSel(null); return; }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -199,12 +254,12 @@ export function ArrangementPage() {
               {/* spacer strip aligns the header column with the timeline's ruler */}
               <div className="border-b border-line" style={{ height: HEAD_H }} />
               {tracks.map((t) => (
-                <TrackHeader key={t.id} t={t} armed={eng.armedChannel === t.id} onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)} />
+                <TrackHeader key={t.id} t={t} armed={eng.armedChannel === t.id} selected={eng.selTrackId === t.id} onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)} />
               ))}
               {tracks.length === 0 && <div className="p-[10px] font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
             </div>
             <div className="min-w-0 flex-1">
-              <Timeline height={Math.max(160, HEAD_H + tracks.length * ROW_H)} selectedClip={sel?.clipId ?? null} onSelectClip={(trackId, clipId) => setSel(trackId && clipId ? { trackId, clipId } : null)} />
+              <Timeline height={Math.max(160, HEAD_H + tracks.length * ROW_H)} onEditClip={(trackId, clipId) => setEditSel({ trackId, clipId })} />
             </div>
           </div>
 
@@ -219,7 +274,7 @@ export function ArrangementPage() {
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>double-click a lane = create · click = insert marker · drag a clip = move (⌘ = free) · ⌥-drag = duplicate · drag edge = resize · space = play · ⌫ = delete · ⌘D = duplicate · shift+drag ruler = loop.</span>
+          <span>dbl-click = create · click = insert marker · drag = move (⌘ free) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse.</span>
         </div>
       </TrackSection>
     </main>

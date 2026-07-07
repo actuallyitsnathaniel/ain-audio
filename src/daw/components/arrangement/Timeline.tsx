@@ -27,12 +27,14 @@ const CLIP_COLOR: Record<string, string> = { midi: "#4a7fd4", drum: "#5aa0b8", a
 
 type Drag =
   | { mode: "move"; trackId: string; clipId: string; grabBeat: number; base: number; moved: boolean; dup: boolean }
-  | { mode: "resize"; trackId: string; clipId: string }
+  | { mode: "resize"; trackId: string; clipId: string; moved?: boolean }
   | { mode: "seek" }
   | { mode: "brace"; anchor: number }
+  // drag over empty lane space: paint a time selection + marquee-select intersecting clips
+  | { mode: "marquee"; x0: number; y0: number; anchorBeat: number; anchorTrack: number; moved: boolean }
   | null;
 
-export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?: number; selectedClip: string | null; onSelectClip: (trackId: string | null, clipId: string | null) => void }) {
+export function Timeline({ height = 320, onEditClip }: { height?: number; onEditClip: (trackId: string, clipId: string) => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag>(null);
   const view = useRef({ scrollX: 0, ppb: 24 });
@@ -90,7 +92,9 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
 
     const hit = hitClip(x, y);
     if (hit) {
-      onSelectClip(hit.t.id, hit.c.id);
+      // shift+click toggles in the multi-selection; a bare click selects just this clip
+      if (e.shiftKey) engine.toggleClipInSel(hit.c.id);
+      else if (!engine.isClipSelected(hit.c.id)) engine.selectClip(hit.c.id);
       if (hit.edge) {
         drag.current = { mode: "resize", trackId: hit.t.id, clipId: hit.c.id };
       } else {
@@ -99,15 +103,15 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       return;
     }
 
-    // empty lane, bare click: place the insert marker + clear the clip selection.
-    // (creation is an explicit act — double-click, per Ableton; a click never creates.)
+    // empty lane: start a marquee (drag → paint a time selection + select intersecting
+    // clips). A bare click that doesn't move ends up placing the insert marker (in up).
     if (e.button === 0) {
-      engine.setInsertBeat(Math.max(0, snapBeat(xToBeat(x), cmd(e))));
-      onSelectClip(null, null);
+      drag.current = { mode: "marquee", x0: x, y0: y, anchorBeat: xToBeat(x), anchorTrack: yToTrackIndex(y), moved: false };
     }
   };
   // create an (empty) clip on a track at a beat — the double-click gesture
   const createClipAt = (t: ArrTrack, beat: number) => {
+    engine.pushUndo();
     const bpb = engine.arrangement.beatsPerBar;
     const created = engine.addClip(t.id, {
       startBeat: Math.max(0, beat),
@@ -115,7 +119,7 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       loop: false,
       content: t.kind === "midi" ? { kind: "midi", clip: { bars: 1, beatsPerBar: bpb, notes: [] } } : t.kind === "drum" ? { kind: "drum", pattern: emptyDrumPattern(bpb) } : { kind: "audio", loopId: "" },
     });
-    if (created) onSelectClip(t.id, created.id);
+    if (created) engine.selectClip(created.id);
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -130,6 +134,7 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       const en = Math.max(d.anchor, beat);
       if (en > s) engine.setArrangementLoop(s, en, true);
     } else if (d.mode === "move") {
+      if (!d.moved) engine.pushUndo(); // snapshot ONCE at the start of the drag
       if (!d.moved && d.dup) {
         // ⌥-drag: duplicate first, then drag the copy
         const copy = engine.duplicateClip(d.trackId, d.clipId);
@@ -146,12 +151,38 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       engine.moveClip(d.trackId, d.clipId, d.base + dBeat, toTrack?.id);
       if (toTrack && toTrack.id !== d.trackId && toTrack.kind === tracks().find((t) => t.id === d.trackId)?.kind) d.trackId = toTrack.id;
     } else if (d.mode === "resize") {
+      if (!d.moved) { engine.pushUndo(); d.moved = true; } // snapshot once
       const c = tracks().find((t) => t.id === d.trackId)?.clips.find((x) => x.id === d.clipId);
       if (c) engine.resizeClip(d.trackId, d.clipId, Math.max(0.25, beat - c.startBeat));
+    } else if (d.mode === "marquee") {
+      const { y } = localXY(e);
+      if (!d.moved && Math.abs(x - d.x0) < 3 && Math.abs(y - d.y0) < 3) return; // slop
+      d.moved = true;
+      // time range (snapped) + track span from the drag box
+      const b0 = snapBeat(d.anchorBeat, cmd(e));
+      const b1 = snapBeat(xToBeat(x), cmd(e));
+      const t0 = Math.min(d.anchorTrack, yToTrackIndex(y));
+      const t1 = Math.max(d.anchorTrack, yToTrackIndex(y));
+      const spanTracks = tracks().slice(Math.max(0, t0), t1 + 1);
+      engine.setTimeSel(Math.min(b0, b1), Math.max(b0, b1), spanTracks.map((t) => t.id));
+      // select every clip intersecting the box
+      const lo = Math.min(b0, b1), hi = Math.max(b0, b1);
+      const ids: string[] = [];
+      for (const t of spanTracks) for (const c of t.clips) {
+        if (c.startBeat < hi && c.startBeat + c.lengthBeats > lo) ids.push(c.id);
+      }
+      engine.setSelectedClips(ids);
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    const d = drag.current;
+    // a marquee that never moved = a bare click → insert marker + clear selection
+    if (d?.mode === "marquee" && !d.moved) {
+      const { x } = localXY(e);
+      engine.setInsertBeat(Math.max(0, snapBeat(xToBeat(x), cmd(e))));
+      engine.clearSelection();
+    }
     drag.current = null;
   };
 
@@ -163,7 +194,8 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     }
     const hit = hitClip(x, y);
     if (hit) {
-      onSelectClip(hit.t.id, hit.c.id); // opens the editor below
+      engine.selectClip(hit.c.id);
+      onEditClip(hit.t.id, hit.c.id); // opens the editor below
     } else {
       // double-click empty lane → CREATE a clip here (the create gesture)
       const t = tracks()[yToTrackIndex(y)];
@@ -175,16 +207,37 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     if (e.shiftKey) return;
     e.preventDefault();
     const r = ref.current!.getBoundingClientRect();
-    const hit = hitClip(e.clientX - r.left, e.clientY - r.top);
-    if (!hit) return;
+    const cx = e.clientX - r.left;
+    const beat = snapBeat(xToBeat(cx), cmd(e));
+    engine.setInsertBeat(Math.max(0, beat)); // where "split here" cuts / paste lands
+    const hit = hitClip(cx, e.clientY - r.top);
+    if (!hit) {
+      // empty space menu — paste here / select all
+      openContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        title: "arrangement",
+        items: [
+          { label: "paste here", hint: "⌘V", disabled: !engine.hasClipboard(), onClick: () => engine.pasteClipboard() },
+          { label: "insert silence", hint: "⌘I", onClick: () => engine.insertSilence() },
+          { separator: true },
+          { label: "select all", hint: "⌘A", onClick: () => engine.selectAllClips() },
+        ],
+      });
+      return;
+    }
+    if (!engine.isClipSelected(hit.c.id)) engine.selectClip(hit.c.id);
+    const multi = engine.selClips.size > 1;
     openContextMenu({
       x: e.clientX,
       y: e.clientY,
-      title: hit.c.content.kind + " clip",
+      title: multi ? engine.selClips.size + " clips" : hit.c.content.kind + " clip",
       items: [
-        { label: "duplicate", onClick: () => engine.duplicateClip(hit.t.id, hit.c.id) },
+        { label: "split here", hint: "⌘E", onClick: () => engine.splitAtInsert() },
+        ...(multi ? [{ label: "consolidate", hint: "⌘J", onClick: () => engine.consolidateSelection() }] : []),
+        { label: "duplicate", hint: "⌘D", onClick: () => (multi ? engine.duplicateSelectedClips() : engine.duplicateClip(hit.t.id, hit.c.id)) },
         { separator: true },
-        { label: "delete clip", danger: true, onClick: () => engine.removeClip(hit.t.id, hit.c.id) },
+        { label: multi ? "delete clips" : "delete clip", danger: true, hint: "⌫", onClick: () => (multi ? engine.deleteSelectedClips() : engine.removeClip(hit.t.id, hit.c.id)) },
       ],
     });
   };
@@ -227,13 +280,14 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
     const hit = y >= HEAD_H ? hitClip(x, y) : null;
     if (hit && hit.c.content.kind === "audio") {
       engine.setClipContent(hit.t.id, hit.c.id, { ...audioContent });
-      onSelectClip(hit.t.id, hit.c.id);
+      engine.selectClip(hit.c.id);
+      onEditClip(hit.t.id, hit.c.id);
       return;
     }
     // otherwise → a NEW audio track with the clip on it (the default gesture)
     const track = engine.addTrack("audio");
     const created = engine.addClip(track.id, { startBeat: beat, lengthBeats, loop: false, content: { ...audioContent } });
-    if (created) onSelectClip(track.id, created.id);
+    if (created) { engine.selectClip(created.id); onEditClip(track.id, created.id); }
   };
 
   // wheel: horizontal scroll; ⌘/ctrl = zoom around cursor
@@ -343,8 +397,26 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
       g.strokeRect(lx + 0.5, 0.5, lw, HEAD_H - 3);
     }
 
+    // time selection band (the marquee / drag-select highlight over its track span)
+    const ts = engine.timeSel;
+    if (ts) {
+      const tx = beatToX(ts.start);
+      const tw = (ts.end - ts.start) * view.current.ppb;
+      g.fillStyle = "color-mix(in srgb, " + ac + " 12%, transparent)";
+      for (let i = 0; i < tracks().length; i++) {
+        if (!ts.trackIds.includes(tracks()[i].id)) continue;
+        g.fillRect(tx, trackYOf(i), tw, ROW_H);
+      }
+      // range edges in the ruler
+      g.strokeStyle = "color-mix(in srgb, " + ac + " 60%, transparent)";
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(tx + 0.5, HEAD_H); g.lineTo(tx + 0.5, h);
+      g.moveTo(tx + tw + 0.5, HEAD_H); g.lineTo(tx + tw + 0.5, h);
+      g.stroke();
+    }
+
     // clips
-    const selId = selectedClip;
     tracks().forEach((t, i) => {
       const y = trackYOf(i);
       const base = CLIP_COLOR[t.kind] || "#4a7fd4";
@@ -352,7 +424,7 @@ export function Timeline({ height = 320, selectedClip, onSelectClip }: { height?
         const x = beatToX(c.startBeat);
         const cw = Math.max(4, c.lengthBeats * view.current.ppb);
         if (x + cw < 0 || x > w) return;
-        const selected = c.id === selId;
+        const selected = engine.isClipSelected(c.id);
         g.fillStyle = c.color || base;
         g.globalAlpha = t.mute ? 0.35 : 0.9;
         g.beginPath();

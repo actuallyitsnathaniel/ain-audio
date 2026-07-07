@@ -34,6 +34,16 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
     }
     onCommit(p);
   };
+  // per-lane mute/solo within this clip's pattern
+  const toggleMix = (laneId: string, field: "mute" | "solo") => {
+    const laneMix = { ...(pattern.laneMix || {}) };
+    const cur = laneMix[laneId] || { mute: false, solo: false };
+    laneMix[laneId] = { ...cur, [field]: !cur[field] };
+    onCommit({ ...pattern, laneMix });
+  };
+  const msBtn = (on: boolean, danger?: boolean) =>
+    "w-[16px] rounded-[2px] border py-[1px] font-mono text-[8px] leading-none transition-colors " +
+    (on ? (danger ? "border-[color-mix(in_srgb,#e0654f_60%,transparent)] bg-[color-mix(in_srgb,#e0654f_22%,transparent)] text-[#e98c79]" : "border-accent bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent") : "border-line text-faint hover:text-dim");
 
   // imperative playhead highlight (no per-frame React render)
   useRafLoop(() => {
@@ -58,9 +68,14 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
       {kit.lanes.map((lane) => {
         const on = pattern.on[lane.id] || [];
         const accent = pattern.accent[lane.id] || [];
+        const mix = pattern.laneMix?.[lane.id];
         return (
           <div key={lane.id} className="flex items-center gap-[8px]">
             <span className="w-[44px] shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
+            <span className="flex shrink-0 gap-[2px]">
+              <button className={msBtn(!!mix?.mute, true)} onClick={() => toggleMix(lane.id, "mute")} title="mute lane">M</button>
+              <button className={msBtn(!!mix?.solo)} onClick={() => toggleMix(lane.id, "solo")} title="solo lane">S</button>
+            </span>
             <div className="flex flex-1 gap-[8px]">
               {Array.from({ length: bars }).map((_, b) => (
                 <div key={b} className="flex flex-1 gap-[3px]">
