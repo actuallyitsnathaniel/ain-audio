@@ -122,11 +122,11 @@ export function TransportBar() {
         <button
           className={
             "rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap transition-[color,background] duration-150 hover:bg-panel2 max-[760px]:px-[7px] " +
-            (location.pathname === "/beatmaker" ? "text-accent" : "text-dim hover:text-daw-text")
+            (location.pathname === "/studio" ? "text-accent" : "text-dim hover:text-daw-text")
           }
-          onClick={() => navigate("/beatmaker")}
+          onClick={() => navigate("/studio")}
         >
-          <span className="mr-0.5 text-faint">05</span> beat
+          <span className="mr-0.5 text-faint">05</span> studio
         </button>
       </nav>
       <CpuMeter />

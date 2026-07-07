@@ -56,6 +56,19 @@ export async function allAudio(): Promise<{ bufId: string; bytes: ArrayBuffer; n
   return out;
 }
 
+// wipe ALL stored imports (new-project / clear-db)
+export async function clearAudio(): Promise<void> {
+  const db = await open();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+  });
+  db.close();
+}
+
 // remove imports no longer referenced by any clip (call after loading the arrangement)
 export async function pruneAudio(keepIds: Set<string>): Promise<void> {
   const db = await open();
