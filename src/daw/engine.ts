@@ -9,9 +9,11 @@
 
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
-import { clipBeats, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
+import { clipBeats, newNoteId, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
 import { DRUM_BASE } from "./data/drum-midi";
 import { arrangementBeats, loadArrangement, newClipId, newTrackId, saveArrangement, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
+import { splitContent } from "./data/clip-split";
+import { putAudio, allAudio, pruneAudio } from "./data/audio-store";
 import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
 import { parseMidi } from "./data/midi-file";
 import { DEFAULT_KIT, defaultSequence, KITS, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumLane, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
@@ -20,7 +22,7 @@ export type TransportMode = "track" | "sequence";
 
 const STEP_BEATS = 0.25; // one drum step = a 1/16 note
 
-type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi" | "patch" | "arrange";
+type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi" | "patch" | "arrange" | "select";
 
 export interface Levels {
   rms: number;
@@ -303,6 +305,16 @@ class AudioEngine {
   followPlayhead = true; // timeline auto-scrolls to keep the playhead in view (UI reads it)
   snapBeats = 1; // timeline clip snap grid in beats (0 = off/free); UI reads it
   insertBeat = 0; // the arrangement "insert marker" — where paste/create/split reference
+  // arrangement selection model (Ableton-style): a set of selected clips + an optional
+  // time range spanning a set of tracks. Emits `select` so the timeline + editor react.
+  selClips = new Set<string>(); // selected clip ids
+  timeSel: { start: number; end: number; trackIds: string[] } | null = null;
+  // undo/redo: snapshot the whole arrangement before each mutation (simple + correct;
+  // no per-op inverse logic). Bounded stacks. Clipboard holds copied clips (relative).
+  private _undo: Arrangement[] = [];
+  private _redo: Arrangement[] = [];
+  private _clipboard: { clips: ArrClip[]; trackKinds: TrackKind[] } | null = null;
+  private static UNDO_MAX = 60;
   private _metroThrough = -1; // last beat we've scheduled a click for (arrangement clock)
   arrangement: Arrangement = loadArrangement();
   private _arrStrips: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-track vol/pan strip
@@ -2761,9 +2773,12 @@ class AudioEngine {
     const c = this.ensureCtx();
     try {
       const ab = await file.arrayBuffer();
+      // decodeAudioData DETACHES the buffer → keep a copy to persist before decoding
+      const raw = ab.slice(0);
       const buf = await c.decodeAudioData(ab);
       const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
       this._importBufs[bufId] = buf;
+      void putAudio(bufId, raw, file.name); // persist raw bytes for reload (best-effort)
       this.emit("arrange");
       const stem = file.name.replace(/\.[^.]+$/, ""); // drop the extension
       const meta = parseLoopMeta(stem);
@@ -2771,6 +2786,25 @@ class AudioEngine {
     } catch {
       return null; // undecodable file
     }
+  }
+  // Re-hydrate persisted imports on boot: decode each stored file into _importBufs, then
+  // prune any that no clip references. Called once from the arrangement page on mount.
+  async loadPersistedAudio(): Promise<void> {
+    const c = this.ensureCtx();
+    const stored = await allAudio();
+    for (const { bufId, bytes } of stored) {
+      if (this._importBufs[bufId]) continue;
+      try {
+        this._importBufs[bufId] = await c.decodeAudioData(bytes.slice(0));
+      } catch {
+        /* corrupt entry — skip */
+      }
+    }
+    // prune imports no arrangement clip points at (frees evicted/orphaned entries)
+    const referenced = new Set<string>();
+    for (const t of this.arrangement.tracks) for (const cl of t.clips) if (cl.content.kind === "audio" && cl.content.bufId) referenced.add(cl.content.bufId);
+    void pruneAudio(referenced);
+    this.emit("arrange");
   }
   // reverse an imported buffer (cached), for reverse playback. Returns a NEW buffer.
   private _reverseBufs: Record<string, AudioBuffer> = {};
@@ -3004,7 +3038,9 @@ class AudioEngine {
       start += beats * bd;
     }
     this._seqAnchorTime = start;
-    this._seqAnchorBeat = this.arrangeMode ? fromBeat || this._pendingSeekBeat : 0;
+    // arrange: start at the beat the caller passed (insert marker for bare Space, the
+    // pause point for Shift+Space). beat mode always starts at 0.
+    this._seqAnchorBeat = this.arrangeMode ? Math.max(0, fromBeat) : 0;
     this._pendingSeekBeat = 0;
     this._scheduledThrough = start;
     this._metroThrough = this._seqAnchorBeat - 1; // so the first in-song beat clicks
@@ -3117,9 +3153,11 @@ class AudioEngine {
     this.stopSequence();
     this.arrangeMode = false;
   }
+  // bare Space: if playing → stop; if stopped → play FROM THE INSERT MARKER (Ableton).
+  // (Shift+Space = playArrangementFromCursor continues from the last stop point.)
   toggleArrangement() {
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
-    else this.playArrangement();
+    else this.playArrangement(this.insertBeat);
   }
   // ── transport verbs (playback pane) ──
   // play from the current playhead (a prior seek / where it was paused), not always 0
@@ -3180,6 +3218,368 @@ class AudioEngine {
     this.insertBeat = Math.max(0, beat);
     this.emit("arrange");
   }
+
+  // ── arrangement selection (clips + time range) ──
+  // The `primary` selected clip is what the ClipEditor shows (first of the set, or the
+  // last one added — we track it separately so the editor is stable).
+  private _primaryClipId: string | null = null;
+  primaryClip(): { trackId: string; clipId: string } | null {
+    if (!this._primaryClipId) return null;
+    for (const t of this.arrangement.tracks) {
+      if (t.clips.some((c) => c.id === this._primaryClipId)) return { trackId: t.id, clipId: this._primaryClipId };
+    }
+    return null;
+  }
+  isClipSelected(id: string) {
+    return this.selClips.has(id);
+  }
+  // replace the selection with a single clip (a bare click); also sets the time range to
+  // its span so time-ops target it (Ableton behavior). null clears the selection.
+  selectClip(clipId: string | null) {
+    this.selClips = new Set(clipId ? [clipId] : []);
+    this._primaryClipId = clipId;
+    this.timeSel = clipId ? this._clipTimeRange(clipId) : null;
+    this._selTrackId = null;
+    this.emit("select");
+  }
+  toggleClipInSel(clipId: string) {
+    if (this.selClips.has(clipId)) {
+      this.selClips.delete(clipId);
+      if (this._primaryClipId === clipId) this._primaryClipId = this.selClips.values().next().value ?? null;
+    } else {
+      this.selClips.add(clipId);
+      this._primaryClipId = clipId;
+    }
+    this.selClips = new Set(this.selClips); // new ref so React re-renders
+    this.emit("select");
+  }
+  // set the whole selection at once (used by the marquee)
+  setSelectedClips(ids: string[]) {
+    this.selClips = new Set(ids);
+    if (ids.length) this._primaryClipId = ids[ids.length - 1];
+    else this._primaryClipId = null;
+    this.emit("select");
+  }
+  clearSelection() {
+    this.selClips = new Set();
+    this._primaryClipId = null;
+    this._selTrackId = null;
+    this.timeSel = null;
+    this.emit("select");
+  }
+  selectAllClips() {
+    const ids: string[] = [];
+    for (const t of this.arrangement.tracks) for (const c of t.clips) ids.push(c.id);
+    this.setSelectedClips(ids);
+  }
+  // select every clip on one track (clicking its header) + a whole-track time selection
+  selectTrack(trackId: string) {
+    const t = this.arrangement.tracks.find((x) => x.id === trackId);
+    if (!t) return;
+    this.setSelectedClips(t.clips.map((c) => c.id));
+    const end = Math.max(0, ...t.clips.map((c) => c.startBeat + c.lengthBeats));
+    this.timeSel = end > 0 ? { start: 0, end, trackIds: [trackId] } : null;
+    this._selTrackId = trackId;
+    this.emit("select");
+  }
+  private _selTrackId: string | null = null;
+  get selTrackId() { return this._selTrackId; }
+  // a time range spanning tracks (the marquee / drag-select on empty lane space)
+  setTimeSel(start: number, end: number, trackIds: string[]) {
+    const s = Math.max(0, Math.min(start, end));
+    const e = Math.max(start, end);
+    this.timeSel = e > s ? { start: s, end: e, trackIds } : null;
+    this.emit("select");
+  }
+  private _clipTimeRange(clipId: string): { start: number; end: number; trackIds: string[] } | null {
+    for (const t of this.arrangement.tracks) {
+      const c = t.clips.find((x) => x.id === clipId);
+      if (c) return { start: c.startBeat, end: c.startBeat + c.lengthBeats, trackIds: [t.id] };
+    }
+    return null;
+  }
+  // delete every selected clip (multi-select Delete)
+  deleteSelectedClips() {
+    const ids = [...this.selClips];
+    if (!ids.length) return;
+    this.pushUndo();
+    for (const t of this.arrangement.tracks) {
+      for (const c of t.clips) if (ids.includes(c.id)) this.stopAudioForClip(c.id);
+      t.clips = t.clips.filter((c) => !ids.includes(c.id));
+    }
+    this.clearSelection();
+    this.saveArr();
+  }
+  // duplicate every selected clip (⌘D); the copies become the new selection
+  duplicateSelectedClips() {
+    const ids = [...this.selClips];
+    if (!ids.length) return;
+    this.pushUndo();
+    const newIds: string[] = [];
+    for (const t of this.arrangement.tracks) {
+      for (const c of [...t.clips]) {
+        if (!ids.includes(c.id)) continue;
+        const copy = this.duplicateClip(t.id, c.id);
+        if (copy) newIds.push(copy.id);
+      }
+    }
+    if (newIds.length) this.setSelectedClips(newIds);
+  }
+
+  // ── arrow-key ops on the selection (Phase 5) ──
+  // helper: the (track, clip) pairs currently selected
+  private selectedPairs(): { t: ArrTrack; c: ArrClip }[] {
+    const out: { t: ArrTrack; c: ArrClip }[] = [];
+    for (const t of this.arrangement.tracks) for (const c of t.clips) if (this.selClips.has(c.id)) out.push({ t, c });
+    return out;
+  }
+  // nudge every selected clip by `delta` beats (← / →). Clamped so none goes below 0.
+  nudgeSelection(delta: number) {
+    const pairs = this.selectedPairs();
+    if (!pairs.length) return;
+    const minStart = Math.min(...pairs.map((p) => p.c.startBeat));
+    const d = Math.max(delta, -minStart); // don't push any clip before beat 0
+    if (d === 0) return;
+    this.pushUndo();
+    for (const { c } of pairs) c.startBeat = Math.max(0, c.startBeat + d);
+    for (const { t, c } of pairs) this.resolveOverlaps(t, c);
+    for (const { c } of pairs) this.stopAudioForClip(c.id);
+    this.saveArr();
+    this.emit("select");
+  }
+  // resize every selected clip by `delta` beats (shift+← / →). Min length 0.25.
+  resizeSelection(delta: number) {
+    const pairs = this.selectedPairs();
+    if (!pairs.length) return;
+    this.pushUndo();
+    for (const { t, c } of pairs) {
+      c.lengthBeats = Math.max(0.25, c.lengthBeats + delta);
+      this.resolveOverlaps(t, c);
+      this.stopAudioForClip(c.id);
+    }
+    this.saveArr();
+    this.emit("select");
+  }
+  // move the selection up/down a track (↑ / ↓): each clip hops to the adjacent track of
+  // the SAME kind (audio↔audio etc.), keeping its beat position. Skips if no such track.
+  moveSelectionTracks(dir: -1 | 1) {
+    const pairs = this.selectedPairs();
+    if (!pairs.length) return;
+    const tracks = this.arrangement.tracks;
+    // resolve each clip's destination track first; abort if any can't move
+    const moves: { from: ArrTrack; to: ArrTrack; c: ArrClip }[] = [];
+    for (const { t, c } of pairs) {
+      const i = tracks.indexOf(t);
+      // walk to the next track of the same kind in `dir`
+      let j = i + dir;
+      while (j >= 0 && j < tracks.length && tracks[j].kind !== t.kind) j += dir;
+      if (j < 0 || j >= tracks.length) return; // one can't move → cancel the whole op
+      moves.push({ from: t, to: tracks[j], c });
+    }
+    this.pushUndo();
+    for (const m of moves) {
+      m.from.clips = m.from.clips.filter((x) => x.id !== m.c.id);
+      m.to.clips.push(m.c);
+      this.resolveOverlaps(m.to, m.c);
+      this.stopAudioForClip(m.c.id);
+    }
+    this.saveArr();
+    this.emit("select");
+  }
+  // reverse every selected AUDIO clip (R) — toggles its reverse flag
+  reverseSelection() {
+    const audio = this.selectedPairs().filter((p) => p.c.content.kind === "audio");
+    if (!audio.length) return;
+    this.pushUndo();
+    for (const { t, c } of audio) {
+      if (c.content.kind !== "audio") continue;
+      this.setClipContent(t.id, c.id, { ...c.content, reverse: !c.content.reverse });
+    }
+    this.emit("select");
+  }
+
+  // ── undo / redo (snapshot-based) ──
+  // Call pushUndo() BEFORE a mutation to make it undoable. Discrete ops call it once;
+  // drag gestures call it at pointer-down (so the whole drag is one undo step). Any
+  // pushUndo clears the redo stack (new branch of history).
+  pushUndo() {
+    this._undo.push(structuredClone(this.arrangement));
+    if (this._undo.length > AudioEngine.UNDO_MAX) this._undo.shift();
+    this._redo = [];
+  }
+  canUndo() { return this._undo.length > 0; }
+  canRedo() { return this._redo.length > 0; }
+  undo() {
+    const prev = this._undo.pop();
+    if (!prev) return;
+    this._redo.push(structuredClone(this.arrangement));
+    this._restoreArrangement(prev);
+  }
+  redo() {
+    const next = this._redo.pop();
+    if (!next) return;
+    this._undo.push(structuredClone(this.arrangement));
+    this._restoreArrangement(next);
+  }
+  private _restoreArrangement(a: Arrangement) {
+    this.stopAudioClips(); // any playing sources reference clips that may be gone
+    this.arrangement = a;
+    this.clearSelection();
+    saveArrangement(this.arrangement);
+    this.emit("arrange");
+    this.emit("select");
+  }
+
+  // ── clipboard (copy / cut / paste) ──
+  // Copy the selected clips, normalized so the earliest start becomes 0 (paste re-anchors
+  // to the insert marker). Records each clip's track KIND so paste lands on a matching track.
+  copySelection() {
+    const clips: ArrClip[] = [];
+    const kinds: TrackKind[] = [];
+    let origin = Infinity;
+    for (const t of this.arrangement.tracks) {
+      for (const c of t.clips) if (this.selClips.has(c.id)) origin = Math.min(origin, c.startBeat);
+    }
+    if (!isFinite(origin)) return;
+    for (const t of this.arrangement.tracks) {
+      for (const c of t.clips) {
+        if (!this.selClips.has(c.id)) continue;
+        clips.push({ ...structuredClone(c), startBeat: c.startBeat - origin });
+        kinds.push(t.kind);
+      }
+    }
+    this._clipboard = { clips, trackKinds: kinds };
+  }
+  cutSelection() {
+    if (!this.selClips.size) return;
+    this.copySelection();
+    this.deleteSelectedClips(); // pushes undo itself
+  }
+  // Paste the clipboard at the insert marker. Each copied clip lands on the FIRST track
+  // whose kind matches its source kind, at insertBeat + its relative start. New ids; the
+  // pasted clips become the selection.
+  pasteClipboard() {
+    const cb = this._clipboard;
+    if (!cb || !cb.clips.length) return;
+    this.pushUndo();
+    const at = this.insertBeat;
+    const usedByKind: Record<string, number> = {};
+    const newIds: string[] = [];
+    cb.clips.forEach((c, i) => {
+      const kind = cb.trackKinds[i];
+      // find the next track of this kind (round-robin so multi-track copies spread out)
+      const tracksOfKind = this.arrangement.tracks.filter((t) => t.kind === kind);
+      if (!tracksOfKind.length) return;
+      const idx = usedByKind[kind] ?? 0;
+      const t = tracksOfKind[Math.min(idx, tracksOfKind.length - 1)];
+      const clip: ArrClip = { ...structuredClone(c), id: newClipId(), startBeat: Math.max(0, at + c.startBeat) };
+      t.clips.push(clip);
+      this.resolveOverlaps(t, clip);
+      newIds.push(clip.id);
+    });
+    if (newIds.length) this.setSelectedClips(newIds);
+    this.saveArr();
+  }
+  hasClipboard() { return !!this._clipboard?.clips.length; }
+
+  // ── time-editing ops (insert marker + time selection) ──
+  // Split every clip crossing the insert beat into two clips at that point (⌘E). If a
+  // time selection with clips is active, splits the selected clips; else splits all
+  // clips under the insert beat. The two halves become the new selection.
+  splitAtInsert() {
+    const beat = this.insertBeat;
+    const onlySel = this.selClips.size > 0;
+    this.pushUndo();
+    const newIds: string[] = [];
+    for (const t of this.arrangement.tracks) {
+      const add: ArrClip[] = [];
+      for (const c of t.clips) {
+        const crosses = c.startBeat < beat - 1e-6 && c.startBeat + c.lengthBeats > beat + 1e-6;
+        if (!crosses || (onlySel && !this.selClips.has(c.id))) { add.push(c); continue; }
+        const p = beat - c.startBeat; // local split beat
+        const [lc, rc] = splitContent(c.content, p, c.lengthBeats);
+        const left: ArrClip = { ...c, id: newClipId(), lengthBeats: p, content: lc };
+        const right: ArrClip = { ...c, id: newClipId(), startBeat: beat, lengthBeats: c.lengthBeats - p, content: rc };
+        this.stopAudioForClip(c.id);
+        add.push(left, right);
+        newIds.push(left.id, right.id);
+      }
+      t.clips = add;
+    }
+    if (newIds.length) this.setSelectedClips(newIds);
+    else this._undo.pop(); // nothing split → drop the empty undo frame
+    this.saveArr();
+  }
+
+  // Consolidate the selected clips on each track into ONE clip spanning their extent
+  // (⌘J). Per track: the merged clip runs from the earliest start to the latest end;
+  // its content is the source clips laid end-to-end (gaps become silence). MIDI/drum
+  // merge notes at their offsets; audio consolidation keeps the FIRST clip's source
+  // (a true audio bounce is out of scope — flagged).
+  consolidateSelection() {
+    const ids = [...this.selClips];
+    if (!ids.length) return;
+    this.pushUndo();
+    const newIds: string[] = [];
+    for (const t of this.arrangement.tracks) {
+      const sel = t.clips.filter((c) => ids.includes(c.id)).sort((a, b) => a.startBeat - b.startBeat);
+      if (sel.length < 2) continue;
+      const start = sel[0].startBeat;
+      const end = Math.max(...sel.map((c) => c.startBeat + c.lengthBeats));
+      const len = end - start;
+      let merged: ArrClip;
+      if (t.kind === "audio") {
+        // keep the earliest clip's source, spanning the whole extent (re-hashes to fill)
+        merged = { ...sel[0], id: newClipId(), startBeat: start, lengthBeats: len };
+      } else {
+        // merge notes at their timeline offset relative to `start`
+        const bpb = this.arrangement.beatsPerBar;
+        const notes: NoteClip["notes"] = [];
+        for (const c of sel) {
+          const src = c.content.kind === "midi" ? c.content.clip.notes : c.content.kind === "drum" ? c.content.notes?.notes : undefined;
+          if (!src) continue;
+          const off = c.startBeat - start;
+          for (const n of src) notes.push({ ...n, id: newNoteId(), start: n.start + off });
+        }
+        const clip: NoteClip = { bars: Math.max(1, Math.ceil(len / bpb)), beatsPerBar: bpb, notes };
+        const content: ArrClip["content"] = t.kind === "drum" ? { kind: "drum", pattern: { ...(sel[0].content as { pattern: SequenceClip }).pattern, steps: Math.max(16, Math.ceil(len / STEP_BEATS)) }, notes: clip } : { kind: "midi", clip };
+        merged = { ...sel[0], id: newClipId(), startBeat: start, lengthBeats: len, content };
+      }
+      for (const c of sel) this.stopAudioForClip(c.id);
+      t.clips = [...t.clips.filter((c) => !ids.includes(c.id)), merged];
+      newIds.push(merged.id);
+    }
+    if (newIds.length) this.setSelectedClips(newIds);
+    else this._undo.pop(); // nothing merged (need ≥2 selected on a track) → drop the frame
+    this.saveArr();
+  }
+
+  // Insert silence at the insert marker (⌘I): push every clip that starts at/after the
+  // insert beat later by `beats` (defaults to the time selection length, else one bar).
+  insertSilence(beats?: number) {
+    const at = this.insertBeat;
+    const span = beats ?? (this.timeSel ? this.timeSel.end - this.timeSel.start : this.arrangement.beatsPerBar);
+    if (span <= 0) return;
+    this.pushUndo();
+    for (const t of this.arrangement.tracks) {
+      for (const c of t.clips) {
+        if (c.startBeat >= at - 1e-6) c.startBeat += span;
+        else if (c.startBeat + c.lengthBeats > at + 1e-6) {
+          // a clip straddling the insert point is split: left stays, right shifts
+          const p = at - c.startBeat;
+          const [lc, rc] = splitContent(c.content, p, c.lengthBeats);
+          const rightLen = c.lengthBeats - p;
+          c.lengthBeats = p;
+          c.content = lc;
+          this.stopAudioForClip(c.id);
+          t.clips.push({ ...c, id: newClipId(), startBeat: at + span, lengthBeats: rightLen, content: rc });
+        }
+      }
+    }
+    this.saveArr();
+    this.emit("arrange");
+  }
+
   // tap tempo: average the intervals between recent taps (drops stale/outlier taps)
   private _taps: number[] = [];
   tapTempo() {
@@ -3465,23 +3865,30 @@ class AudioEngine {
             // song rule: content tiles to fill the clip length automatically
             const reps = Math.max(1, Math.ceil(clip.lengthBeats / contentLen));
             const notes = clip.content.notes; // lossless source of truth when present
+            // per-lane mute/solo within THIS clip's pattern: a lane is audible unless
+            // muted, or a solo is up on some lane and this isn't one.
+            const mix = pat.laneMix || {};
+            const anySolo = Object.values(mix).some((m) => m?.solo);
+            const audible = (laneId: string) => {
+              const m = mix[laneId];
+              if (m?.mute) return false;
+              return !anySolo || !!m?.solo;
+            };
             for (let r = 0; r < reps; r++) {
               const repOffset = r * contentLen;
               if (notes) {
-                // kit-voiced MIDI: each note → its lane at its own beat + velocity (off-grid,
-                // variable length/vel, multi-hits all play exactly as edited in the roll)
                 for (const nt of notes.notes) {
                   const beat = repOffset + nt.start;
                   if (beat >= clip.lengthBeats) continue;
                   const lane = kit.lanes[nt.pitch - DRUM_BASE];
-                  if (lane) emitDrum(lane, clip.startBeat + beat, nt.vel, dest);
+                  if (lane && audible(lane.id)) emitDrum(lane, clip.startBeat + beat, nt.vel, dest);
                 }
               } else {
                 for (let s = 0; s < pat.steps; s++) {
                   const stepBeat = repOffset + s * STEP_BEATS;
                   if (stepBeat >= clip.lengthBeats) continue;
                   for (const lane of kit.lanes) {
-                    if (!pat.on[lane.id]?.[s]) continue;
+                    if (!pat.on[lane.id]?.[s] || !audible(lane.id)) continue;
                     emitDrum(lane, clip.startBeat + stepBeat, pat.accent[lane.id]?.[s] ? 1 : 0.7, dest);
                   }
                 }

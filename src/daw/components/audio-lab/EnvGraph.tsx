@@ -89,6 +89,21 @@ export function EnvGraph({ a, d, s, r, height = 44 }: { a: number; d: number; s:
       g.arc(px, py, 1.8, 0, Math.PI * 2);
       g.fill();
     }
+
+    // stage time labels — the REAL seconds for A / D / R, centered under each segment.
+    // (the x-axis is cosmetically warped, so these carry the true values.)
+    const fmt = (v: number) => (v >= 1 ? v.toFixed(1) + "s" : Math.round(v * 1000) + "ms");
+    g.font = "7px ui-monospace, monospace";
+    g.fillStyle = "#5a5a64";
+    g.textAlign = "center";
+    const label = (cx: number, x0seg: number, x1seg: number, txt: string) => {
+      if (x1seg - x0seg < 14) return; // no room → skip
+      g.fillText(txt, cx, yBot - 3);
+    };
+    label((x0 + xa) / 2, x0, xa, fmt(a));
+    label((xa + xd) / 2, xa, xd, fmt(d));
+    label((xs + xr) / 2, xs, xr, fmt(r));
+    g.textAlign = "left";
   });
 
   return <canvas ref={ref} className="w-full rounded-[3px] border border-line bg-[#0c0c10]" style={{ height }} title="envelope" />;

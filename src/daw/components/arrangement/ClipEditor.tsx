@@ -41,6 +41,20 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat }: { trackId: str
     <div className="flex flex-col gap-[8px] rounded-[4px] border border-line bg-[#0e0e12] p-[10px]">
       <div className="flex items-center gap-[8px]">
         <span className="font-mono text-[10px] tracking-[0.08em] text-faint">DRUMS</span>
+        {/* per-clip kit picker — switching kits re-voices the same pattern (lane ids match) */}
+        <span className="relative inline-flex items-center">
+          <select
+            value={pat.kitId || engine.kit.id}
+            onChange={(e) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: { ...pat, kitId: e.target.value }, notes })}
+            aria-label="kit"
+            className="cursor-pointer appearance-none rounded-[2px] border border-line2 bg-panel2 py-[2px] pr-[16px] pl-[6px] font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
+          >
+            {KITS.map((k) => (
+              <option key={k.id} value={k.id} className="bg-panel2">{k.name}</option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-[4px] text-[7px] text-faint">▼</span>
+        </span>
         <span className="ml-auto flex items-center gap-[3px] rounded-[3px] border border-line p-[2px]">
           {tab("seq", "sequence")}
           {tab("roll", "piano roll")}
