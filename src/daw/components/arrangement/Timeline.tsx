@@ -7,7 +7,7 @@
 // brace + playhead; click/drag the ruler to seek / set the loop.
 
 import { useEffect, useRef } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { MutableRefObject, PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../../engine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { openContextMenu } from "../context-menu-bus";
@@ -26,7 +26,9 @@ const cmd = (e: { metaKey: boolean; ctrlKey: boolean }) => e.metaKey || e.ctrlKe
 const CLIP_COLOR: Record<string, string> = { midi: "#4a7fd4", drum: "#5aa0b8", audio: "#7a9a4a" };
 
 type Drag =
-  | { mode: "move"; trackId: string; clipId: string; grabBeat: number; base: number; moved: boolean; dup: boolean }
+  // `multi` (set when the grabbed clip is part of a multi-selection) carries every
+  // selected clip's gesture-start position → the whole selection drags as one unit
+  | { mode: "move"; trackId: string; clipId: string; grabBeat: number; base: number; moved: boolean; dup: boolean; multi?: { trackId: string; clipId: string; base: number }[] }
   | { mode: "resize"; trackId: string; clipId: string; moved?: boolean }
   | { mode: "seek" }
   | { mode: "brace"; anchor: number }
@@ -34,7 +36,16 @@ type Drag =
   | { mode: "marquee"; x0: number; y0: number; anchorBeat: number; anchorTrack: number; moved: boolean }
   | null;
 
-export function Timeline({ height = 320, onEditClip }: { height?: number; onEditClip: (trackId: string, clipId: string) => void }) {
+export function Timeline({
+  height = 320,
+  onEditClip,
+  zoomApiRef,
+}: {
+  height?: number;
+  onEditClip: (trackId: string, clipId: string) => void;
+  // filled by Timeline for the page's keyboard authority (+/− zoom lives up there)
+  zoomApiRef?: MutableRefObject<{ zoom: (factor: number) => void } | null>;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag>(null);
   const view = useRef({ scrollX: 0, ppb: 24 });
@@ -98,7 +109,13 @@ export function Timeline({ height = 320, onEditClip }: { height?: number; onEdit
       if (hit.edge) {
         drag.current = { mode: "resize", trackId: hit.t.id, clipId: hit.c.id };
       } else {
-        drag.current = { mode: "move", trackId: hit.t.id, clipId: hit.c.id, grabBeat: xToBeat(x), base: hit.c.startBeat, moved: false, dup: e.altKey };
+        // grabbed a clip inside a multi-selection → snapshot every selected clip's
+        // position so the move handler drags them as one unit
+        const multi =
+          engine.isClipSelected(hit.c.id) && engine.selClips.size > 1
+            ? tracks().flatMap((t) => t.clips.filter((c) => engine.isClipSelected(c.id)).map((c) => ({ trackId: t.id, clipId: c.id, base: c.startBeat })))
+            : undefined;
+        drag.current = { mode: "move", trackId: hit.t.id, clipId: hit.c.id, grabBeat: xToBeat(x), base: hit.c.startBeat, moved: false, dup: e.altKey, multi };
       }
       return;
     }
@@ -136,20 +153,27 @@ export function Timeline({ height = 320, onEditClip }: { height?: number; onEdit
     } else if (d.mode === "move") {
       if (!d.moved) engine.pushUndo(); // snapshot ONCE at the start of the drag
       if (!d.moved && d.dup) {
-        // ⌥-drag: duplicate first, then drag the copy
+        // ⌥-drag: duplicate first, then drag the copy (single-clip — a dup breaks multi)
         const copy = engine.duplicateClip(d.trackId, d.clipId);
         if (copy) {
           d.clipId = copy.id;
           d.base = copy.startBeat;
+          d.multi = undefined;
         }
         d.dup = false;
       }
       d.moved = true;
       const dBeat = beat - snapBeat(d.grabBeat, cmd(e));
-      const ti = yToTrackIndex(localXY(e).y);
-      const toTrack = tracks()[ti];
-      engine.moveClip(d.trackId, d.clipId, d.base + dBeat, toTrack?.id);
-      if (toTrack && toTrack.id !== d.trackId && toTrack.kind === tracks().find((t) => t.id === d.trackId)?.kind) d.trackId = toTrack.id;
+      if (d.multi) {
+        // multi-selection: drag every selected clip by the same delta (beat-move only;
+        // uniform delta keeps the selection's layout → no mutual trimming)
+        engine.dragSelectionTo(d.multi, dBeat);
+      } else {
+        const ti = yToTrackIndex(localXY(e).y);
+        const toTrack = tracks()[ti];
+        engine.moveClip(d.trackId, d.clipId, d.base + dBeat, toTrack?.id);
+        if (toTrack && toTrack.id !== d.trackId && toTrack.kind === tracks().find((t) => t.id === d.trackId)?.kind) d.trackId = toTrack.id;
+      }
     } else if (d.mode === "resize") {
       if (!d.moved) { engine.pushUndo(); d.moved = true; } // snapshot once
       const c = tracks().find((t) => t.id === d.trackId)?.clips.find((x) => x.id === d.clipId);
@@ -234,7 +258,7 @@ export function Timeline({ height = 320, onEditClip }: { height?: number; onEdit
       title: multi ? engine.selClips.size + " clips" : hit.c.content.kind + " clip",
       items: [
         { label: "split here", hint: "⌘E", onClick: () => engine.splitAtInsert() },
-        ...(multi ? [{ label: "consolidate", hint: "⌘J", onClick: () => engine.consolidateSelection() }] : []),
+        ...(multi ? [{ label: "consolidate", hint: "⌘J", onClick: () => void engine.consolidateSelection() }] : []),
         { label: "duplicate", hint: "⌘D", onClick: () => (multi ? engine.duplicateSelectedClips() : engine.duplicateClip(hit.t.id, hit.c.id)) },
         { separator: true },
         { label: multi ? "delete clips" : "delete clip", danger: true, hint: "⌫", onClick: () => (multi ? engine.deleteSelectedClips() : engine.removeClip(hit.t.id, hit.c.id)) },
@@ -310,6 +334,26 @@ export function Timeline({ height = 320, onEditClip }: { height?: number; onEdit
     cv.addEventListener("wheel", onWheel, { passive: false });
     return () => cv.removeEventListener("wheel", onWheel);
   }, []);
+
+  // keyboard zoom (+/−, routed from the page's key handler): same math as ⌘+wheel,
+  // anchored at the viewport center so the view zooms in place
+  useEffect(() => {
+    if (!zoomApiRef) return;
+    zoomApiRef.current = {
+      zoom: (factor: number) => {
+        const cv = ref.current;
+        if (!cv) return;
+        const v = view.current;
+        const cx = cv.getBoundingClientRect().width / 2;
+        const beatAt = xToBeat(cx);
+        v.ppb = clamp(v.ppb * factor, MIN_PPB, MAX_PPB);
+        v.scrollX = Math.max(0, beatAt * v.ppb - (cx - KEY_W));
+      },
+    };
+    return () => {
+      zoomApiRef.current = null;
+    };
+  }, [zoomApiRef]);
 
   // ── render ──
   useRafLoop(() => {

@@ -7,6 +7,7 @@
 
 import type { AutoLane, NoteClip } from "./clips";
 import type { SequenceClip } from "./kits";
+import type { FxDeviceState } from "../fx-chain";
 
 // A clip wraps ONE content unit + a timeline position + a length.
 export type ClipContent =
@@ -56,6 +57,22 @@ export interface ArrClip {
   content: ClipContent;
   name?: string;
   color?: string; // optional per-clip tint (defaults by track/kind)
+  swing?: number; // per-clip swing %, 0.5 (straight ≡ absent) … 0.75 (hard); applied at schedule time
+}
+
+// ── per-clip swing (MPC/Ableton-style, optional) ──
+// swing s ∈ (0.5, 0.75]: the 2nd 16th of every 8th-note pair lands s of the way through
+// the pair (0.5 = straight, 2/3 ≈ triplet feel, 0.75 = hard). Positions warp piecewise-
+// linearly within each pair, so off-grid hits shift proportionally and pair boundaries
+// stay fixed — clip/loop lengths never change, and stored notes stay straight (lossless).
+// Returns the DELAY in beats for a clip-relative beat.
+export function swingDelay(beat: number, swing?: number): number {
+  const s = swing ?? 0.5;
+  if (s <= 0.5) return 0;
+  const local = ((beat % 0.5) + 0.5) % 0.5;
+  const apex = Math.min(0.75, s) * 0.5; // swung position of the odd 16th within the pair
+  const warped = local <= 0.25 ? local * (apex / 0.25) : apex + (local - 0.25) * ((0.5 - apex) / 0.25);
+  return warped - local;
 }
 
 export type TrackKind = "midi" | "drum" | "audio";
@@ -72,6 +89,7 @@ export interface ArrTrack {
   collapsed?: boolean;
   clips: ArrClip[];
   autos?: AutoLane[]; // per-track automation curves (vol/pan) over timeline beats
+  devices?: FxDeviceState[]; // per-track FX chain (modular device list; absent = no FX)
 }
 
 export interface Arrangement {
