@@ -17,7 +17,8 @@ npm run lint     # eslint (must stay clean)
 The live site is **`src/daw/`**. Almost everything is there.
 
 - **`engine.ts`** — vanilla Web Audio singleton (`export const engine`). One `AudioContext`, an
-  equal-power dry/wet crossfade, level-match, a filter→delay→waveshaper FX chain, RMS/peak metering,
+  equal-power dry/wet crossfade, level-match, a modular FX device system (`fx-devices.ts` registry +
+  `fx-chain.ts` chains, per-track + master — see `src/daw/AUDIO.md`), RMS/peak metering,
   decoded-peak waveform cache, `localStorage` position persistence, and a preset synth. Pub/sub via
   `engine.on(event, fn)` / `engine.off(...)`; events: `state | wet | fx | track | ready | synth`.
 - **Hooks** (`src/daw/hooks/`): `useEngine(events?)` (subscribe + re-render), `useRafLoop(fn)`

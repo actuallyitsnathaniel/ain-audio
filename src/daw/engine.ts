@@ -11,9 +11,11 @@ import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
 import { clipBeats, newNoteId, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
 import { DRUM_BASE } from "./data/drum-midi";
-import { arrangementBeats, emptyArrangement, loadArrangement, newClipId, newTrackId, saveArrangement, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
+import { arrangementBeats, emptyArrangement, loadArrangement, newClipId, newTrackId, saveArrangement, swingDelay, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
 import { splitContent } from "./data/clip-split";
-import { putAudio, allAudio, pruneAudio, clearAudio } from "./data/audio-store";
+import { putAudio, allAudio, pruneAudio, clearAudio, encodeWav } from "./data/audio-store";
+import { FxChain, newFxId, type FxDeviceState } from "./fx-chain";
+import { FX_DEVICES, FX_DEVICE_TYPES, type FxDeviceType } from "./fx-devices";
 import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
 import { parseMidi } from "./data/midi-file";
 import { DEFAULT_KIT, defaultSequence, KITS, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumLane, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
@@ -33,13 +35,6 @@ export interface LevelPair {
   master: Levels;
 }
 
-// Each reorderable effect is a module with one input + one output GainNode, so
-// the chain can be torn down and rewired in any order at the gain boundaries.
-interface FxModule {
-  in: GainNode;
-  out: GainNode;
-}
-
 interface GraphNodes {
   tapMix: GainNode;
   tapMaster: GainNode;
@@ -49,27 +44,7 @@ interface GraphNodes {
   gMix: GainNode;
   gMaster: GainNode;
   sum: GainNode;
-  // ── reorderable fx modules (each in→…→out) ──
-  filter: BiquadFilterNode;
-  mFilter: FxModule;
-  comp: DynamicsCompressorNode;
-  compMakeup: GainNode;
-  mComp: FxModule;
-  // space (delay) — internal dry/wet + feedback, wrapped by mSpace
-  dDry: GainNode;
-  dWet: GainNode;
-  delay: DelayNode;
-  dFb: GainNode;
-  mSpace: FxModule;
-  // crush (waveshaper) with auto-gain compensation
-  shaper: WaveShaperNode;
-  crushComp: GainNode;
-  mCrush: FxModule;
-  // reverb (convolver) — internal dry/wet, wrapped by mReverb
-  conv: ConvolverNode;
-  rvDry: GainNode;
-  rvWet: GainNode;
-  mReverb: FxModule;
+  // the reorderable fx live in the master FxChain (sum → [devices] → anOut)
   // ── fixed tail (never reordered) ──
   anOut: AnalyserNode;
   limiter: DynamicsCompressorNode; // brickwall safety, always last
@@ -77,33 +52,16 @@ interface GraphNodes {
   master: GainNode;
 }
 
-// keys of the reorderable rack, in default (musical) order
-export type FxKey = "filter" | "comp" | "space" | "crush" | "reverb";
-const FX_DEFAULT_ORDER: FxKey[] = ["filter", "comp", "space", "crush", "reverb"];
+// the fixed master-bus safety limiter (the only effect NOT in the device chain)
+interface LimiterState {
+  on: boolean;
+  ceiling: number;
+}
 
-// Tempo-synced delay: the `div` knob picks one of these STRAIGHT divisions (in
-// beats, 1/4 note = 1 beat), and a separate `feel` flips it dotted (×1.5) or
-// triplet (×2/3). delay seconds = base beats × feel × 60 / bpm.
-const DELAY_DIVS: { label: string; beats: number }[] = [
-  { label: "1/1", beats: 4 },
-  { label: "1/2", beats: 2 },
-  { label: "1/4", beats: 1 },
-  { label: "1/8", beats: 0.5 },
-  { label: "1/16", beats: 0.25 },
-  { label: "1/32", beats: 0.125 },
-];
-export const delayDivLabels = DELAY_DIVS.map((d) => d.label);
-export type DelayFeel = "straight" | "dotted" | "triplet";
-const DELAY_FEEL_MULT: Record<DelayFeel, number> = { straight: 1, dotted: 1.5, triplet: 2 / 3 };
-const DEFAULT_DELAY_DIV = 3; // 1/8
-
-interface FxState {
-  filter: { on: boolean; morph: number };
-  comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number; makeup: number };
-  space: { on: boolean; time: number; fb: number; mix: number; sync: boolean; div: number; feel: DelayFeel };
-  crush: { on: boolean; drive: number; autoGain: boolean };
-  reverb: { on: boolean; decay: number; mix: number };
-  limiter: { on: boolean; ceiling: number };
+// an undo step: the arrangement + the mixer state ⌘Z should restore with it
+interface UndoSnap {
+  a: Arrangement;
+  masterVol: number;
 }
 
 // A live voice handle returned by startVoiceAt. The voice gain `vg` carries the
@@ -143,8 +101,26 @@ interface NoteRun {
 
 const LS_WET = "ain-masterlab-wet";
 const LS_PATCHES = "ain-synth-patches"; // user-designed patches: { name: SynthPatch }
+const LS_MASTER_FX = "ain-master-fx"; // master-bus device chain: FxDeviceState[]
+const LS_MASTER_VOL = "ain-master-vol"; // master track fader
 const posKey = (id: string) => "ain-pos:" + id;
 const db2lin = (db: number) => Math.pow(10, db / 20);
+
+function loadMasterVol(): number {
+  const v = parseFloat(localStorage.getItem(LS_MASTER_VOL) || "");
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.95;
+}
+
+// the persisted master chain; fresh visitors get the classic five devices, all bypassed
+function loadMasterDevices(): FxDeviceState[] {
+  try {
+    const raw = localStorage.getItem(LS_MASTER_FX);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    /* corrupted → default */
+  }
+  return FX_DEVICE_TYPES.map((t) => ({ id: newFxId(), type: t, params: FX_DEVICES[t].defaults() }));
+}
 
 function loadUserPatches(): Record<string, SynthPatch> {
   try {
@@ -183,18 +159,11 @@ class AudioEngine {
   levelMatch = false;
   lmDb = 1.7;
   wet: number;
-  fx: FxState = {
-    filter: { on: false, morph: 0.5 },
-    comp: { on: false, threshold: -18, ratio: 4, attack: 0.01, release: 0.18, makeup: 0 },
-    space: { on: false, time: 0.32, fb: 0.35, mix: 0.3, sync: false, div: DEFAULT_DELAY_DIV, feel: "dotted" },
-    crush: { on: false, drive: 0.35, autoGain: true },
-    reverb: { on: false, decay: 2.2, mix: 0.25 },
-    limiter: { on: true, ceiling: -1.5 },
-  };
-  // live order of the reorderable rack (drag-to-reorder writes this)
-  fxOrder: FxKey[] = [...FX_DEFAULT_ORDER];
-  // true once a real IR file is loaded → decay knob stops regenerating the synth IR
-  private _reverbIRFile = false;
+  limiter: LimiterState = { on: true, ceiling: -1.5 };
+  // the MASTER track's fader (final gain before the speakers, after the limiter)
+  masterVol = loadMasterVol();
+  // master-bus device chain: the persisted truth; `_masterFx` is its live twin once a ctx exists
+  private _masterDevices: FxDeviceState[] = loadMasterDevices();
   // current reverb IR for the UI selector: "synth" or a loaded IR url
   reverbIR = "synth";
 
@@ -311,13 +280,13 @@ class AudioEngine {
   timeSel: { start: number; end: number; trackIds: string[] } | null = null;
   // undo/redo: snapshot the whole arrangement before each mutation (simple + correct;
   // no per-op inverse logic). Bounded stacks. Clipboard holds copied clips (relative).
-  private _undo: Arrangement[] = [];
-  private _redo: Arrangement[] = [];
+  private _undo: UndoSnap[] = [];
+  private _redo: UndoSnap[] = [];
   private _clipboard: { clips: ArrClip[]; trackKinds: TrackKind[] } | null = null;
   private static UNDO_MAX = 60;
   private _metroThrough = -1; // last beat we've scheduled a click for (arrangement clock)
   arrangement: Arrangement = loadArrangement();
-  private _arrStrips: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-track vol/pan strip
+  private _arrStrips: Record<string, { gain: GainNode; pan: StereoPannerNode; fx: FxChain }> = {}; // per-track vol/pan strip + FX chain
   kit: DrumKit = DEFAULT_KIT;
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   loops: LoopLane[] = LOOPS;
@@ -384,8 +353,8 @@ class AudioEngine {
   //   "── live keyboard"           held notes by MIDI
   //   "── beat-maker"              drum kit, synth drums, loopable lanes
   //   "── sequencer: lookahead"    the clock that schedules notes/drums
-  // Graph build + reorderable FX live above the constructor (buildGraph,
-  // rewireChain, applyFx); debug() at the bottom dumps live state.
+  // Graph build + the master device chain live above the constructor (buildGraph,
+  // master-device API, applyLimiter); debug() at the bottom dumps live state.
   // ─────────────────────────────────────────────────────────────────────────
 
   // ── pub/sub ──
@@ -444,62 +413,6 @@ class AudioEngine {
     n.gMix.connect(n.sum);
     n.gMaster.connect(n.sum);
 
-    // ── reorderable fx modules (each: in → …internal… → out) ──
-
-    // FILTER: in → biquad → out
-    n.filter = c.createBiquadFilter();
-    n.filter.type = "lowpass";
-    n.filter.frequency.value = 20000;
-    n.filter.Q.value = 0.7;
-    n.mFilter = { in: c.createGain(), out: c.createGain() };
-    n.mFilter.in.connect(n.filter);
-    n.filter.connect(n.mFilter.out);
-
-    // COMP (creative dynamics): in → compressor → makeup(out)
-    n.comp = c.createDynamicsCompressor();
-    n.compMakeup = c.createGain();
-    n.mComp = { in: c.createGain(), out: n.compMakeup };
-    n.mComp.in.connect(n.comp);
-    n.comp.connect(n.compMakeup);
-
-    // SPACE (delay): in → [dry + delay/feedback wet] → out (feedback is internal)
-    n.mSpace = { in: c.createGain(), out: c.createGain() };
-    n.dDry = c.createGain();
-    n.dWet = c.createGain();
-    n.delay = c.createDelay(2.0);
-    n.dFb = c.createGain();
-    n.mSpace.in.connect(n.dDry);
-    n.dDry.connect(n.mSpace.out);
-    n.mSpace.in.connect(n.delay);
-    n.delay.connect(n.dWet);
-    n.dWet.connect(n.mSpace.out);
-    n.delay.connect(n.dFb);
-    n.dFb.connect(n.delay);
-    n.dWet.gain.value = 0;
-    n.dFb.gain.value = 0;
-
-    // CRUSH (waveshaper) with auto-gain compensation: in → shaper → crushComp(out)
-    n.shaper = c.createWaveShaper();
-    n.shaper.oversample = "2x";
-    n.crushComp = c.createGain();
-    n.mCrush = { in: c.createGain(), out: n.crushComp };
-    n.mCrush.in.connect(n.shaper);
-    n.shaper.connect(n.crushComp);
-
-    // REVERB (convolver): in → [dry + convolver wet] → out
-    n.conv = c.createConvolver();
-    n.conv.normalize = true;
-    n.conv.buffer = this.makeReverbIR(this.fx.reverb.decay);
-    n.rvDry = c.createGain();
-    n.rvWet = c.createGain();
-    n.mReverb = { in: c.createGain(), out: c.createGain() };
-    n.mReverb.in.connect(n.rvDry);
-    n.rvDry.connect(n.mReverb.out);
-    n.mReverb.in.connect(n.conv);
-    n.conv.connect(n.rvWet);
-    n.rvWet.connect(n.mReverb.out);
-    n.rvWet.gain.value = 0;
-
     // ── fixed tail (never reordered): anOut → safety limiter → master → out ──
     n.anOut = c.createAnalyser();
     n.anOut.fftSize = 2048;
@@ -507,105 +420,58 @@ class AudioEngine {
     n.limiter = c.createDynamicsCompressor();
     n.limMakeup = c.createGain();
     n.master = c.createGain();
-    n.master.gain.value = 0.95;
+    n.master.gain.value = this.masterVol;
     n.anOut.connect(n.limiter);
     n.limiter.connect(n.limMakeup);
     n.limMakeup.connect(n.master);
     n.master.connect(c.destination);
 
     this.nodes = n;
-    this.rewireChain(true); // sum → [fxOrder modules] → anOut
+    // ── the modular master FxChain: sum → [devices] → anOut ──
+    // Seeded from the persisted device list. The limiter tail above is NOT in the
+    // chain (it's the fixed safety stage).
+    this._masterFx = new FxChain(c, n.sum, n.anOut);
+    this._masterFx.setDevices(this._masterDevices.map((d) => structuredClone(d)));
+    this._masterFx.applyAll(this.bpm);
     this.applyWet(true);
-    this.applyFx();
+    this.applyLimiter();
   }
+  private _masterFx: FxChain | null = null;
 
-  // Module lookup by FxKey, so rewireChain can walk fxOrder generically.
-  private fxModule(key: FxKey): FxModule {
-    const n = this.nodes!;
-    switch (key) {
-      case "filter":
-        return n.mFilter;
-      case "comp":
-        return n.mComp;
-      case "space":
-        return n.mSpace;
-      case "crush":
-        return n.mCrush;
-      case "reverb":
-        return n.mReverb;
-    }
-  }
-
-  // Tear down sum→…→anOut and reconnect the rack in `fxOrder`. Click-safe:
-  // briefly duck `sum` to silence, rewire on the gain boundaries, ramp back.
-  // Effects are always all in-chain; "bypass" is done by neutralizing a node in
-  // applyFx (not by removing it), so toggling on/off never reorders the rack.
-  private rewireChain(instant?: boolean) {
-    const n = this.nodes;
-    if (!n) return;
-    const c = this.ctx!;
-    const t = c.currentTime;
-    const rampDown = () => {
-      if (instant) n.sum.gain.value = 0;
-      else n.sum.gain.setTargetAtTime(0, t, 0.008);
-    };
-    const rampUp = () => {
-      if (instant) n.sum.gain.value = 1;
-      else n.sum.gain.setTargetAtTime(1, t + 0.02, 0.008);
-    };
-    rampDown();
-    // drop all external module connections + sum's output
+  // ── master-bus device chain API (same shape as the per-track one below) ──
+  // Mutations ensure the graph exists (a user gesture is driving them), mutate the
+  // live chain, then persist its serialized state.
+  private saveMasterFx() {
+    if (this._masterFx) this._masterDevices = this._masterFx.states();
     try {
-      n.sum.disconnect();
+      localStorage.setItem(LS_MASTER_FX, JSON.stringify(this._masterDevices));
     } catch {
-      /* nothing connected yet */
+      /* quota — the live chain still works, it just won't persist */
     }
-    FX_DEFAULT_ORDER.forEach((k) => {
-      try {
-        this.fxModule(k).out.disconnect();
-      } catch {
-        /* not connected yet */
-      }
-    });
-    // reconnect sum → m0.in, m0.out → m1.in, … last.out → anOut
-    let prevOut: AudioNode = n.sum;
-    this.fxOrder.forEach((k) => {
-      const m = this.fxModule(k);
-      prevOut.connect(m.in);
-      prevOut = m.out;
-    });
-    prevOut.connect(n.anOut);
-    rampUp();
-  }
-
-  // Reorder the reorderable rack. `order` must be a permutation of the 5 keys.
-  setFxOrder(order: FxKey[]) {
-    const valid = order.length === FX_DEFAULT_ORDER.length && FX_DEFAULT_ORDER.every((k) => order.includes(k));
-    if (!valid) return;
-    this.fxOrder = [...order];
-    if (this.ctx) this.rewireChain();
     this.emit("fx");
   }
-
-  // Synthesised impulse response: exponentially-decaying, lightly low-passed
-  // stereo noise. Decorrelated L/R for width. No asset needed; load a real IR
-  // file later via loadReverbIR to override.
-  private makeReverbIR(decay: number): AudioBuffer {
-    const c = this.ctx!;
-    const sr = c.sampleRate;
-    const len = Math.max(1, Math.floor(sr * Math.min(8, Math.max(0.2, decay))));
-    const buf = c.createBuffer(2, len, sr);
-    for (let ch = 0; ch < 2; ch++) {
-      const data = buf.getChannelData(ch);
-      let lp = 0;
-      for (let i = 0; i < len; i++) {
-        const env = Math.pow(1 - i / len, 2.2); // smooth tail to zero
-        const white = Math.random() * 2 - 1;
-        lp += 0.32 * (white - lp); // gentle 1-pole low-pass for a darker tail
-        data[i] = lp * env;
-      }
-    }
-    return buf;
+  masterDevices(): FxDeviceState[] {
+    return this._masterFx?.states() ?? this._masterDevices.map((d) => structuredClone(d));
+  }
+  addMasterDevice(type: FxDeviceType) {
+    this.ensureCtx();
+    this._masterFx!.addDevice(type);
+    this.saveMasterFx();
+  }
+  removeMasterDevice(deviceId: string) {
+    this.ensureCtx();
+    this._masterFx!.removeDevice(deviceId);
+    this.saveMasterFx();
+  }
+  moveMasterDevice(deviceId: string, toIndex: number) {
+    this.ensureCtx();
+    this._masterFx!.moveDevice(deviceId, toIndex);
+    this.saveMasterFx();
+  }
+  setMasterDeviceParams(deviceId: string, params: unknown) {
+    this.ensureCtx();
+    this._masterFx!.setParams(deviceId, params, this.bpm);
+    this.saveMasterFx();
   }
 
   private applyWet(instant?: boolean) {
@@ -625,91 +491,19 @@ class AudioEngine {
     }
   }
 
-  private applyFx() {
+  // SAFETY LIMITER — the fixed, always-last brickwall tail (NOT in the chain). Catches
+  // any peak regardless of device order. Bypassed (threshold 0 / ratio 1) only if disabled.
+  private applyLimiter() {
     const n = this.nodes;
     if (!n) return;
     const t = this.ctx!.currentTime;
-    const fx = this.fx;
-    if (!fx.filter.on || Math.abs(fx.filter.morph - 0.5) < 0.02) {
-      n.filter.type = "lowpass";
-      n.filter.frequency.setTargetAtTime(20000, t, 0.03);
-      n.filter.Q.setTargetAtTime(0.5, t, 0.03);
-    } else if (fx.filter.morph < 0.5) {
-      const k = 1 - fx.filter.morph * 2;
-      n.filter.type = "lowpass";
-      n.filter.frequency.setTargetAtTime(20000 * Math.pow(120 / 20000, k), t, 0.03);
-      n.filter.Q.setTargetAtTime(0.9 + k * 2.2, t, 0.03);
-    } else {
-      const k = (fx.filter.morph - 0.5) * 2;
-      n.filter.type = "highpass";
-      n.filter.frequency.setTargetAtTime(20 * Math.pow(6000 / 20, k), t, 0.03);
-      n.filter.Q.setTargetAtTime(0.9 + k * 2.2, t, 0.03);
-    }
-    // COMP — creative dynamics + manual makeup. Neutralized when off
-    // (threshold 0 dB = never engages, ratio 1, makeup unity).
-    if (fx.comp.on) {
-      n.comp.threshold.setTargetAtTime(fx.comp.threshold, t, 0.03);
-      n.comp.ratio.setTargetAtTime(fx.comp.ratio, t, 0.03);
-      n.comp.attack.setTargetAtTime(fx.comp.attack, t, 0.03);
-      n.comp.release.setTargetAtTime(fx.comp.release, t, 0.03);
-      n.comp.knee.setTargetAtTime(6, t, 0.03);
-      n.compMakeup.gain.setTargetAtTime(db2lin(fx.comp.makeup), t, 0.03);
-    } else {
-      n.comp.threshold.setTargetAtTime(0, t, 0.03);
-      n.comp.ratio.setTargetAtTime(1, t, 0.03);
-      n.compMakeup.gain.setTargetAtTime(1, t, 0.03);
-    }
-
-    // delay time: free ms (space.time) or tempo-synced. Synced = base division ×
-    // feel (straight/dotted/triplet) × 60/bpm, clamped to the DelayNode's 2s max
-    // (long divisions at slow tempos can exceed it — e.g. a dotted 1/1 at 60 bpm).
-    const baseBeats = DELAY_DIVS[fx.space.div]?.beats ?? 0.5;
-    const syncedSec = baseBeats * DELAY_FEEL_MULT[fx.space.feel] * (60 / this.bpm);
-    const delaySec = fx.space.sync ? Math.min(2, syncedSec) : fx.space.time;
-    n.delay.delayTime.setTargetAtTime(delaySec, t, 0.05);
-    n.dFb.gain.setTargetAtTime(fx.space.on ? fx.space.fb : 0, t, 0.05);
-    n.dWet.gain.setTargetAtTime(fx.space.on ? fx.space.mix : 0, t, 0.05);
-
-    // CRUSH — tanh saturation. Auto-gain (default on) trims the loudness rise the
-    // drive adds, so turning it up changes grit, not volume.
-    if (!fx.crush.on || fx.crush.drive <= 0.001) {
-      n.shaper.curve = null;
-      n.crushComp.gain.setTargetAtTime(1, t, 0.03);
-    } else {
-      const k = 1 + fx.crush.drive * 24;
-      const N = 1024;
-      const curve = new Float32Array(N);
-      const norm = Math.tanh(k);
-      for (let i = 0; i < N; i++) {
-        const x = (i / (N - 1)) * 2 - 1;
-        curve[i] = Math.tanh(k * x) / norm;
-      }
-      n.shaper.curve = curve;
-      // empirical loudness comp: stronger drive → more attenuation
-      const comp = fx.crush.autoGain ? 1 / Math.sqrt(1 + fx.crush.drive * 3.5) : 1;
-      n.crushComp.gain.setTargetAtTime(comp, t, 0.03);
-    }
-
-    // REVERB — dry/wet convolution. Decay changes regenerate the synth IR (unless
-    // a real IR file was loaded, which pins the buffer).
-    if (n.conv.buffer && !this._reverbIRFile) {
-      const want = Math.floor(this.ctx!.sampleRate * Math.min(8, Math.max(0.2, fx.reverb.decay)));
-      if (Math.abs(n.conv.buffer.length - want) > this.ctx!.sampleRate * 0.05) {
-        n.conv.buffer = this.makeReverbIR(fx.reverb.decay);
-      }
-    }
-    n.rvWet.gain.setTargetAtTime(fx.reverb.on ? fx.reverb.mix : 0, t, 0.05);
-    n.rvDry.gain.setTargetAtTime(fx.reverb.on ? 1 - fx.reverb.mix * 0.4 : 1, t, 0.05);
-
-    // SAFETY LIMITER — fixed, always-last brickwall. Catches any peak regardless
-    // of fx order. Bypassed (threshold 0 / ratio 1) only if the user disables it.
-    if (fx.limiter.on) {
-      n.limiter.threshold.setTargetAtTime(fx.limiter.ceiling, t, 0.02);
+    if (this.limiter.on) {
+      n.limiter.threshold.setTargetAtTime(this.limiter.ceiling, t, 0.02);
       n.limiter.ratio.setTargetAtTime(20, t, 0.02);
       n.limiter.knee.setTargetAtTime(0, t, 0.02);
       n.limiter.attack.setTargetAtTime(0.002, t, 0.02);
       n.limiter.release.setTargetAtTime(0.12, t, 0.02);
-      n.limMakeup.gain.setTargetAtTime(db2lin(-fx.limiter.ceiling * 0.25), t, 0.02);
+      n.limMakeup.gain.setTargetAtTime(db2lin(-this.limiter.ceiling * 0.25), t, 0.02);
     } else {
       n.limiter.threshold.setTargetAtTime(0, t, 0.02);
       n.limiter.ratio.setTargetAtTime(1, t, 0.02);
@@ -947,38 +741,41 @@ class AudioEngine {
     this.emit("state");
   }
 
-  setFx<K extends keyof FxState>(dev: K, patch: Partial<FxState[K]>) {
-    Object.assign(this.fx[dev], patch);
+  setMasterVol(v: number) {
+    this.pushUndoCoalesced("mastervol"); // one undo step per fader gesture
+    this.masterVol = Math.min(1, Math.max(0, v));
+    this.applyMasterVol();
+  }
+  private applyMasterVol() {
+    if (this.ctx && this.nodes) this.nodes.master.gain.setTargetAtTime(this.masterVol, this.ctx.currentTime, 0.02);
+    try {
+      localStorage.setItem(LS_MASTER_VOL, String(this.masterVol));
+    } catch {
+      /* fine */
+    }
+    this.emit("fx");
+  }
+
+  setLimiter(patch: Partial<LimiterState>) {
+    Object.assign(this.limiter, patch);
     if (this.ctx) {
       this.ensureCtx();
-      this.applyFx();
+      this.applyLimiter();
     }
     this.emit("fx");
   }
 
   // ponytail: unused — wired by the reverb IR-file selector (see AUDIO.md "not yet wired")
-  // Load a real impulse-response file to replace the synthesised reverb. Pins
-  // the convolver buffer so the decay knob no longer regenerates a synth IR.
-  // Silently falls back to the synth IR if the fetch/decode fails.
+  // Load a real impulse-response file to replace the synthesised reverb.
+  // ponytail: 0 callers (unbuilt IR-selector UI). The reverb IR is now owned by the reverb
+  // DEVICE (fx-devices.ts), which self-generates it from decay. A real-IR override would be
+  // a device param — wire it when the IR selector is built. Kept as a no-op stub for the API.
   async loadReverbIR(url: string) {
-    const c = this.ensureCtx();
-    try {
-      const buf = await this.fetchBuf(url, c);
-      this.nodes!.conv.buffer = buf;
-      this._reverbIRFile = true;
-      this.reverbIR = url;
-      this.emit("fx");
-    } catch {
-      /* keep the synth IR */
-    }
+    this.reverbIR = url;
+    this.emit("fx");
   }
-
-  // ponytail: unused — partner of loadReverbIR, wired by the same IR selector
-  // Revert reverb to the synthesised IR (re-enables the decay knob).
   useSynthReverbIR() {
-    this._reverbIRFile = false;
     this.reverbIR = "synth";
-    if (this.nodes) this.nodes.conv.buffer = this.makeReverbIR(this.fx.reverb.decay);
     this.emit("fx");
   }
 
@@ -1937,9 +1734,13 @@ class AudioEngine {
     if (!s) {
       const gain = c.createGain();
       const pan = c.createStereoPanner();
-      gain.connect(pan);
       pan.connect(n.sum);
-      s = this._arrStrips[t.id] = { gain, pan };
+      // per-track FX chain inserted between gain and pan: gain → [devices] → pan → sum.
+      // Seeded from the track's persisted device list (empty = clean passthrough).
+      const fx = new FxChain(c, gain, pan);
+      fx.setDevices((t.devices || []).map((d) => structuredClone(d)));
+      fx.applyAll(this.bpm);
+      s = this._arrStrips[t.id] = { gain, pan, fx };
     }
     s.gain.gain.value = t.vol * this.trackGain(t);
     s.pan.pan.value = t.pan;
@@ -1991,6 +1792,7 @@ class AudioEngine {
     const s = this._arrStrips[id];
     if (s) {
       try {
+        s.fx.dispose();
         s.gain.disconnect();
         s.pan.disconnect();
       } catch {
@@ -2018,6 +1820,7 @@ class AudioEngine {
   setTrackVol(id: string, vol: number) {
     const t = this.findTrack(id);
     if (!t) return;
+    this.pushUndoCoalesced("vol:" + id); // one undo step per knob gesture
     t.vol = Math.min(1, Math.max(0, vol));
     const s = this._arrStrips[id];
     if (s && this.ctx) s.gain.gain.setTargetAtTime(t.vol * this.trackGain(t), this.ctx.currentTime, 0.02);
@@ -2026,11 +1829,59 @@ class AudioEngine {
   setTrackPan(id: string, pan: number) {
     const t = this.findTrack(id);
     if (!t) return;
+    this.pushUndoCoalesced("pan:" + id); // one undo step per knob gesture
     t.pan = Math.min(1, Math.max(-1, pan));
     const s = this._arrStrips[id];
     if (s && this.ctx) s.pan.pan.setTargetAtTime(t.pan, this.ctx.currentTime, 0.02);
     this.saveArr();
   }
+
+  // ── per-track FX chain API (the per-track FX UI drives these) ──
+  // ensures the live strip+chain exists (builds it if the track was never voiced yet),
+  // then returns it. Keeps t.devices (persisted) in sync after each mutation.
+  private trackFx(id: string): { s: { gain: GainNode; pan: StereoPannerNode; fx: FxChain }; t: ArrTrack } | null {
+    const t = this.findTrack(id);
+    if (!t) return null;
+    this.trackStrip(t); // idempotent build
+    const s = this._arrStrips[id];
+    return s ? { s, t } : null;
+  }
+  trackDevices(id: string): FxDeviceState[] {
+    return this._arrStrips[id]?.fx.states() ?? this.findTrack(id)?.devices ?? [];
+  }
+  addTrackDevice(id: string, type: FxDeviceType) {
+    const r = this.trackFx(id);
+    if (!r) return;
+    r.s.fx.addDevice(type);
+    r.t.devices = r.s.fx.states();
+    this.saveArr();
+    this.emit("fx");
+  }
+  removeTrackDevice(id: string, deviceId: string) {
+    const r = this.trackFx(id);
+    if (!r) return;
+    r.s.fx.removeDevice(deviceId);
+    r.t.devices = r.s.fx.states();
+    this.saveArr();
+    this.emit("fx");
+  }
+  moveTrackDevice(id: string, deviceId: string, toIndex: number) {
+    const r = this.trackFx(id);
+    if (!r) return;
+    r.s.fx.moveDevice(deviceId, toIndex);
+    r.t.devices = r.s.fx.states();
+    this.saveArr();
+    this.emit("fx");
+  }
+  setTrackDeviceParams(id: string, deviceId: string, params: unknown) {
+    const r = this.trackFx(id);
+    if (!r) return;
+    r.s.fx.setParams(deviceId, params, this.bpm);
+    r.t.devices = r.s.fx.states();
+    this.saveArr();
+    this.emit("fx");
+  }
+
   toggleTrackMute(id: string) {
     const t = this.findTrack(id);
     if (t) t.mute = !t.mute;
@@ -2130,6 +1981,26 @@ class AudioEngine {
     this.resolveOverlaps(found[0], found[1]);
     this.saveArr();
   }
+  // Live multi-clip mouse drag: place every item at base + delta (a UNIFORM delta,
+  // clamped so nothing crosses beat 0 — same rule as nudgeSelection). Because the
+  // selection keeps its relative layout, selected clips can never trim each other in
+  // resolveOverlaps; only non-selected clips under the drop get trimmed (as in a
+  // single-clip drag). Beat-move only — cross-track hops stay single-clip / ↑↓ keys.
+  dragSelectionTo(items: { trackId: string; clipId: string; base: number }[], delta: number) {
+    if (!items.length) return;
+    const minBase = Math.min(...items.map((i) => i.base));
+    const d = Math.max(delta, -minBase);
+    const moved: { t: ArrTrack; c: ArrClip }[] = [];
+    for (const it of items) {
+      const found = this.findClip(it.trackId, it.clipId);
+      if (!found) continue;
+      found[1].startBeat = Math.max(0, it.base + d);
+      moved.push({ t: found[0], c: found[1] });
+    }
+    for (const m of moved) this.resolveOverlaps(m.t, m.c);
+    for (const m of moved) this.stopAudioForClip(m.c.id); // re-fire at the new spots
+    this.saveArr();
+  }
   duplicateClip(trackId: string, clipId: string): ArrClip | null {
     const found = this.findClip(trackId, clipId);
     if (!found) return null;
@@ -2140,6 +2011,18 @@ class AudioEngine {
     this.saveArr();
     return copy;
   }
+  // per-clip swing (0.5 = straight … 0.75 = hard). Scheduler-side only — stored notes
+  // stay straight, so the piano roll / grid always shows the unswung truth. Undoable as
+  // one step per knob gesture (coalesced — the knob has no pointer-down hook).
+  setClipSwing(trackId: string, clipId: string, swing: number) {
+    const found = this.findClip(trackId, clipId);
+    if (!found) return;
+    this.pushUndoCoalesced("swing:" + clipId);
+    const v = Math.min(0.75, Math.max(0.5, swing));
+    found[1].swing = v > 0.505 ? v : undefined;
+    this.saveArr();
+  }
+
   // write back edited clip content (from the piano roll / step grid / loop editor)
   setClipContent(trackId: string, clipId: string, content: ArrClip["content"]) {
     const found = this.findClip(trackId, clipId);
@@ -2953,8 +2836,11 @@ class AudioEngine {
     } else {
       this.bpm = bpm;
     }
-    // a tempo-synced delay must track the new tempo
-    if (this.fx.space.sync && this.ctx) this.applyFx();
+    // a tempo-synced delay must track the new tempo — master + every per-track chain
+    if (this.ctx) {
+      this._masterFx?.applyAll(bpm);
+      for (const id in this._arrStrips) this._arrStrips[id].fx.applyAll(bpm);
+    }
     // live loops re-rate to the new tempo, but only the LOCKED ones; unlocked
     // loops resolve to rate 1 (loopRate) so a tempo change leaves them untouched
     if (this.ctx) {
@@ -3424,31 +3310,72 @@ class AudioEngine {
   // Call pushUndo() BEFORE a mutation to make it undoable. Discrete ops call it once;
   // drag gestures call it at pointer-down (so the whole drag is one undo step). Any
   // pushUndo clears the redo stack (new branch of history).
+  private _snapshot(): UndoSnap {
+    return { a: structuredClone(this.arrangement), masterVol: this.masterVol };
+  }
   pushUndo() {
-    this._undo.push(structuredClone(this.arrangement));
+    this._coalesceKey = null; // a discrete op breaks any continuous-param run
+    this._undo.push(this._snapshot());
     if (this._undo.length > AudioEngine.UNDO_MAX) this._undo.shift();
     this._redo = [];
+  }
+  // Coalesced pushUndo for CONTINUOUS params whose UI has no gesture hook (knob
+  // onChange fires per pointermove): rapid same-key calls collapse into ONE undo step —
+  // the pre-gesture snapshot. A pause (>1.2s), a different key, any discrete pushUndo,
+  // or an undo/redo starts a fresh step.
+  private _coalesceKey: string | null = null;
+  private _coalesceAt = 0;
+  pushUndoCoalesced(key: string) {
+    const now = Date.now();
+    if (this._coalesceKey === key && now - this._coalesceAt < 1200) {
+      this._coalesceAt = now; // same gesture — keep the original snapshot
+      return;
+    }
+    this.pushUndo();
+    this._coalesceKey = key;
+    this._coalesceAt = now;
   }
   canUndo() { return this._undo.length > 0; }
   canRedo() { return this._redo.length > 0; }
   undo() {
     const prev = this._undo.pop();
     if (!prev) return;
-    this._redo.push(structuredClone(this.arrangement));
+    this._redo.push(this._snapshot());
     this._restoreArrangement(prev);
   }
   redo() {
     const next = this._redo.pop();
     if (!next) return;
-    this._undo.push(structuredClone(this.arrangement));
+    this._undo.push(this._snapshot());
     this._restoreArrangement(next);
   }
-  private _restoreArrangement(a: Arrangement) {
+  private _restoreArrangement(snap: UndoSnap) {
+    this._coalesceKey = null; // time-travel invalidates any in-flight gesture run
     this.stopAudioClips(); // any playing sources reference clips that may be gone
-    this.arrangement = a;
+    this.arrangement = snap.a;
+    // mixer state rides in the snapshot: master fader + every live strip must FOLLOW the
+    // restored values (vol/pan/devices live in nodes, not just in the arrangement)
+    this.masterVol = snap.masterVol;
+    this.applyMasterVol();
+    if (this.ctx) {
+      const tt = this.ctx.currentTime;
+      this.refreshTrackGains();
+      for (const t of this.arrangement.tracks) {
+        const s = this._arrStrips[t.id];
+        if (!s) continue;
+        s.pan.pan.setTargetAtTime(t.pan, tt, 0.02);
+        // re-sync the live FX chain when the restored device list differs (FX edits
+        // aren't undoable themselves, but snapshots carry whatever devices existed)
+        if (JSON.stringify(s.fx.states()) !== JSON.stringify(t.devices || [])) {
+          s.fx.setDevices((t.devices || []).map((d) => structuredClone(d)));
+          s.fx.applyAll(this.bpm);
+        }
+      }
+    }
     this.clearSelection();
     saveArrangement(this.arrangement);
     this.emit("arrange");
+    this.emit("fx");
     this.emit("select");
   }
 
@@ -3538,24 +3465,95 @@ class AudioEngine {
   // its content is the source clips laid end-to-end (gaps become silence). MIDI/drum
   // merge notes at their offsets; audio consolidation keeps the FIRST clip's source
   // (a true audio bounce is out of scope — flagged).
-  consolidateSelection() {
+  // Render one track's selected audio clips into a single stereo buffer spanning
+  // [startBeat, startBeat + lenBeats). Ableton-consolidate semantics: clip-level
+  // gain/rate/trim/loop/reverse are printed; track FX / vol / pan are NOT (they keep
+  // applying live to the bounced clip). Returns null when no clip has a decoded buffer.
+  private async renderAudioSpan(sel: ArrClip[], startBeat: number, lenBeats: number): Promise<AudioBuffer | null> {
+    const c = this.ensureCtx();
+    const bd = this.beatDur();
+    const sr = c.sampleRate;
+    const frames = Math.max(1, Math.ceil(lenBeats * bd * sr));
+    const off = new OfflineAudioContext(2, frames, sr);
+    let any = false;
+    for (const clip of sel) {
+      const s = this.audioClipSource(clip, bd);
+      if (!s) continue;
+      const when = (clip.startBeat - startBeat) * bd;
+      const stopAt = when + clip.lengthBeats * bd;
+      const g = off.createGain();
+      g.gain.value = s.gain;
+      g.connect(off.destination);
+      const src = off.createBufferSource();
+      src.buffer = s.buf;
+      src.playbackRate.value = s.rate;
+      src.connect(g);
+      // mirrors scheduleAudioClip's fire() with catchUp = 0 and no brace
+      if (s.looping) {
+        src.loop = true;
+        src.loopStart = s.loopStartSec;
+        src.loopEnd = s.loopEndSec;
+        src.start(when, Math.min(s.startSec, s.endSec - 0.001));
+        src.stop(stopAt);
+      } else {
+        const remain = Math.min(s.trimmedSec, (stopAt - when) * s.rate);
+        if (remain <= 0.001) continue;
+        src.start(when, Math.min(s.startSec, s.endSec - 0.001), remain);
+      }
+      any = true;
+    }
+    if (!any) return null;
+    return await off.startRendering();
+  }
+
+  async consolidateSelection() {
     const ids = [...this.selClips];
     if (!ids.length) return;
-    this.pushUndo();
-    const newIds: string[] = [];
+    // phase 1 — build every track's merged clip WITHOUT mutating (audio tracks render
+    // an offline bounce, which is async); phase 2 applies synchronously under one undo.
+    const plans: { t: ArrTrack; sel: ArrClip[]; merged: ArrClip }[] = [];
     for (const t of this.arrangement.tracks) {
       const sel = t.clips.filter((c) => ids.includes(c.id)).sort((a, b) => a.startBeat - b.startBeat);
       if (sel.length < 2) continue;
       const start = sel[0].startBeat;
       const end = Math.max(...sel.map((c) => c.startBeat + c.lengthBeats));
       const len = end - start;
+      const bpb = this.arrangement.beatsPerBar;
       let merged: ArrClip;
       if (t.kind === "audio") {
-        // keep the earliest clip's source, spanning the whole extent (re-hashes to fill)
-        merged = { ...sel[0], id: newClipId(), startBeat: start, lengthBeats: len };
+        const rendered = await this.renderAudioSpan(sel, start, len).catch(() => null);
+        if (rendered) {
+          // a REAL bounce: new buffer in the import store (WAV bytes → IndexedDB), one
+          // clean full-width clip. Tempo-tagged at the bounce bpm so sync re-rates it.
+          const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
+          this._importBufs[bufId] = rendered;
+          void putAudio(bufId, encodeWav(rendered), (sel[0].name || "bounce") + ".wav");
+          merged = {
+            id: newClipId(),
+            startBeat: start,
+            lengthBeats: len,
+            loop: false,
+            name: sel[0].name,
+            color: sel[0].color,
+            content: {
+              kind: "audio",
+              bufId,
+              name: sel[0].name || "bounce",
+              gain: 1,
+              a: 0,
+              b: 1,
+              sync: sel.some((c) => c.content.kind === "audio" && c.content.sync),
+              rootBpm: this.bpm,
+              bars: Math.max(1, Math.round(len / bpb)),
+            },
+          };
+        } else {
+          // no decoded buffers (nothing imported yet) → old behavior: keep the earliest
+          // clip's source spanning the whole extent
+          merged = { ...sel[0], id: newClipId(), startBeat: start, lengthBeats: len };
+        }
       } else {
         // merge notes at their timeline offset relative to `start`
-        const bpb = this.arrangement.beatsPerBar;
         const notes: NoteClip["notes"] = [];
         for (const c of sel) {
           const src = c.content.kind === "midi" ? c.content.clip.notes : c.content.kind === "drum" ? c.content.notes?.notes : undefined;
@@ -3567,12 +3565,17 @@ class AudioEngine {
         const content: ArrClip["content"] = t.kind === "drum" ? { kind: "drum", pattern: { ...(sel[0].content as { pattern: SequenceClip }).pattern, steps: Math.max(16, Math.ceil(len / STEP_BEATS)) }, notes: clip } : { kind: "midi", clip };
         merged = { ...sel[0], id: newClipId(), startBeat: start, lengthBeats: len, content };
       }
-      for (const c of sel) this.stopAudioForClip(c.id);
-      t.clips = [...t.clips.filter((c) => !ids.includes(c.id)), merged];
-      newIds.push(merged.id);
+      plans.push({ t, sel, merged });
     }
-    if (newIds.length) this.setSelectedClips(newIds);
-    else this._undo.pop(); // nothing merged (need ≥2 selected on a track) → drop the frame
+    if (!plans.length) return; // nothing merged (need ≥2 selected on a track)
+    this.pushUndo();
+    const newIds: string[] = [];
+    for (const p of plans) {
+      for (const c of p.sel) this.stopAudioForClip(c.id);
+      p.t.clips = [...p.t.clips.filter((c) => !ids.includes(c.id)), p.merged];
+      newIds.push(p.merged.id);
+    }
+    this.setSelectedClips(newIds);
     this.saveArr();
   }
 
@@ -3675,24 +3678,14 @@ class AudioEngine {
     return rate;
   }
 
-  // Start an audio clip's decoded buffer at its timeline position. Unlike note/drum
-  // events (many short voices), an audio clip is ONE long source, so we fire it once
-  // per playback pass (deduped in _startedAudio) when its start beat enters the window
-  // — or immediately with an offset if the playhead began mid-clip. Honors a/b trim,
-  // per-clip gain, the track strip, and the loop brace (one instance per brace pass).
-  private scheduleAudioClip(
-    t: ArrTrack,
-    clip: ArrClip,
-    fromBeatAbs: number,
-    toBeatAbs: number,
-    whenOf: (b: number) => number,
-    bd: number,
-    brace: { start: number; end: number } | null,
-  ) {
-    if (clip.content.kind !== "audio") return;
+  // Resolve an audio clip's playable source — the buffer (reversed / loop-xfaded as
+  // needed), rate, trim seconds, loop points, per-clip gain. Shared by the live
+  // scheduler and the consolidate bounce so both voice a clip IDENTICALLY.
+  private audioClipSource(clip: ArrClip, bd: number) {
+    if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
     let srcBuf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
-    if (!srcBuf) return; // not imported yet
+    if (!srcBuf) return null; // not imported yet
     // reverse: swap to the reversed buffer (imports only) and flip the trim/loop fractions
     // so a/b keep meaning "the region you selected on the forward waveform".
     const rev = !!cc.reverse && !!cc.bufId;
@@ -3704,12 +3697,10 @@ class AudioEngine {
       if (tla != null && tlb != null) [tla, tlb] = [1 - tlb, 1 - tla];
     }
     const rawBuf = srcBuf;
-    const braceLen = brace ? brace.end - brace.start : 0;
     // a/b trim (0..1 of the buffer) → seconds; per-clip gain
     const a = Math.min(0.999, Math.max(0, ta));
     const b = Math.min(1, Math.max(a + 0.001, tb));
     const dur = rawBuf.duration;
-    const gainVal = cc.gain ?? 1;
     const trimmedSec = (b - a) * dur;
     // ── rate: grid-sync (match the arrangement tempo via the sample's native rootBpm,
     //    same as LoopLanes) × varispeed (semi+cents). No rootBpm ⇒ sync is a no-op. ──
@@ -3738,43 +3729,65 @@ class AudioEngine {
       loopStartSec = ls * dur;
       loopEndSec = le * dur;
     }
+    return { buf, rate, gain: cc.gain ?? 1, startSec: a * dur, endSec: b * dur, trimmedSec, looping, loopStartSec, loopEndSec };
+  }
+
+  // Start an audio clip's decoded buffer at its timeline position. Unlike note/drum
+  // events (many short voices), an audio clip is ONE long source, so we fire it once
+  // per playback pass (deduped in _startedAudio) when its start beat enters the window
+  // — or immediately with an offset if the playhead began mid-clip. Honors a/b trim,
+  // per-clip gain, the track strip, and the loop brace (one instance per brace pass).
+  private scheduleAudioClip(
+    t: ArrTrack,
+    clip: ArrClip,
+    fromBeatAbs: number,
+    toBeatAbs: number,
+    whenOf: (b: number) => number,
+    bd: number,
+    brace: { start: number; end: number } | null,
+  ) {
+    if (clip.content.kind !== "audio") return;
+    const cc = clip.content;
+    const s = this.audioClipSource(clip, bd);
+    if (!s) return; // not imported yet
+    const braceLen = brace ? brace.end - brace.start : 0;
     // fire one instance at absolute start beat `sb`, optionally offset into the clip
     const fire = (sb: number, clipOffsetBeats: number) => {
       const key = clip.id + "@" + sb.toFixed(3);
       if (this._startedAudio[key]) return;
       const c = this.ctx!;
       const g = c.createGain();
-      g.gain.value = gainVal;
+      g.gain.value = s.gain;
       const src = c.createBufferSource();
-      src.buffer = buf;
-      src.playbackRate.value = rate;
+      src.buffer = s.buf;
+      src.playbackRate.value = s.rate;
       g.connect(this.trackStrip(t));
       src.connect(g);
       const catchUp = Math.max(0, clipOffsetBeats) * bd; // seconds into the clip already elapsed
       const when = Math.max(c.currentTime, whenOf(sb + clipOffsetBeats));
       // buffer offset advances at `rate` (buffer seconds per clip second)
-      const offSec = a * dur + catchUp * rate;
+      const offSec = s.startSec + catchUp * s.rate;
       // both paths are hard-cut at the clip's end on the timeline
       const stopAt = whenOf(sb + clip.lengthBeats);
-      if (looping) {
+      if (s.looping) {
         src.loop = true;
-        src.loopStart = loopStartSec;
-        src.loopEnd = loopEndSec;
-        src.start(when, Math.min(offSec, b * dur - 0.001));
+        src.loopStart = s.loopStartSec;
+        src.loopEnd = s.loopEndSec;
+        src.start(when, Math.min(offSec, s.endSec - 0.001));
         if (stopAt > when) src.stop(stopAt);
       } else {
         // one-shot: play the trimmed region, but never past the clip end (cut). The
         // buffer duration to schedule is the smaller of (content left) and (clip left).
-        const bufLeft = trimmedSec - catchUp * rate; // buffer seconds remaining in [a,b]
-        const clipLeft = (stopAt - when) * rate; // buffer seconds until the clip end
+        const bufLeft = s.trimmedSec - catchUp * s.rate; // buffer seconds remaining in [a,b]
+        const clipLeft = (stopAt - when) * s.rate; // buffer seconds until the clip end
         const remain = Math.min(bufLeft, clipLeft);
         if (remain <= 0.001) return;
-        src.start(when, Math.min(offSec, b * dur - 0.001), remain);
+        src.start(when, Math.min(offSec, s.endSec - 0.001), remain);
       }
       src.onended = () => {
         try { g.disconnect(); } catch { /* fine */ }
       };
-      this._startedAudio[key] = { src, synced: !!cc.sync, baseRate: rate, baseBpm: this.bpm };
+      this._startedAudio[key] = { src, synced: !!cc.sync, baseRate: s.rate, baseBpm: this.bpm };
     };
     // brace loop: an instance per pass whose start lands in the window. Without a brace,
     // fire once when startBeat enters the window (or immediately if we began mid-clip).
@@ -3876,7 +3889,8 @@ class AudioEngine {
               const repOffset = r * contentLen;
               for (const run of runs) {
                 if (run.startBeat + repOffset >= clip.lengthBeats) continue; // past the clip length
-                emitRun(run, clip.startBeat + run.startBeat + repOffset, sel, vibLane);
+                // swing delays the run's head; the run rides along rigidly (bends/length unwarped)
+                emitRun(run, clip.startBeat + run.startBeat + repOffset + swingDelay(run.startBeat + repOffset, clip.swing), sel, vibLane);
               }
             }
           } else if (clip.content.kind === "drum") {
@@ -3903,7 +3917,7 @@ class AudioEngine {
                   const beat = repOffset + nt.start;
                   if (beat >= clip.lengthBeats) continue;
                   const lane = kit.lanes[nt.pitch - DRUM_BASE];
-                  if (lane && audible(lane.id)) emitDrum(lane, clip.startBeat + beat, nt.vel, dest);
+                  if (lane && audible(lane.id)) emitDrum(lane, clip.startBeat + beat + swingDelay(beat, clip.swing), nt.vel, dest);
                 }
               } else {
                 for (let s = 0; s < pat.steps; s++) {
@@ -3911,7 +3925,7 @@ class AudioEngine {
                   if (stepBeat >= clip.lengthBeats) continue;
                   for (const lane of kit.lanes) {
                     if (!pat.on[lane.id]?.[s] || !audible(lane.id)) continue;
-                    emitDrum(lane, clip.startBeat + stepBeat, pat.accent[lane.id]?.[s] ? 1 : 0.7, dest);
+                    emitDrum(lane, clip.startBeat + stepBeat + swingDelay(stepBeat, clip.swing), pat.accent[lane.id]?.[s] ? 1 : 0.7, dest);
                   }
                 }
               }
@@ -4066,11 +4080,10 @@ class AudioEngine {
         ctxState: c?.state ?? "none",
         ctxTime: c?.currentTime ?? 0,
         sampleRate: c?.sampleRate ?? 0,
-        fxOrder: [...this.fxOrder],
         wet: this.wet,
         levelMatch: this.levelMatch,
       },
-      fx: this.fx,
+      fx: { master: this.masterDevices(), limiter: { ...this.limiter } },
       voices: {
         liveKeyboard: Object.keys(this._liveVoices).length,
         scheduler: this._seqVoices.length,

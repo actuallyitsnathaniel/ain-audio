@@ -2,8 +2,8 @@
 
 Developer documentation for the Web Audio engine (`src/daw/engine.ts`, exported as the
 singleton `engine`). One `AudioContext`, one global "master track", a preset sampler, and a
-reorderable FX rack. React subscribes via `engine.on(event, fn)` / `off`; it never owns audio
-state. Companion to [DESIGN.md](DESIGN.md) (visual tokens) and
+modular FX device system (per-track chains + the master chain). React subscribes via
+`engine.on(event, fn)` / `off`; it never owns audio state. Companion to [DESIGN.md](DESIGN.md) (visual tokens) and
 [../assets/presets/README.md](../assets/presets/README.md) (preset drop-in convention).
 
 ## Signal flow (the graph)
@@ -13,8 +13,8 @@ Built once in `buildGraph()` on first user gesture (`ensureCtx`). Top-to-bottom 
 ```
  track A (mix) ─┐                        synth/sampler voices ──┐
  tapMix→lm→gMix │                          (noteOn → voiceGain) │
- track B (mast) ┤→ sum ──[ REORDERABLE FX RACK ]──→ anOut ──→ limiter ──→ master ──→ speakers
- tapMaster→gMaster                                  (meter)   (safety)    (0.95)
+ track B (mast) ┤→ sum ──[ MASTER FX CHAIN ]──→ anOut ──→ limiter ──→ master ──→ speakers
+ tapMaster→gMaster                              (meter)   (safety)    (0.95)
                   ▲                                            ▲
            phase-locked A/B                          fixed tail — never reordered
            dry/wet crossfade
@@ -28,35 +28,65 @@ Built once in `buildGraph()` on first user gesture (`ensureCtx`). Top-to-bottom 
 - **`anOut`** is the output analyser (spectrum, meters). It sits *before* the safety limiter, so
   meters read the program signal, not the limited signal.
 
-## Reorderable FX rack
+## Modular FX device system
 
-Five effects, reorderable at runtime: **filter · comp · space · crush · reverb**
-(default `FX_DEFAULT_ORDER`, a musical chain). Each is a module with a single input + output
-GainNode (`FxModule { in, out }`), so the chain rewires cleanly at the gain boundaries.
+FX are **self-describing device modules** ([fx-devices.ts](fx-devices.ts)) instanced into
+**ordered chains** ([fx-chain.ts](fx-chain.ts)). The same system drives the master bus and
+every arrangement track.
 
-| Key | Node(s) | Notes |
+**Devices** — `FX_DEVICES: Record<FxDeviceType, FxDeviceDef>`; each entry is
+`{ label, build(ctx) → { in, out, apply }, defaults() }`. `build` creates the device's node
+graph between one input GainNode and one output node; `apply(params, ctx, bpm)` pushes a params
+blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = one registry entry.
+
+| Type | Node(s) | Notes |
 |-----|---------|-------|
 | `filter` | BiquadFilter | bipolar morph: <0.5 lowpass, >0.5 highpass, ~0.5 off |
 | `comp` | DynamicsCompressor + makeup gain | *creative* dynamics; manual makeup. Off ⇒ threshold 0/ratio 1 (neutral) |
-| `space` | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the roll tempo: the `div` knob steps the 6 straight divisions (1/1→1/32, `DELAY_DIVS`); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies it. Off = free ms (`time`). |
+| `space` | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the tempo: the `div` knob steps the straight divisions (`DELAY_DIVS`, 1/16→1/1); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies every chain. Off = free ms (`time`). |
 | `crush` | WaveShaper (tanh) + auto-gain | see loudness safety below |
-| `reverb` | Convolver (internal dry/wet) | synth IR by default; real IR optional |
+| `reverb` | Convolver (internal dry/wet) | synth IR, regenerated from the decay knob (device-owned `makeReverbIR`) |
 
-**Reordering** — `engine.setFxOrder(keys)` (a permutation of the 5). `rewireChain()`:
-1. ducks `sum.gain` to 0 over ~8 ms (click-safe — the click comes from signal discontinuity,
-   not the rewiring),
-2. disconnects `sum` + every module `out`,
-3. reconnects `sum → m0.in, m0.out → m1.in, … last.out → anOut` in `fxOrder`,
-4. ramps `sum.gain` back to 1.
+**Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
+`input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/
+`moveDevice` rebuild the internal connections click-safely by ducking the chain's own output
+gain ~8 ms around the rewire. Serialized form: `FxDeviceState = { id, type, params }` —
+`states()` snapshots, `setDevices(states)` rebuilds. A device is **bypassed by neutralizing it
+in place** via its `apply` (filter → 20 kHz, comp → neutral, wet gains → 0, shaper → null
+curve), so on/off never reconnects — only add/remove/reorder do.
 
-Effects are **always all in-chain**. "Bypass" (the power dot) neutralizes the node *in place*
-via `applyFx()` (filter → 20 kHz, comp → neutral, wet gains → 0, shaper → null curve), so
-toggling never reorders the rack. The UI ([components/audio-lab/FxRack.tsx](components/audio-lab/FxRack.tsx))
-renders devices in `engine.fxOrder`. Each device has a **⠿ drag handle** that reorders via
-**pointer events** (mouse + touch + pen — not HTML5 DnD, which doesn't fire on touch). The handle
-captures the pointer; `onPointerMove` hit-tests the device under the pointer (`elementFromPoint` →
-`data-fxkey`) and calls `setFxOrder` live, so the chain visibly rearranges as you drag. The handle
-is a separate target from the knobs, so knob-dragging is unaffected; `touch-none` on it stops the
+**Master chain** — `sum → [devices] → anOut`, persisted in localStorage (`ain-master-fx`);
+fresh visitors get the classic five (filter · comp · space · crush · reverb), all bypassed.
+Mutations: `engine.addMasterDevice(type)`, `removeMasterDevice(id)`, `moveMasterDevice(id, to)`,
+`setMasterDeviceParams(id, params)`; `engine.masterDevices()` reads. The safety limiter is NOT
+in the chain — it's the fixed tail, controlled by `engine.limiter` + `engine.setLimiter(patch)`.
+The MASTER track's fader is `engine.masterVol` / `setMasterVol(v)` (the final `master` gain,
+persisted in `ain-master-vol`).
+
+**Per-track chains** — each arrangement track strip is `gain → [devices] → pan → sum`,
+persisted on the track (`ArrTrack.devices`, absent = no FX). Mutations mirror the master:
+`addTrackDevice(trackId, type)`, `removeTrackDevice(trackId, id)`, `moveTrackDevice(trackId,
+id, to)`, `setTrackDeviceParams(trackId, id, params)`; `trackDevices(trackId)` reads. All
+mutations emit `"fx"`.
+
+**UI** — [components/FxChainRack.tsx](components/FxChainRack.tsx) is the generic chain editor
+(device panels, add-dropdown, ✕ remove, per-device power dot), bound to a chain purely through
+callbacks. It renders as ONE non-wrapping row that scrolls horizontally forever (always-visible themed
+scrollbar via the `.fx-scroll` escape hatch in `src/index.css`, plus scroll-state-driven edge
+fades with accent chevrons whenever content is clipped — the explicit affordance on browsers
+that hide overlay scrollbars); each device folds Ableton-style (▼ in its header) to a slim
+vertical strip — ▶ + power dot + rotated name, click to expand. Fold state is UI-only, never
+persisted with the chain. [components/audio-lab/FxRack.tsx](components/audio-lab/FxRack.tsx) binds it to the
+master chain + the LIMIT tail (always visible in the audio lab as "visitor fx"; in the studio it
+toggles from the pinned MASTER track row's `fx` chip — the mix bus rendered as its own
+Ableton-style track under the track list, with the master fader). The studio's per-track panel
+(`TrackFxPanel` in ArrangementPage) binds it to a track. Each device has a
+**⠿ drag handle** that reorders via **pointer events** (mouse + touch + pen — not HTML5 DnD,
+which doesn't fire on touch). The handle captures the pointer; `onPointerMove` hit-tests the
+device under the pointer (`elementFromPoint` → `data-fxid`) and live-reorders with **take-the-slot**
+semantics (target index = hovered device's index in the full list → insert-after when dragging
+right, insert-before when dragging left, so a 2-device chain swaps both ways). The handle is a
+separate target from the knobs, so knob-dragging is unaffected; `touch-none` on it stops the
 page scrolling mid-drag.
 
 ## Loudness safety (two independent safeguards, both default ON)
@@ -64,13 +94,13 @@ page scrolling mid-drag.
 Saturation, resonance, and stacked delay feedback can all spike level — and with a reorderable
 chain the peak is unpredictable. Two guards, deliberately separate:
 
-1. **Crush auto-gain** (`fx.crush.autoGain`, default on) — `applyFx` trims `crushComp.gain` by
-   `1/sqrt(1 + drive·3.5)` as drive rises, so driving the waveshaper changes *grit*, not
-   *loudness*. Toggleable per the "auto" button on the CRUSH device.
-2. **Safety limiter** (`fx.limiter`, default on) — a brickwall `DynamicsCompressorNode`
+1. **Crush auto-gain** (the crush device's `autoGain` param, default on) — the device's `apply`
+   trims its makeup gain by `1/sqrt(1 + drive·3.5)` as drive rises, so driving the waveshaper
+   changes *grit*, not *loudness*. Toggleable per the "auto" button on the CRUSH device.
+2. **Safety limiter** (`engine.limiter`, default on) — a brickwall `DynamicsCompressorNode`
    (ratio 20:1, fast attack, ceiling ≈ −1.5 dBFS) in the **fixed tail after `anOut`**, *outside*
-   the reorderable rack so it can never be moved or bypassed by reordering. Catches any peak
-   regardless of fx order. User-toggleable (off = audition raw output, at their own risk).
+   the master chain so it can never be moved, removed, or bypassed by reordering. Catches any
+   peak regardless of device order. User-toggleable (off = audition raw output, at their own risk).
    `engine.getReduction()` returns its live gain reduction (dB) — the LIMIT device's "peak" LED
    lights when it engages (rAF-driven, imperative, lint-safe).
 
@@ -87,8 +117,8 @@ mid-cycle → a click. The engine avoids this everywhere a source starts/stops:
   `startSources` fades the track tap gains 0→1 on start; `stopSources` fades 1→0 then stops just after;
   `stopLoops`/`stopOneLoop` fade each loop's gain to 0 then stop. Gain-only ramps don't touch source
   *timing*, so the A/B **phase-lock invariant** is preserved.
-- **Synth drums** already use `exponentialRampToValueAtTime(0.0001)`; the **FX-rack reorder** already
-  ducks `n.sum` around the rewire.
+- **Synth drums** already use `exponentialRampToValueAtTime(0.0001)`; every **FxChain rewire**
+  (add/remove/reorder) ducks the chain's own output gain around the reconnect.
 
 **Deliberately NOT declicked** — parameter automations (FX mix, channel vol/pan, level-match, delay/
 reverb) already ramp via `setTargetAtTime` with time constants (zipper-free); adding fades there would
@@ -126,6 +156,23 @@ re-anchor the clock so the playhead doesn't jump. API: `setActiveClip`/`getClip`
 **Transport mutual-exclusion.** `transportMode: "track" | "sequence"`. `playSequence()` calls
 `pause()` (track playback feeds the taps; the sequencer feeds `sum` — both at once double-sums and
 corrupts metering); `play()` calls `stopSequence()`.
+
+**Per-clip swing (arrangement clips, optional).** `ArrClip.swing` ∈ (0.5, 0.75] — absent/0.5 =
+straight. MPC/Ableton-style: the 2nd 16th of every 8th-note pair lands `swing` of the way through
+the pair (2/3 ≈ triplet feel, 0.75 = hard). Applied **at schedule time** via
+`swingDelay(clipBeat, clip.swing)` ([data/arrangement.ts](data/arrangement.ts)) in `schedTick`'s
+three emit paths (MIDI runs — the head is delayed, the run rides rigidly; drum notes; drum grid
+steps). Stored notes stay straight (lossless — the roll/grid always shows the unswung truth), the
+warp is piecewise-linear per pair so pair boundaries are fixed and off-grid hits shift
+proportionally. Set via `engine.setClipSwing(trackId, clipId, v)` — the swing knob in the clip
+editor (MIDI + drum clips; audio clips don't swing). Undoable as **one step per knob gesture**
+via `pushUndoCoalesced(key)` — rapid same-key pushes (<1.2 s apart) collapse into the
+pre-gesture snapshot; any discrete `pushUndo`, a different key, a pause, or undo/redo breaks the
+run (the generic mechanism for continuous params whose UI has no pointer-down hook). **Track
+vol/pan and the master fader use the same mechanism** — undo snapshots are `UndoSnap { a,
+masterVol }` (the master fader isn't arrangement state), and `_restoreArrangement` re-syncs the
+live mixer: master gain, strip gains/pans, and each strip's FX chain when the restored device
+list differs. Legacy beat-mode keeps its separate `sequence.swing`.
 
 **Playback pane** ([components/arrangement/PlaybackPane.tsx](components/arrangement/PlaybackPane.tsx))
 — the arrangement transport. Verbs: `toggleArrangement` (play/stop), `playArrangementFromCursor`,
@@ -218,7 +265,7 @@ scheduler** — `beatMode` flips `schedTick` from walking the note clip to walki
   [../assets/kits/README.md](../assets/kits/README.md).
 - **Voices**: `triggerDrum(laneId, when, accent)` plays the decoded one-shot if present, else
   `synthDrum()` — **engine-synthesized** kick (pitched sine sweep), snare/hat/clap (filtered noise),
-  tom, rim. Both route to `n.sum` → the shared FX rack. So the beat-maker works with **zero assets**;
+  tom, rim. Both route to `n.sum` → the master FX chain. So the beat-maker works with **zero assets**;
   drop real samples in later and those lanes switch automatically.
 - **Step = a 1/16 note** (`STEP_BEATS = 0.25`); grid length = `steps × 0.25` beats. **Swing** pushes
   odd steps later by up to ~⅓ step. Per-step **accent** boosts level.

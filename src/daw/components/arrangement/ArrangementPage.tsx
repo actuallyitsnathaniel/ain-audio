@@ -5,7 +5,7 @@
 // vocabulary (name/mute/solo/vol/pan/preset). The timeline schedules from the
 // engine's arrangement; everything auto-saves to localStorage.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
@@ -13,6 +13,7 @@ import { SectionHead } from "../SectionHead";
 import { TrackSection } from "../TrackSection";
 import { Knob } from "../Knob";
 import { FxRack } from "../audio-lab/FxRack";
+import { FxChainRack } from "../FxChainRack";
 import { Instrument } from "../audio-lab/Instrument";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
@@ -31,8 +32,9 @@ const chip = (active: boolean, danger?: boolean) =>
     : "border-line text-faint hover:text-dim");
 
 
-function TrackHeader({ t, armed, selected, onArm }: { t: ArrTrack; armed: boolean; selected: boolean; onArm: (id: string) => void }) {
+function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack; armed: boolean; selected: boolean; fxOpen: boolean; onArm: (id: string) => void; onFx: (id: string) => void }) {
   const [editing, setEditing] = useState(false);
+  const hasFx = !!t.devices?.length;
   return (
     <div
       className={"flex flex-col justify-center gap-[3px] border-b border-line px-[8px] transition-colors " + (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")}
@@ -55,6 +57,7 @@ function TrackHeader({ t, armed, selected, onArm }: { t: ArrTrack; armed: boolea
             { label: "select all clips", onClick: () => engine.selectTrack(t.id) },
             { label: t.mute ? "unmute" : "mute", onClick: () => engine.toggleTrackMute(t.id) },
             { label: t.solo ? "unsolo" : "solo", onClick: () => engine.toggleTrackSolo(t.id) },
+            { label: fxOpen ? "hide track fx" : "track fx…", onClick: () => onFx(t.id) },
             { separator: true },
             { label: "delete track", danger: true, onClick: () => engine.removeTrack(t.id) },
           ],
@@ -101,6 +104,9 @@ function TrackHeader({ t, armed, selected, onArm }: { t: ArrTrack; armed: boolea
       <div className="flex items-center gap-[6px]">
         <Knob value={t.vol} min={0} max={1} defaultValue={0.8} size={22} onChange={(v) => engine.setTrackVol(t.id, v)} label="" fmt={() => ""} />
         <Knob value={t.pan} min={-1} max={1} defaultValue={0} size={22} bipolar onChange={(v) => engine.setTrackPan(t.id, v)} label="" fmt={() => ""} />
+        <button className={chip(fxOpen || hasFx)} onClick={() => onFx(t.id)} title={hasFx ? "track fx (" + t.devices!.length + " device" + (t.devices!.length > 1 ? "s" : "") + ")" : "track fx"}>
+          fx
+        </button>
         {t.kind === "midi" && (
           <select
             value={t.presetId}
@@ -121,9 +127,61 @@ function TrackHeader({ t, armed, selected, onArm }: { t: ArrTrack; armed: boolea
   );
 }
 
+// the master row's fx-panel key in fxTrackId (can't collide with newTrackId ids)
+const MASTER_ID = "__master__";
+
+// The MASTER track's header — the mix bus pinned under the track list, Ableton-style.
+// Same vocabulary as TrackHeader: name row, then fader + fx chip.
+function MasterHeader({ fxOpen, onFx }: { fxOpen: boolean; onFx: () => void }) {
+  const eng = useEngine(["fx"]);
+  const anyOn = eng.masterDevices().some((d) => !!(d.params as { on?: boolean }).on);
+  return (
+    <div className="flex flex-col justify-center gap-[3px] px-[8px]" style={{ height: ROW_H }}>
+      <div className="flex items-center gap-[5px]">
+        <span className="min-w-[52px] font-mono text-[9.5px] tracking-[0.03em] text-accent">master</span>
+        <span className="ml-auto font-mono text-[8px] text-faint">bus</span>
+      </div>
+      <div className="flex items-center gap-[6px]">
+        <Knob value={eng.masterVol} min={0} max={1} defaultValue={0.95} size={22} onChange={(v) => engine.setMasterVol(v)} label="" fmt={() => ""} />
+        <button className={chip(fxOpen || anyOn)} onClick={onFx} title="master fx">
+          fx
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The selected track's FX chain, bound to the engine's per-track device API.
+function TrackFxPanel({ t }: { t: ArrTrack }) {
+  useEngine(["fx"]);
+  return (
+    <div className="border-t border-line pt-[14px]">
+      <div className="mb-[10px] font-mono text-[10.5px] tracking-[0.06em] text-faint">
+        track fx — <span className="text-dim">{t.name}</span> · inserted between the track's volume and pan
+      </div>
+      <FxChainRack
+        devices={engine.trackDevices(t.id)}
+        onAdd={(ty) => engine.addTrackDevice(t.id, ty)}
+        onRemove={(id) => engine.removeTrackDevice(t.id, id)}
+        onMove={(id, to) => engine.moveTrackDevice(t.id, id, to)}
+        onSetParams={(id, p) => engine.setTrackDeviceParams(t.id, id, p)}
+      />
+    </div>
+  );
+}
+
 export function ArrangementPage() {
-  const eng = useEngine(["arrange", "transport", "preset", "patch", "synth", "select"]);
+  const eng = useEngine(["arrange", "transport", "preset", "patch", "synth", "select", "fx"]);
   const tracks = eng.arrangement.tracks;
+  // which track's FX panel is open (toggled from the track header's fx chip)
+  const [fxTrackId, setFxTrackId] = useState<string | null>(null);
+  const fxTrack = fxTrackId ? tracks.find((t) => t.id === fxTrackId) : undefined; // auto-hides if deleted
+  const toggleFx = (id: string) => {
+    if (id !== MASTER_ID) engine.selectTrack(id);
+    setFxTrackId((cur) => (cur === id ? null : id));
+  };
+  // timeline zoom controls, filled by <Timeline> — the page key handler drives them
+  const zoomApiRef = useRef<{ zoom: (factor: number) => void } | null>(null);
   // The bottom editor follows the SELECTION: whenever exactly one clip is selected (click,
   // arrow-key, split result…), it edits that clip. A multi-selection keeps the last single
   // editor open. `editSel` is a local fallback (e.g. a double-clicked clip within a multi).
@@ -167,6 +225,10 @@ export function ArrangementPage() {
         else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
         return;
       }
+      // timeline zoom: + / − Ableton-style, and ⌘+/− (intercepted — this page's zoom,
+      // not the browser's). "=" is the unshifted + key.
+      if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomApiRef.current?.zoom(1.25); return; }
+      if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomApiRef.current?.zoom(1 / 1.25); return; }
       // select-all
       if (meta && e.key.toLowerCase() === "a") { e.preventDefault(); engine.selectAllClips(); return; }
       // delete every selected clip
@@ -187,7 +249,7 @@ export function ArrangementPage() {
       }
       // time-editing: ⌘E split · ⌘J consolidate · ⌘I insert silence (at the insert marker)
       if (meta && e.key.toLowerCase() === "e") { e.preventDefault(); engine.splitAtInsert(); return; }
-      if (meta && e.key.toLowerCase() === "j") { e.preventDefault(); engine.consolidateSelection(); return; }
+      if (meta && e.key.toLowerCase() === "j") { e.preventDefault(); void engine.consolidateSelection(); return; }
       if (meta && e.key.toLowerCase() === "i") { e.preventDefault(); engine.insertSilence(); return; }
       // clipboard: ⌘C copy · ⌘X cut · ⌘V paste (at the insert marker)
       if (meta && e.key.toLowerCase() === "c") { if (engine.selClips.size) { e.preventDefault(); engine.copySelection(); } return; }
@@ -260,33 +322,44 @@ export function ArrangementPage() {
             </button>
           </div>
 
-          {/* track headers (left) + timeline (right) */}
-          <div className="flex overflow-hidden rounded-[4px] border border-line">
-            <div className="w-[220px] shrink-0 border-r border-line bg-[#0e0e12]">
-              {/* spacer strip aligns the header column with the timeline's ruler */}
-              <div className="border-b border-line" style={{ height: HEAD_H }} />
-              {tracks.map((t) => (
-                <TrackHeader key={t.id} t={t} armed={eng.armedChannel === t.id} selected={eng.selTrackId === t.id} onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)} />
-              ))}
-              {tracks.length === 0 && <div className="p-[10px] font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
+          {/* track headers (left) + timeline (right), with the MASTER row pinned below */}
+          <div className="overflow-hidden rounded-[4px] border border-line">
+            <div className="flex">
+              <div className="w-[220px] shrink-0 border-r border-line bg-[#0e0e12]">
+                {/* spacer strip aligns the header column with the timeline's ruler */}
+                <div className="border-b border-line" style={{ height: HEAD_H }} />
+                {tracks.map((t) => (
+                  <TrackHeader key={t.id} t={t} armed={eng.armedChannel === t.id} selected={eng.selTrackId === t.id} fxOpen={fxTrackId === t.id} onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)} onFx={toggleFx} />
+                ))}
+                {tracks.length === 0 && <div className="p-[10px] font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
+              </div>
+              <div className="min-w-0 flex-1">
+                <Timeline height={Math.max(160, HEAD_H + tracks.length * ROW_H)} onEditClip={(trackId, clipId) => setEditSel({ trackId, clipId })} zoomApiRef={zoomApiRef} />
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <Timeline height={Math.max(160, HEAD_H + tracks.length * ROW_H)} onEditClip={(trackId, clipId) => setEditSel({ trackId, clipId })} />
+            {/* MASTER — the mix bus as its own pinned track row (Ableton-style) */}
+            <div className="flex border-t border-line">
+              <div className="w-[220px] shrink-0 border-r border-line bg-[color-mix(in_srgb,var(--accent)_7%,#0e0e12)]">
+                <MasterHeader fxOpen={fxTrackId === MASTER_ID} onFx={() => toggleFx(MASTER_ID)} />
+              </div>
+              <div className="min-w-0 flex-1 bg-[#0c0c10]" />
             </div>
           </div>
 
           {/* selected MIDI track's instrument designer (edits that track's patch) */}
           {selMidiTrack && <Instrument />}
-          {/* selected-clip editor + fx */}
+          {/* selected-clip editor */}
           {sel && <ClipEditor trackId={sel.trackId} clipId={sel.clipId} />}
-          <FxRack />
+          {/* the open FX chain: a track's, or the master's (from the MASTER row's fx chip) */}
+          {fxTrack && <TrackFxPanel t={fxTrack} />}
+          {fxTrackId === MASTER_ID && <FxRack hint="master fx — every track sums into this chain · add devices, drag ⠿ to reorder" />}
         </div>
 
         <div className="mt-[14px] flex items-center gap-3 font-mono text-[10.5px] tracking-[0.03em] text-faint">
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>dbl-click = create · click = insert marker · drag = move (⌘ free) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse.</span>
+          <span>dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse.</span>
         </div>
       </TrackSection>
     </main>

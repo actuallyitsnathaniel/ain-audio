@@ -62,6 +62,8 @@ Things Tailwind can't express cleanly — reuse these, don't reinvent:
 - Keyframes: `spin`, `blink` (+ `.cursor-blink`), `fade-in`, `sheet-up` (bottom-sheet animations).
 - `.tbar-bg` — the translucent blurred transport bar (`color-mix` + `backdrop-filter`).
 - `.scrollbar-hide` — used by the mobile transport nav and other routes.
+- `.fx-scroll` — always-visible thin accent-tinted horizontal scrollbar (the FX device chain;
+  macOS overlay scrollbars would otherwise hide that the row scrolls).
 
 ## Reusable building blocks
 

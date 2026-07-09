@@ -15,7 +15,7 @@ export function DeviceShell({
   return (
     <div
       className={
-        "min-w-[108px] rounded-[4px] border bg-panel2 transition-[opacity,border-color] duration-150 " +
+        "min-w-[136px] rounded-[4px] border bg-panel2 transition-[opacity,border-color] duration-150 " +
         (on ? "border-line2 opacity-100" : "border-line opacity-[0.78]")
       }
     >
