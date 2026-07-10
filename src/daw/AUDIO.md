@@ -157,6 +157,40 @@ re-anchor the clock so the playhead doesn't jump. API: `setActiveClip`/`getClip`
 `pause()` (track playback feeds the taps; the sequencer feeds `sum` — both at once double-sums and
 corrupts metering); `play()` calls `stopSequence()`.
 
+**Consolidate = real bounce (audio).** `consolidateSelection()` (⌘J) is async: audio tracks
+render their selected clips through an `OfflineAudioContext` (`renderAudioSpan`) into ONE new
+stereo buffer — clip-level gain/rate/trim/loop/reverse are printed, track FX/vol/pan are NOT
+(Ableton semantics; they keep applying live). The voicing comes from `audioClipSource(clip, bd)`,
+the same resolver the live scheduler uses, so the bounce sounds exactly like playback. The result
+lands in the import store (`encodeWav` in [data/audio-store.ts](data/audio-store.ts) → float32
+WAV bytes in IndexedDB) as a clean full-width clip tempo-tagged at the bounce bpm. No decoded
+buffers yet (rare) → falls back to the old keep-earliest-source merge. MIDI/drum consolidation
+(note merge) is unchanged. Mutation happens synchronously AFTER all rendering, under one undo.
+
+**Timeline audio waveforms (playback truth).** Audio clips draw their waveform on the timeline
+via `engine.audioClipWave(clip)`: |peak| buckets of the EXACT buffer playback uses (same
+`audioClipSource` resolver — reversed/xfade-baked variants cache per-buffer in a WeakMap), plus
+the geometry to map each pixel's clip-beat → buffer seconds (start offset, rate, auto-loop wrap,
+cut at content end). Cached per clip, keyed on the clip's audio params + bpm + length. Because
+`secPerBeat` is part of the mapping, an **unsynced** clip's wave stretches/squeezes across beats
+as the tempo changes — the picture at any beat is always what plays there. The engine enforces
+the same law on live playback: audio clips are **beat-anchored** (content position ≡ clip-beats ×
+sec/beat), so on a tempo change `setBpm` re-rates synced nodes (tape warble) and **stops +
+re-fires unsynced nodes** at the corrected catch-up offset (dedupe key dropped, scheduler
+re-fires same tick).
+
+**Multi-clip mouse drag.** Dragging a clip that's part of a multi-selection moves the whole
+selection: the Timeline snapshots every selected clip's start at pointer-down and each move calls
+`engine.dragSelectionTo(items, delta)` — a UNIFORM delta (clamped at beat 0, like
+`nudgeSelection`) so the selection keeps its relative layout and selected clips can never trim
+each other in `resolveOverlaps`; only non-selected clips under the drop get trimmed. Beat-move
+only — cross-track hops stay single-clip (or ↑↓ keys); ⌥-dup during a drag reverts to
+single-clip.
+
+**Keyboard zoom.** `+`/`−` (and ⌘+/−, intercepted from browser zoom) zoom the timeline around
+the viewport center — same math as ⌘+wheel. The Timeline publishes `{ zoom(factor) }` into a
+`zoomApiRef` prop; the page's single keyboard authority calls it (no canvas focus needed).
+
 **Per-clip swing (arrangement clips, optional).** `ArrClip.swing` ∈ (0.5, 0.75] — absent/0.5 =
 straight. MPC/Ableton-style: the 2nd 16th of every 8th-note pair lands `swing` of the way through
 the pair (2/3 ≈ triplet feel, 0.75 = hard). Applied **at schedule time** via
