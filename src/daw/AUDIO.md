@@ -273,9 +273,10 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
 - **Select:** click a note · shift+click add/remove · drag empty → marquee (shift adds) ·
   shift+click a gutter key → toggle the whole pitch row · esc clears. Selected notes get a white
   outline; the HUD (top-right) shows live `sel / note / vel / len`.
-- **Edit (mouse):** click empty → draw (snap 1/16) · drag a selected note → move the whole selection ·
+- **Edit (mouse):** **double-click empty → create** (snap 1/16; a plain click only deselects —
+  Live's EDITOR mode, not Draw mode) · drag a selected note → move the whole selection ·
   drag right edge → resize the selection · **hold ⌘/ctrl/⌥ to bypass snap** · **⌥+drag → duplicate**
-  the selection (clone-in-place then move) · double-click / right-click → delete.
+  the selection (clone-in-place then move) · double-click / right-click a note → delete.
 - **Edit (keys, when focused):** ←/→ nudge · ⌥+←/→ nudge without snap · shift+←/→ resize · ↑/↓
   transpose semitone · **shift+↑/↓ octave** · **⌘/ctrl+↑/↓ velocity ±10** · ⌘/ctrl+A select all ·
   ⌘/ctrl+D duplicate (+1 beat) · delete/backspace · esc. A transpose/velocity change blips the
