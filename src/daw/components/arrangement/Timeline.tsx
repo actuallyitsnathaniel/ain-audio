@@ -475,6 +475,38 @@ export function Timeline({
         g.roundRect(x, y + 3, cw, ROW_H - 8, 3);
         g.fill();
         g.globalAlpha = 1;
+        // audio waveform, drawn in PLAYBACK TRUTH: each pixel maps its timeline beat →
+        // buffer seconds through the same geometry the scheduler uses (rate, trim,
+        // auto-loop wrap, cut at content end). Unsynced clips stretch/squeeze across
+        // beats as the tempo changes — the picture is always what plays there.
+        if (c.content.kind === "audio") {
+          const wv = engine.audioClipWave(c);
+          if (wv) {
+            const gain = Math.min(1.5, c.content.gain ?? 1);
+            const midY = y + 3 + (ROW_H - 8) / 2;
+            const half = (ROW_H - 8) / 2 - 4;
+            const n = wv.peaks.length;
+            const loopLen = wv.loopEndSec - wv.loopStartSec;
+            g.globalAlpha = t.mute ? 0.35 : 1;
+            g.fillStyle = "rgba(255,255,255,0.5)";
+            const px0 = Math.max(Math.ceil(x), KEY_W);
+            const px1 = Math.min(x + cw, w);
+            for (let px = px0; px < px1; px++) {
+              const clipBeat = xToBeat(px) - c.startBeat;
+              if (clipBeat < 0) continue;
+              let pos = wv.startSec + clipBeat * wv.secPerBeat * wv.rate;
+              if (wv.looping) {
+                if (pos > wv.loopEndSec && loopLen > 0) pos = wv.loopStartSec + ((pos - wv.loopStartSec) % loopLen);
+              } else if (pos >= wv.endSec) {
+                continue; // content over — silence to the clip's end
+              }
+              const pk = (wv.peaks[Math.min(n - 1, Math.floor((pos / wv.durSec) * n))] || 0) * gain;
+              const hh = Math.max(0.5, Math.min(1, pk) * half);
+              g.fillRect(px, midY - hh, 1, hh * 2);
+            }
+            g.globalAlpha = 1;
+          }
+        }
         // mini content preview (MIDI notes)
         if (c.content.kind === "midi" && c.content.clip.notes.length) {
           const notes = c.content.clip.notes;

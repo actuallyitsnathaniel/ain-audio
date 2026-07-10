@@ -2678,6 +2678,7 @@ class AudioEngine {
     this.stopAudioClips();
     this._importBufs = {};
     this._reverseBufs = {};
+    this._waveCache = {};
     this.arrangement = emptyArrangement();
     saveArrangement(this.arrangement);
     this.insertBeat = 0;
@@ -2856,6 +2857,14 @@ class AudioEngine {
         for (const key in this._startedAudio) {
           const a = this._startedAudio[key];
           if (a.synced && a.baseBpm > 0) a.src.playbackRate.setTargetAtTime(a.baseRate * (bpm / a.baseBpm), tt, 0.02);
+          else if (!a.synced) {
+            // UNSYNCED clips are beat-anchored (content position ≡ clip-beats × sec/beat):
+            // a tempo change moves every beat's wall time, so the live node no longer sits
+            // where the timeline (and its drawn waveform) says. Stop it + drop the dedupe
+            // key — the scheduler re-fires it this tick at the correct catch-up offset.
+            try { a.src.stop(); } catch { /* already stopped */ }
+            delete this._startedAudio[key];
+          }
         }
       }
     }
@@ -3730,6 +3739,65 @@ class AudioEngine {
       loopEndSec = le * dur;
     }
     return { buf, rate, gain: cc.gain ?? 1, startSec: a * dur, endSec: b * dur, trimmedSec, looping, loopStartSec, loopEndSec };
+  }
+
+  // ── timeline waveforms ──
+  // |peak| buckets over a whole buffer, cached per AudioBuffer object (WeakMap — the
+  // reversed/xfade-baked variants are distinct buffers and cache independently).
+  private _peakCache = new WeakMap<AudioBuffer, Float32Array>();
+  private peaksOf(buf: AudioBuffer): Float32Array {
+    const hit = this._peakCache.get(buf);
+    if (hit) return hit;
+    const buckets = Math.min(4096, Math.max(256, Math.floor(buf.duration * 50))); // ~50/sec
+    const p = new Float32Array(buckets);
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const d = buf.getChannelData(ch);
+      const per = d.length / buckets;
+      const step = Math.max(1, Math.floor(per / 32));
+      for (let i = 0; i < buckets; i++) {
+        let m = 0;
+        const e = Math.min(d.length, Math.floor((i + 1) * per));
+        for (let j = Math.floor(i * per); j < e; j += step) {
+          const a = Math.abs(d[j]);
+          if (a > m) m = a;
+        }
+        if (m > p[i]) p[i] = m;
+      }
+    }
+    this._peakCache.set(buf, p);
+    return p;
+  }
+  // Drawing info for an audio clip on the timeline: peaks of the EXACT buffer playback
+  // uses (same audioClipSource resolver) + the geometry to map clip-beats → buffer
+  // seconds. Recomputed when the clip's params or the tempo change (keyed cache), so
+  // the picture tracks playback truthfully — an UNSYNCED clip's wave stretches across
+  // more/fewer beats as the tempo moves, exactly like what you hear.
+  private _waveCache: Record<string, { key: string; wave: NonNullable<ReturnType<AudioEngine["buildClipWave"]>> }> = {};
+  private buildClipWave(clip: ArrClip) {
+    const s = this.audioClipSource(clip, this.beatDur());
+    if (!s) return null;
+    return {
+      peaks: this.peaksOf(s.buf),
+      durSec: s.buf.duration,
+      startSec: s.startSec,
+      endSec: s.endSec,
+      rate: s.rate,
+      looping: s.looping,
+      loopStartSec: s.loopStartSec,
+      loopEndSec: s.loopEndSec,
+      secPerBeat: this.beatDur(),
+    };
+  }
+  audioClipWave(clip: ArrClip) {
+    if (clip.content.kind !== "audio") return null;
+    const cc = clip.content;
+    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, cc.sync, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, this.bpm, clip.lengthBeats].join("|");
+    const hit = this._waveCache[clip.id];
+    if (hit && hit.key === key) return hit.wave;
+    const wave = this.buildClipWave(clip);
+    if (!wave) return null;
+    this._waveCache[clip.id] = { key, wave };
+    return wave;
   }
 
   // Start an audio clip's decoded buffer at its timeline position. Unlike note/drum
