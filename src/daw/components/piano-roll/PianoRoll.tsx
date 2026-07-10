@@ -462,7 +462,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
     }
   };
 
-  const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+  const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
     if (!d) return;
@@ -471,18 +471,8 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
       return;
     }
     if (d.mode === "marquee") {
-      // a click that never dragged on empty space → draw a note
-      const moved = pressXY.current && Math.hypot(d.x1 - d.x0, d.y1 - d.y0) >= DRAG_SLOP;
-      if (!moved && clipRef.current) {
-        const { x, y } = localXY(e);
-        if (x >= KEY_W) {
-          const note: Note = { id: newNoteId(), pitch: clamp(yToPitch(y), LO_MIDI, HI_MIDI), start: clamp(snapTo(xToBeat(x) - SNAP / 2), 0, totalBeats() - SNAP * 2), length: SNAP * 2, vel: 0.85 };
-          clipRef.current.notes.push(note);
-          sel.current = new Set([note.id]);
-          blip(note.pitch);
-          commit();
-        }
-      }
+      // a click that never dragged on empty space just deselects (done at pointer-down)
+      // — Ableton EDITOR mode: creating a note is a DOUBLE-click, never a stray click
       return;
     }
     if ((d.mode === "move" && !d.moved) || (d.mode === "resize" && !d.moved)) {
@@ -492,10 +482,21 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
     commit();
   };
 
+  // Ableton editor mode: double-click a note = delete; double-click empty grid = create
   const onDoubleClick = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = localXY(e);
     const hit = hitNote(x, y);
-    if (hit) deleteNotes([hit.note.id]);
+    if (hit) {
+      deleteNotes([hit.note.id]);
+      return;
+    }
+    // create only inside the pitch grid (not the gutter keyboard or the bottom lane)
+    if (!clipRef.current || x < KEY_W || y >= gridH()) return;
+    const note: Note = { id: newNoteId(), pitch: clamp(yToPitch(y), LO_MIDI, HI_MIDI), start: clamp(snapTo(xToBeat(x) - SNAP / 2), 0, totalBeats() - SNAP * 2), length: SNAP * 2, vel: 0.85 };
+    clipRef.current.notes.push(note);
+    sel.current = new Set([note.id]);
+    blip(note.pitch);
+    commit();
   };
 
   // ── editing ops ──
