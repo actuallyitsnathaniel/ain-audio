@@ -171,13 +171,26 @@ buffers yet (rare) → falls back to the old keep-earliest-source merge. MIDI/dr
 via `engine.audioClipWave(clip)`: |peak| buckets of the EXACT buffer playback uses (same
 `audioClipSource` resolver — reversed/xfade-baked variants cache per-buffer in a WeakMap), plus
 the geometry to map each pixel's clip-beat → buffer seconds (start offset, rate, auto-loop wrap,
-cut at content end). Cached per clip, keyed on the clip's audio params + bpm + length. Because
+cut at content end). Cached per clip, keyed on the clip's audio params + bpm + length.
+**Tempo source of truth:** all arrangement-domain geometry (wave, bounce) reads
+`arrangement.bpm`, never the transport clock `engine.bpm` — the transport can sit at another
+page's tempo until play. They're kept in lockstep anyway (boot + `setArrangementBpm` sync
+`bpm` unconditionally, `playArrangement` re-asserts it), so playing never "snaps" the picture. Because
 `secPerBeat` is part of the mapping, an **unsynced** clip's wave stretches/squeezes across beats
-as the tempo changes — the picture at any beat is always what plays there. The engine enforces
+as the tempo changes — the picture at any beat is always what plays there. **Content boundaries**
+are drawn from the same geometry: the wave tapers (~12 px) into every **loop-wrap seam** (dark
+separator line, one per auto-loop pass at `contentBeat(loopEnd) + k·period`) and into the
+**one-shot content end** (bright cap — sound left of it, silence right); a bright cap also marks
+content start at the clip's left edge. This boundary math is the intended base for future clip
+manipulation UI (stretch/squish/cut handles). The engine enforces
 the same law on live playback: audio clips are **beat-anchored** (content position ≡ clip-beats ×
 sec/beat), so on a tempo change `setBpm` re-rates synced nodes (tape warble) and **stops +
 re-fires unsynced nodes** at the corrected catch-up offset (dedupe key dropped, scheduler
-re-fires same tick).
+re-fires same tick). **Unsynced clip LENGTHS are time-true**: `setArrangementBpm` rescales their
+`lengthBeats` by the tempo ratio (start stays beat-anchored, the END moves), so a tempo change
+never cuts a sample short nor makes it re-loop — a clip that exactly fit its content keeps
+fitting at every tempo. Deliberately no overlap resolution on rescale (trimming neighbors every
+tick of a tempo drag would be destructive); overlaps resolve on the next user edit.
 
 **Multi-clip mouse drag.** Dragging a clip that's part of a multi-selection moves the whole
 selection: the Timeline snapshots every selected clip's start at pointer-down and each move calls
@@ -190,6 +203,28 @@ single-clip.
 **Keyboard zoom.** `+`/`−` (and ⌘+/−, intercepted from browser zoom) zoom the timeline around
 the viewport center — same math as ⌘+wheel. The Timeline publishes `{ zoom(factor) }` into a
 `zoomApiRef` prop; the page's single keyboard authority calls it (no canvas focus needed).
+**⌘1/⌘2** step the snap grid finer/coarser through the snap Select's own ladder
+(bar → 1/4 → 1/8 → 1/16 → 1/32), Ableton-style.
+
+**Pane key focus (Ableton/Logic last-clicked-area model).** The studio has two key-focus panes:
+the **timeline** (default — toolbar, track headers, canvas, master row) and the **editor** (the
+bottom region: Instrument, clip editor / piano roll, FX panels). Clicking a pane takes key
+focus (pointer-down capture; double-click-to-edit focuses the editor); the focused pane shows a
+subtle accent ring while the editor is open. **Transport (Space/Home/L) + undo (⌘Z/⇧⌘Z/⌘Y) are
+global**; every other shortcut is timeline-scoped and simply skipped when the editor has focus —
+the piano roll's own keys (on its DOM-focused canvas) then act alone. Taking focus back to the
+timeline blurs any focused canvas so keys can never double-fire. When the editor region closes,
+focus falls back to the timeline.
+
+**Per-clip audio loop toggle + content-end magnet.** The audio content's `loop?: boolean`
+(absent = ON, so old saves keep looping) gates the auto-loop: OFF = **the clip is pinned to its
+material** — `clipContentCap` clamps `lengthBeats` to the content's span in every path
+(`resizeClip`, `resizeSelection`, and `setClipContent`, so toggling loop off or shrinking the
+content via trim/transpose/sync pulls an over-long clip's edge in). The edge simply stops at
+the sample's end; no silence tail, no loop slivers. Toggled in the AudioClipEditor (`loop on/off` chip next to
+sync/rev); it's a STRUCTURAL live-clip change (stop + re-fire) and part of the wave cache key.
+Edge-resize also has a **content-end magnet**: when the snapped edge lands within half a grid
+step (or 6 px) of where the sample actually ends, it snaps exactly there.
 
 **Per-clip swing (arrangement clips, optional).** `ArrClip.swing` ∈ (0.5, 0.75] — absent/0.5 =
 straight. MPC/Ableton-style: the 2nd 16th of every 8th-note pair lands `swing` of the way through
@@ -202,8 +237,15 @@ proportionally. Set via `engine.setClipSwing(trackId, clipId, v)` — the swing 
 editor (MIDI + drum clips; audio clips don't swing). Undoable as **one step per knob gesture**
 via `pushUndoCoalesced(key)` — rapid same-key pushes (<1.2 s apart) collapse into the
 pre-gesture snapshot; any discrete `pushUndo`, a different key, a pause, or undo/redo breaks the
-run (the generic mechanism for continuous params whose UI has no pointer-down hook). **Track
-vol/pan and the master fader use the same mechanism** — undo snapshots are `UndoSnap { a,
+run (the generic mechanism for continuous params whose UI has no pointer-down hook).
+**Clip-content commits use it too** (`setClipContent` → `"content:"+clipId`): piano-roll /
+drum-grid gesture commits and audio-param knobs are each one ⌘Z step — internal callers that
+already pushed a frame pass `undoable=false`. ⌘Z itself is GLOBAL (one app-wide history).
+Undo keeps the editor open: `_restoreArrangement` retains the selection ids that survive the
+restore, and bumps `engine.undoStamp` — the ClipEditor keys its roll/grid on `clipId + stamp`,
+remounting them with the restored content (they edit a working copy, so a remount is what
+prevents a stale roll from re-committing old notes).
+**Track vol/pan and the master fader use the same mechanism** — undo snapshots are `UndoSnap { a,
 masterVol }` (the master fader isn't arrangement state), and `_restoreArrangement` re-syncs the
 live mixer: master gain, strip gains/pans, and each strip's FX chain when the restored device
 list differs. Legacy beat-mode keeps its separate `sequence.swing`.
@@ -401,6 +443,15 @@ stops oscs + sub + noise + **sampleSrc** + all LFOs. A voice is ≤ ~14 nodes (b
   Buffers cached by **preset id** (`_sampleBufs[id]`), so instruments sharing a preset share one decode.
 - **Filter ON/OFF** — `filter.on` (omitted = enabled). Bypass swaps the biquad to `allpass` (flat
   magnitude, path shape unchanged); the cutoff envelope + cutoff-LFO are skipped.
+- **Voicing** (`SynthPatch.voices`, absent = poly · 1 voice) — Serum-style: `mode` poly/mono,
+  `unison` (1–8), `detune` (cents at the stack extremes), `width` (stereo spread 0–1). Unison
+  replicates **osc1/osc2 only** (sub/noise/sample stay single/centered): voice k of N sits at
+  `k∈[−1,+1]` symmetric → `detune·k` cents through a per-voice `StereoPanner` at `width·k`,
+  levels normalized by `1/√N` (constant power). Odd N keeps an exact center voice; the spread
+  centers on each osc's own cents. **Mono = last-note priority per destination**: starting a
+  note fast-releases the voice still sounding into that dest (`_monoVoices` map; releaseVoice is
+  double-stop safe). Edited in the Instrument panel's VOICES tab — which always writes the FULL
+  `voices` object (deepMerge over an absent field would store a partial).
 - **Patch store** — `engine.patches` = `BUILTIN_PATCHES` (glass pad / neon pluck / sub bass) merged over
   user patches (`localStorage["ain-synth-patches"]`), **plus one seeded patch per sampled preset**
   (`seedPresetPatches`, keyed by preset name, `patchFromPreset` → sample source on). `engine.synthPatches`

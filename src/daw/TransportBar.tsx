@@ -80,6 +80,31 @@ function CpuMeter() {
   );
 }
 
+// non-standard Chrome/Edge heap numbers; Firefox/Safari don't expose them
+const PERF_MEM = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory ? true : false;
+
+function MemMeter() {
+  const ref = useRef<HTMLSpanElement>(null);
+  const last = useRef(0);
+  useRafLoop(() => {
+    const m = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+    if (!m || !ref.current) return;
+    const now = performance.now();
+    if (now - last.current < 1000) return; // heap numbers don't need 60fps
+    last.current = now;
+    ref.current.textContent = Math.round(m.usedJSHeapSize / 1048576) + "MB";
+  });
+  if (!PERF_MEM) return null;
+  return (
+    <span
+      className="rounded-[3px] border border-line px-2 py-1 font-mono text-[11px] whitespace-nowrap text-faint max-[760px]:hidden"
+      title="this tab's JS heap. browsers look hungry by design — heaps are pre-grown and garbage-collected lazily, and decoded audio + JIT code get counted too. a big number is the browser hoarding, not the app leaking"
+    >
+      mem <span ref={ref}>—</span>
+    </span>
+  );
+}
+
 export function TransportBar() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -130,6 +155,7 @@ export function TransportBar() {
         </button>
       </nav>
       <CpuMeter />
+      <MemMeter />
     </header>
   );
 }

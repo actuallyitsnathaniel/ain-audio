@@ -182,6 +182,17 @@ export function ArrangementPage() {
   };
   // timeline zoom controls, filled by <Timeline> — the page key handler drives them
   const zoomApiRef = useRef<{ zoom: (factor: number) => void } | null>(null);
+  // ── pane KEY FOCUS (Ableton-style last-clicked area): edit keys go exclusively to
+  // the focused pane. Ref for the (stable) key handler, state for the visual ring.
+  const [pane, setPane] = useState<"timeline" | "editor">("timeline");
+  const paneRef = useRef<"timeline" | "editor">("timeline");
+  const focusPane = (p: "timeline" | "editor") => {
+    paneRef.current = p;
+    setPane(p);
+    // taking focus back to the timeline must also drop the piano roll's DOM focus,
+    // or its canvas onKeyDown would double-fire alongside the timeline keys
+    if (p === "timeline" && document.activeElement instanceof HTMLElement && document.activeElement.tagName === "CANVAS") document.activeElement.blur();
+  };
   // The bottom editor follows the SELECTION: whenever exactly one clip is selected (click,
   // arrow-key, split result…), it edits that clip. A multi-selection keeps the last single
   // editor open. `editSel` is a local fallback (e.g. a double-clicked clip within a multi).
@@ -201,11 +212,13 @@ export function ArrangementPage() {
     };
   }, []);
 
-  // ── the arrangement is the KEYBOARD AUTHORITY (not DOM focus) ──
-  // A single page-level handler routes transport + edit keys, so Space always plays and
-  // Delete always deletes the SELECTION — regardless of which button the mouse last
-  // touched. Operates on engine.selClips (the multi-selection). Defers only when the
-  // user is genuinely typing in a field.
+  // ── the arrangement is the KEYBOARD AUTHORITY (not DOM focus) — with PANE FOCUS ──
+  // A single page-level handler routes keys. TRANSPORT + UNDO are global (Space always
+  // plays, like Ableton). EDIT keys go exclusively to the pane that has KEY FOCUS —
+  // "timeline" (default) or "editor" (the bottom instrument/clip/fx region) — set by
+  // the last pointer-down (Ableton/Logic's last-clicked-area model). The piano roll's
+  // own note keys live on its DOM-focused canvas, so they're exclusive by nature; when
+  // the timeline takes focus back we blur that canvas so keys can't double-fire.
   useEffect(() => {
     const typing = (t: EventTarget | null) => {
       const el = t as HTMLElement | null;
@@ -215,7 +228,7 @@ export function ArrangementPage() {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e.target)) return;
       const meta = e.metaKey || e.ctrlKey;
-      // transport
+      // ── GLOBAL: transport + undo, whatever pane is focused ──
       if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
       if (e.code === "Home") { e.preventDefault(); engine.returnToStart(); return; }
       if (e.key.toLowerCase() === "l" && !meta) {
@@ -225,10 +238,25 @@ export function ArrangementPage() {
         else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
         return;
       }
+      // (undo keeps the surviving selection, so the editor stays open — the ClipEditor
+      // remounts its roll/grid via engine.undoStamp to show the restored content)
+      if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) engine.redo(); else engine.undo(); return; }
+      if (meta && e.key.toLowerCase() === "y") { e.preventDefault(); engine.redo(); return; }
+      // ── everything below is TIMELINE-scoped: skip when the editor pane has focus
+      // (the piano roll / editors handle their own keys there) ──
+      if (paneRef.current !== "timeline") return;
       // timeline zoom: + / − Ableton-style, and ⌘+/− (intercepted — this page's zoom,
       // not the browser's). "=" is the unshifted + key.
       if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomApiRef.current?.zoom(1.25); return; }
       if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomApiRef.current?.zoom(1 / 1.25); return; }
+      // grid size: ⌘1 finer · ⌘2 coarser (Ableton) — steps the snap Select's own ladder
+      if (meta && (e.key === "1" || e.key === "2")) {
+        e.preventDefault();
+        const grid = [engine.arrangement.beatsPerBar, 1, 0.5, 0.25, 0.125]; // bar → 1/32
+        const i = grid.findIndex((g) => Math.abs(g - engine.snapBeats) < 1e-6);
+        engine.setSnapBeats(e.key === "1" ? (i < 0 ? 0.25 : grid[Math.min(grid.length - 1, i + 1)]) : i < 0 ? 1 : grid[Math.max(0, i - 1)]);
+        return;
+      }
       // select-all
       if (meta && e.key.toLowerCase() === "a") { e.preventDefault(); engine.selectAllClips(); return; }
       // delete every selected clip
@@ -255,9 +283,6 @@ export function ArrangementPage() {
       if (meta && e.key.toLowerCase() === "c") { if (engine.selClips.size) { e.preventDefault(); engine.copySelection(); } return; }
       if (meta && e.key.toLowerCase() === "x") { if (engine.selClips.size) { e.preventDefault(); engine.cutSelection(); setEditSel(null); } return; }
       if (meta && e.key.toLowerCase() === "v") { if (engine.hasClipboard()) { e.preventDefault(); engine.pasteClipboard(); } return; }
-      // undo / redo: ⌘Z · ⌘⇧Z (or ⌘Y)
-      if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) engine.redo(); else engine.undo(); setEditSel(null); return; }
-      if (meta && e.key.toLowerCase() === "y") { e.preventDefault(); engine.redo(); setEditSel(null); return; }
       // arrow keys on the selection (need a selection to matter)
       if (engine.selClips.size) {
         const step = meta ? 0.25 : engine.snapBeats > 0 ? engine.snapBeats : 1; // ⌘ = fine (1/16)
@@ -288,12 +313,23 @@ export function ArrangementPage() {
     engine.addTrack(kind);
   };
 
+  // when nothing renders in the editor region, key focus falls back to the timeline.
+  // The ref resets in an effect; the VISIBLE pane derives (no setState-in-effect) —
+  // any editor reopening path (double-click, fx chip) calls focusPane itself.
+  const editorOpen = !!(selMidiTrack || sel || fxTrack || fxTrackId === MASTER_ID);
+  useEffect(() => {
+    if (!editorOpen) paneRef.current = "timeline";
+  }, [editorOpen]);
+  const paneShown = editorOpen ? pane : "timeline";
+  // the focused pane's cue (box-shadow ring — no layout shift)
+  const focusRing = " ring-1 ring-[color-mix(in_srgb,var(--accent)_30%,transparent)]";
+
   return (
     <main className="relative z-[1] pt-[64px]">
       <TrackSection id="studio" label="studio" rail="05">
         <SectionHead num="05" title="studio" sub="linear timeline · place midi, drum + audio clips on tracks · runs through the fx rack" />
 
-        <div className="flex flex-col gap-[12px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]">
+        <div className="flex flex-col gap-[12px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]" onPointerDownCapture={() => focusPane("timeline")}>
           <PlaybackPane />
 
           {/* add-track toolbar (kept OUT of the ruler-aligned strip below) */}
@@ -323,7 +359,7 @@ export function ArrangementPage() {
           </div>
 
           {/* track headers (left) + timeline (right), with the MASTER row pinned below */}
-          <div className="overflow-hidden rounded-[4px] border border-line">
+          <div className={"overflow-hidden rounded-[4px] border border-line" + (editorOpen && paneShown === "timeline" ? focusRing : "")}>
             <div className="flex">
               <div className="w-[220px] shrink-0 border-r border-line bg-[#0e0e12]">
                 {/* spacer strip aligns the header column with the timeline's ruler */}
@@ -334,7 +370,14 @@ export function ArrangementPage() {
                 {tracks.length === 0 && <div className="p-[10px] font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
               </div>
               <div className="min-w-0 flex-1">
-                <Timeline height={Math.max(160, HEAD_H + tracks.length * ROW_H)} onEditClip={(trackId, clipId) => setEditSel({ trackId, clipId })} zoomApiRef={zoomApiRef} />
+                <Timeline
+                height={Math.max(160, HEAD_H + tracks.length * ROW_H)}
+                onEditClip={(trackId, clipId) => {
+                  setEditSel({ trackId, clipId });
+                  focusPane("editor"); // double-click-to-edit focuses the editor (Ableton)
+                }}
+                zoomApiRef={zoomApiRef}
+              />
               </div>
             </div>
             {/* MASTER — the mix bus as its own pinned track row (Ableton-style) */}
@@ -346,20 +389,26 @@ export function ArrangementPage() {
             </div>
           </div>
 
-          {/* selected MIDI track's instrument designer (edits that track's patch) */}
-          {selMidiTrack && <Instrument />}
-          {/* selected-clip editor */}
-          {sel && <ClipEditor trackId={sel.trackId} clipId={sel.clipId} />}
-          {/* the open FX chain: a track's, or the master's (from the MASTER row's fx chip) */}
-          {fxTrack && <TrackFxPanel t={fxTrack} />}
-          {fxTrackId === MASTER_ID && <FxRack hint="master fx — every track sums into this chain · add devices, drag ⠿ to reorder" />}
+          {/* ── EDITOR pane (instrument · clip editor · fx) — clicking here takes key
+              focus away from the timeline, so piano-roll keys never move clips ── */}
+          {editorOpen && (
+            <div className={"flex flex-col gap-[12px] rounded-[4px]" + (paneShown === "editor" ? focusRing : "")} onPointerDownCapture={() => focusPane("editor")}>
+              {/* selected-clip editor (piano roll) sits directly under the timeline */}
+              {sel && <ClipEditor trackId={sel.trackId} clipId={sel.clipId} />}
+              {/* selected MIDI track's instrument designer (edits that track's patch) */}
+              {selMidiTrack && <Instrument />}
+              {/* the open FX chain: a track's, or the master's (from the MASTER row's fx chip) */}
+              {fxTrack && <TrackFxPanel t={fxTrack} />}
+              {fxTrackId === MASTER_ID && <FxRack hint="master fx — every track sums into this chain · add devices, drag ⠿ to reorder" />}
+            </div>
+          )}
         </div>
 
         <div className="mt-[14px] flex items-center gap-3 font-mono text-[10.5px] tracking-[0.03em] text-faint">
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse.</span>
+          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse.</span>
         </div>
       </TrackSection>
     </main>

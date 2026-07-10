@@ -66,9 +66,10 @@ export function AudioClipEditor({ content, looping = false, onCommit }: { conten
         <Knob size={38} label="gain" value={content.gain ?? 1} min={0} max={2} defaultValue={1} onChange={(v) => onCommit({ ...content, gain: v })} fmt={(v) => (v <= 0 ? "-∞" : (20 * Math.log10(v)).toFixed(1) + "dB")} />
       </div>
 
-      {/* sample controls: varispeed · tempo-sync · reverse. Looping is automatic (the
-          clip re-hashes its content when dragged longer than the sample) → the loop-seam
-          controls appear only when the clip is actually overflowing. */}
+      {/* sample controls: varispeed · tempo-sync · reverse · loop. Loop ON (default) =
+          a clip dragged longer than the sample re-hashes to fill; OFF = play once,
+          silence after. The loop-seam controls appear only when the clip is actually
+          overflowing AND loop is on. */}
       <div className="flex flex-wrap items-end gap-x-[12px] gap-y-[6px]">
         <Knob size={34} label="semi" value={content.semi ?? 0} min={-24} max={24} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, semi: Math.round(v) })} fmt={(v) => (Math.round(v) > 0 ? "+" : "") + Math.round(v)} />
         <Knob size={34} label="fine" value={content.cents ?? 0} min={-100} max={100} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, cents: Math.round(v) })} fmt={(v) => Math.round(v) + "c"} />
@@ -77,6 +78,13 @@ export function AudioClipEditor({ content, looping = false, onCommit }: { conten
         </button>
         <button className={toggle + " self-end " + on(!!content.reverse)} title="play the sample backwards" onClick={() => onCommit({ ...content, reverse: !content.reverse })}>
           rev {content.reverse ? "on" : "off"}
+        </button>
+        <button
+          className={toggle + " self-end " + on(content.loop !== false)}
+          title="auto-loop: a clip dragged longer than the sample re-hashes from the loop region to fill. off = the sample plays once and the rest is silence"
+          onClick={() => onCommit({ ...content, loop: content.loop === false })}
+        >
+          loop {content.loop !== false ? "on" : "off"}
         </button>
         {looping && (
           <span className="flex items-end gap-[12px] rounded-[3px] border border-line bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] px-[8px] py-[3px]">

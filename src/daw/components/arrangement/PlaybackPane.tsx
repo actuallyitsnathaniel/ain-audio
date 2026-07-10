@@ -144,11 +144,12 @@ export function PlaybackPane() {
       {/* snap grid */}
       <label className="flex items-center gap-[5px]">
         <span className={cap}>snap</span>
-        <Select value={eng.snapBeats} onChange={(n) => engine.setSnapBeats(n)} title="clip snap grid">
+        <Select value={eng.snapBeats} onChange={(n) => engine.setSnapBeats(n)} title="clip snap grid (⌘1 finer · ⌘2 coarser)">
           <option value={bpb}>bar</option>
           <option value={1}>1/4</option>
           <option value={0.5}>1/8</option>
           <option value={0.25}>1/16</option>
+          <option value={0.125}>1/32</option>
           <option value={0}>off</option>
         </Select>
       </label>
