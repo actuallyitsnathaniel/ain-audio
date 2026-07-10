@@ -47,6 +47,7 @@ export type ClipContent =
       bars?: number; // detected bar count
       key?: string; // detected musical key (display)
       reverse?: boolean; // play backwards
+      loop?: boolean; // auto-loop to fill a clip longer than the content (absent = ON); off = play once, silence after
     };
 
 export interface ArrClip {

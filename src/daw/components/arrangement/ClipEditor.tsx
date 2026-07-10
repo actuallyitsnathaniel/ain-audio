@@ -37,7 +37,7 @@ function SwingKnob({ trackId, clipId, value }: { trackId: string; clipId: string
 // `content.notes` — the source of truth. The sequence grid shows those notes on-grid and
 // hatch-flags any step whose notes it can't fully represent. A grid edit is on-grid, so
 // it regenerates the notes from the grid.
-function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing }: { trackId: string; clipId: string; pat: SequenceClip; notes?: NoteClip; startBeat: number; swing?: number }) {
+function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: { trackId: string; clipId: string; pat: SequenceClip; notes?: NoteClip; startBeat: number; swing?: number; stamp: number }) {
   const [view, setView] = useState<"seq" | "roll">("seq");
   const kit = KITS.find((k) => k.id === pat.kitId) || engine.kit;
   // sequence-view pattern: derive from notes when they're the truth, else the raw pattern
@@ -80,10 +80,10 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing }: { track
         </span>
       </div>
       {view === "seq" ? (
-        <DrumClipGrid key={clipId + "-seq"} pattern={gridPat} notes={notes} startBeat={startBeat} onCommit={commitGrid} />
+        <DrumClipGrid key={clipId + "-seq:" + stamp} pattern={gridPat} notes={notes} startBeat={startBeat} onCommit={commitGrid} />
       ) : (
         <PianoRoll
-          key={clipId + "-roll"}
+          key={clipId + "-roll:" + stamp}
           height={220}
           trackId={trackId}
           initialClip={notes ?? patternToNotes(pat, kit)}
@@ -98,6 +98,9 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing }: { track
 export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: string }) {
   useEngine(["arrange"]);
   const clip = engine.getArrClip(trackId, clipId);
+  // undo/redo bumps undoStamp → the roll/grid remount and reload the RESTORED content
+  // (they edit a working copy, so without this they'd re-commit stale notes)
+  const stamp = engine.undoStamp;
   if (!clip) return null;
 
   if (clip.content.kind === "midi") {
@@ -109,7 +112,7 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
           <SwingKnob trackId={trackId} clipId={clipId} value={clip.swing} />
         </div>
         <PianoRoll
-          key={clipId}
+          key={clipId + ":" + stamp}
           height={220}
           trackId={trackId}
           initialClip={midi.clip}
@@ -120,7 +123,7 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
   }
 
   if (clip.content.kind === "drum") {
-    return <DrumClipView trackId={trackId} clipId={clipId} pat={clip.content.pattern} notes={clip.content.notes} startBeat={clip.startBeat} swing={clip.swing} />;
+    return <DrumClipView trackId={trackId} clipId={clipId} pat={clip.content.pattern} notes={clip.content.notes} startBeat={clip.startBeat} swing={clip.swing} stamp={stamp} />;
   }
 
   // audio: import a file, trim it, set its level

@@ -139,9 +139,27 @@ export function Timeline({
     if (created) engine.selectClip(created.id);
   };
 
+  // ── cursor feedback: the pointer always shows the gesture it would perform ──
+  const setCursor = (c: string) => {
+    const cv = ref.current;
+    if (cv && cv.style.cursor !== c) cv.style.cursor = c;
+  };
+  const hoverCursor = (x: number, y: number): string => {
+    if (y < HEAD_H) return "pointer"; // ruler: seek (shift = loop brace)
+    const hit = hitClip(x, y);
+    if (hit) return hit.edge ? "ew-resize" : "grab";
+    return yToTrackIndex(y) < tracks().length ? "crosshair" : "default"; // lane: marquee/insert
+  };
+  const DRAG_CURSOR: Record<string, string> = { move: "grabbing", resize: "ew-resize", marquee: "crosshair", seek: "pointer", brace: "col-resize" };
+
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const d = drag.current;
-    if (!d) return;
+    if (!d) {
+      const p = localXY(e);
+      setCursor(hoverCursor(p.x, p.y));
+      return;
+    }
+    setCursor(DRAG_CURSOR[d.mode] || "default");
     const { x } = localXY(e);
     const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
     if (d.mode === "seek") {
@@ -177,7 +195,21 @@ export function Timeline({
     } else if (d.mode === "resize") {
       if (!d.moved) { engine.pushUndo(); d.moved = true; } // snapshot once
       const c = tracks().find((t) => t.id === d.trackId)?.clips.find((x) => x.id === d.clipId);
-      if (c) engine.resizeClip(d.trackId, d.clipId, Math.max(0.25, beat - c.startBeat));
+      if (c) {
+        let len = Math.max(0.25, beat - c.startBeat);
+        // magnetic CONTENT END for audio: when the (snapped) edge lands near where the
+        // sample actually ends, snap exactly there — "reveal through to the end" never
+        // overshoots into a loop sliver / silence by one grid line.
+        if (c.content.kind === "audio") {
+          const wv = engine.audioClipWave(c);
+          if (wv) {
+            const endB = (wv.endSec - wv.startSec) / wv.rate / wv.secPerBeat;
+            const tol = Math.max((engine.snapBeats || 0.25) / 2, 6 / view.current.ppb);
+            if (Math.abs(len - endB) < tol) len = endB;
+          }
+        }
+        engine.resizeClip(d.trackId, d.clipId, len);
+      }
     } else if (d.mode === "marquee") {
       const { y } = localXY(e);
       if (!d.moved && Math.abs(x - d.x0) < 3 && Math.abs(y - d.y0) < 3) return; // slop
@@ -208,6 +240,8 @@ export function Timeline({
       engine.clearSelection();
     }
     drag.current = null;
+    const p = localXY(e);
+    setCursor(hoverCursor(p.x, p.y)); // back to the hover state under the pointer
   };
 
   const onDoubleClick = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -300,16 +334,13 @@ export function Timeline({
       key: res.key,
     };
 
-    // over an existing AUDIO clip? → replace its content (keeps its position/length)
+    engine.pushUndo();
+    // empty space in an AUDIO track's lane → place the clip THERE. A drop ON an
+    // existing clip never replaces it — that space is taken, so the file gets a NEW
+    // track (as does a drop on a midi/drum row or below the tracks).
     const hit = y >= HEAD_H ? hitClip(x, y) : null;
-    if (hit && hit.c.content.kind === "audio") {
-      engine.setClipContent(hit.t.id, hit.c.id, { ...audioContent });
-      engine.selectClip(hit.c.id);
-      onEditClip(hit.t.id, hit.c.id);
-      return;
-    }
-    // otherwise → a NEW audio track with the clip on it (the default gesture)
-    const track = engine.addTrack("audio");
+    const rowTrack = y >= HEAD_H ? tracks()[yToTrackIndex(y)] : undefined;
+    const track = !hit && rowTrack?.kind === "audio" ? rowTrack : engine.addTrack("audio");
     const created = engine.addClip(track.id, { startBeat: beat, lengthBeats, loop: false, content: { ...audioContent } });
     if (created) { engine.selectClip(created.id); onEditClip(track.id, created.id); }
   };
@@ -479,14 +510,35 @@ export function Timeline({
         // buffer seconds through the same geometry the scheduler uses (rate, trim,
         // auto-loop wrap, cut at content end). Unsynced clips stretch/squeeze across
         // beats as the tempo changes — the picture is always what plays there.
+        // does the content LOOP/TILE to fill the clip? (drives the end-corner marker)
+        let tiles = false;
+        if (c.content.kind === "midi") tiles = c.content.clip.notes.length > 0 && c.lengthBeats > clipBeats(c.content.clip) + 1e-6;
+        else if (c.content.kind === "drum") tiles = c.lengthBeats > c.content.pattern.steps * 0.25 + 1e-6; // step = 1/16
         if (c.content.kind === "audio") {
           const wv = engine.audioClipWave(c);
           if (wv) {
+            tiles = wv.looping;
             const gain = Math.min(1.5, c.content.gain ?? 1);
             const midY = y + 3 + (ROW_H - 8) / 2;
             const half = (ROW_H - 8) / 2 - 4;
             const n = wv.peaks.length;
             const loopLen = wv.loopEndSec - wv.loopStartSec;
+            // ── content boundaries (clip-beats): every loop-wrap seam, or the one-shot
+            // content end. The wave TAPERS into each one so a repeat reads before the
+            // seam line does. linear beats of a buffer position = (sec−start)/rate/spb.
+            const contentBeat = (sec: number) => (sec - wv.startSec) / wv.rate / wv.secPerBeat;
+            const boundaries: number[] = [];
+            let oneShotEnd: number | null = null;
+            if (wv.looping) {
+              const period = loopLen / wv.rate / wv.secPerBeat;
+              if (period > 0.05) for (let b = contentBeat(wv.loopEndSec); b < c.lengthBeats - 1e-6; b += period) boundaries.push(b);
+            } else {
+              const e = contentBeat(wv.endSec);
+              if (e < c.lengthBeats - 1e-6) { oneShotEnd = e; boundaries.push(e); }
+            }
+            const bpx = boundaries.map((b) => beatToX(c.startBeat + b));
+            const TAPER_PX = 12;
+            let bi = 0;
             g.globalAlpha = t.mute ? 0.35 : 1;
             g.fillStyle = "rgba(255,255,255,0.5)";
             const px0 = Math.max(Math.ceil(x), KEY_W);
@@ -500,9 +552,23 @@ export function Timeline({
               } else if (pos >= wv.endSec) {
                 continue; // content over — silence to the clip's end
               }
+              while (bi < bpx.length && bpx[bi] < px) bi++;
+              const taper = bi < bpx.length && bpx[bi] - px < TAPER_PX ? (bpx[bi] - px) / TAPER_PX : 1;
               const pk = (wv.peaks[Math.min(n - 1, Math.floor((pos / wv.durSec) * n))] || 0) * gain;
-              const hh = Math.max(0.5, Math.min(1, pk) * half);
+              const hh = Math.max(0.5, Math.min(1, pk) * half * taper);
               g.fillRect(px, midY - hh, 1, hh * 2);
+            }
+            // seam lines: dark separator at each loop wrap; bright caps at content start
+            // + the true sample end (one-shot) — "the sample lives between the caps"
+            g.fillStyle = "rgba(0,0,0,0.45)";
+            for (const sx of bpx) {
+              if (sx > x + 1 && sx < x + cw - 1) g.fillRect(sx, y + 3, 1, ROW_H - 8);
+            }
+            g.fillStyle = "rgba(255,255,255,0.65)";
+            if (x >= KEY_W) g.fillRect(x + 1, y + 4, 1.5, ROW_H - 10);
+            if (oneShotEnd != null) {
+              const ex = beatToX(c.startBeat + oneShotEnd);
+              if (ex > x + 2 && ex < x + cw - 1) g.fillRect(ex - 0.5, y + 4, 1.5, ROW_H - 10);
             }
             g.globalAlpha = 1;
           }
@@ -525,6 +591,21 @@ export function Timeline({
             if (nx > x + cw) return;
             g.fillRect(nx, ny, Math.min(nw, x + cw - nx), 2);
           });
+        }
+        // end-corner marker (Ableton-style): ◥ = the clip simply ends here;
+        // ◥◥ doubled = the content loops/tiles to fill the clip
+        if (cw > 18) {
+          const tri = (tx: number) => {
+            g.beginPath();
+            g.moveTo(tx, y + 4);
+            g.lineTo(tx - 6, y + 4);
+            g.lineTo(tx, y + 10);
+            g.closePath();
+            g.fill();
+          };
+          g.fillStyle = "rgba(255,255,255,0.8)";
+          tri(x + cw - 2);
+          if (tiles) tri(x + cw - 9);
         }
         // name + selection outline
         g.fillStyle = "rgba(0,0,0,0.6)";
@@ -584,6 +665,9 @@ export function Timeline({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onPointerLeave={() => {
+        if (!drag.current) setCursor("default");
+      }}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       onDragOver={onDragOver}

@@ -52,6 +52,7 @@ const TABS = [
   { id: "filter", label: "FILTER" },
   { id: "amp", label: "AMP" },
   { id: "lfo", label: "LFO" },
+  { id: "voices", label: "VOICES" },
 ] as const;
 
 export function Instrument() {
@@ -61,7 +62,7 @@ export function Instrument() {
   const builtin = eng.isBuiltinPatch(id);
   const midiStatus = eng.midiStatus;
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"sources" | "filter" | "amp" | "lfo">("sources");
+  const [tab, setTab] = useState<"sources" | "filter" | "amp" | "lfo" | "voices">("sources");
 
   // computer-keyboard state (Ableton convention): Z/X octave, C/V velocity
   const [octave, setOctave] = useState(0);
@@ -107,6 +108,11 @@ export function Instrument() {
   }, []);
 
   const u = (partial: Parameters<typeof engine.updateActivePatch>[0]) => engine.updateActivePatch(partial);
+  // voicing (poly/mono + unison): read with UX-friendly defaults so raising the voices
+  // knob on an old patch gets a musical detune/width; ALWAYS write the full object
+  // (deepMerge over an absent `voices` would store a partial otherwise).
+  const vc = p.voices ?? { mode: "poly" as const, unison: 1, detune: 14, width: 0.6 };
+  const uv = (patch: Partial<NonNullable<SynthPatch["voices"]>>) => u({ voices: { ...vc, ...patch } } as Parameters<typeof engine.updateActivePatch>[0]);
   // partial merge of the (guaranteed-present) sample source — deepMerge keeps the rest.
   // `sample?` on SynthPatch defeats DeepPartial's object-narrowing, so cast the shape.
   const us = (partial: Partial<import("../../data/patches").SampleSource>) => u({ sample: partial } as Parameters<typeof engine.updateActivePatch>[0]);
@@ -349,6 +355,18 @@ export function Instrument() {
             <Seg value={p.lfo.dest} options={["off", "pitch", "cutoff", "amp"] as const} onChange={(d) => u({ lfo: { dest: d, depth: Math.min(p.lfo.depth, lfoDepthMax(d)) } })} />
             <Knob size={38} label="rate" value={p.lfo.rate} min={0.05} max={20} defaultValue={5} onChange={(v) => u({ lfo: { rate: v } })} fmt={(v) => v.toFixed(1) + "Hz"} />
             <Knob size={38} label="depth" value={p.lfo.depth} min={0} max={lfoDepthMax(p.lfo.dest)} defaultValue={0} disabled={p.lfo.dest === "off"} onChange={(v) => u({ lfo: { depth: v } })} fmt={(v) => Math.round(v) + ""} />
+          </Group>
+        )}
+
+        {tab === "voices" && (
+          <Group title="voices">
+            <Seg value={vc.mode} options={["poly", "mono"] as const} onChange={(m) => uv({ mode: m })} />
+            <Knob size={38} label="voices" value={vc.unison} min={1} max={8} defaultValue={1} onChange={(v) => uv({ unison: Math.round(v) })} fmt={(v) => String(Math.round(v))} />
+            <Knob size={38} label="detune" value={vc.detune} min={0} max={100} defaultValue={14} disabled={vc.unison < 2} onChange={(v) => uv({ detune: v })} fmt={(v) => Math.round(v) + "ct"} />
+            <Knob size={38} label="width" value={vc.width} min={0} max={1} defaultValue={0.6} disabled={vc.unison < 2} onChange={(v) => uv({ width: v })} fmt={(v) => Math.round(v * 100) + "%"} />
+            <span className="max-w-[240px] self-center font-mono text-[8.5px] leading-[1.55] text-faint">
+              mono = last-note priority · unison stacks osc 1/2, detuned ±ct and spread across the stereo field (level-normalized, serum-style)
+            </span>
           </Group>
         )}
       </div>

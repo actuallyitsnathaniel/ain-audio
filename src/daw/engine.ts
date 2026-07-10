@@ -328,6 +328,9 @@ class AudioEngine {
   constructor() {
     const v = parseFloat(localStorage.getItem(LS_WET) || "");
     this.wet = isNaN(v) ? 1 : Math.min(1, Math.max(0, v));
+    // transport clock starts in lockstep with the restored arrangement — otherwise the
+    // timeline (waveform geometry) is drawn at the boot default until first play
+    this.bpm = this.arrangement.bpm;
     this.seedPresetPatches(); // sampled presets appear as editable patches
     // migrate persisted arrangement tracks: a legacy raw preset id → its patch-key
     // name, so the (now patch-keyed) instrument dropdown matches. ponytail: one-shot,
@@ -1120,6 +1123,14 @@ class AudioEngine {
     // the global live-keyboard/Audio-Lab patch when none is passed.
     const dest = sel?.dest ?? n.sum; // channel gain node, or straight to the FX rack
 
+    // MONO mode: last-note priority per destination — starting a note steals the one
+    // still sounding into this dest (fast release; releaseVoice is double-stop safe).
+    const patch0 = sel?.patch ?? this.activePatch();
+    if (patch0.voices?.mode === "mono") {
+      const prev = this._monoVoices.get(dest);
+      if (prev) this.releaseVoice(prev, t, true);
+    }
+
     // ── unified voice path ──
     // osc1 + osc2 + sub + noise + SAMPLE → (per-source level gain) → filter (+filtEnv)
     //   → amp gain (ampEnv) → dest. A sampled multisample is just another source into
@@ -1148,24 +1159,44 @@ class AudioEngine {
     vf.connect(vg);
     vg.connect(dest);
 
+    // ── unison (Serum-style): osc1/osc2 replicate ×N with a symmetric cents spread
+    // and stereo placement; level normalizes by 1/√N. Sub/noise/sample stay single
+    // (a widened sub loses its low-end focus). ──
+    const vc = p.voices;
+    const uniN = Math.max(1, Math.min(8, Math.round(vc?.unison ?? 1)));
+    const uniDet = vc?.detune ?? 0; // cents at the extremes
+    const uniW = Math.max(0, Math.min(1, vc?.width ?? 0)); // stereo spread
+
     const oscs: OscillatorNode[] = [];
-    // a pitched oscillator at `semi` offset, mixed at `level`, with portamento bends
-    const addOsc = (wave: OscillatorType, semi: number, cents: number, level: number) => {
+    // a pitched oscillator at `semi` offset, mixed at `level`, with portamento bends.
+    // `uni` voices spread across ±uniDet cents / ±uniW pan (1 = plain center voice).
+    const addOsc = (wave: OscillatorType, semi: number, cents: number, level: number, uni = 1) => {
       if (level <= 0) return;
-      const o = c.createOscillator();
-      o.type = wave;
-      o.frequency.value = freqOf(semi);
-      o.detune.value = cents;
-      applyBends(o.frequency, "freq", semi); // glide this osc's own pitch line
-      const g = c.createGain();
-      g.gain.value = level;
-      o.connect(g);
-      g.connect(vf);
-      o.start(t);
-      oscs.push(o);
+      const norm = level / Math.sqrt(uni);
+      for (let i = 0; i < uni; i++) {
+        const k = uni === 1 ? 0 : (i / (uni - 1)) * 2 - 1; // −1 … +1 across the stack
+        const o = c.createOscillator();
+        o.type = wave;
+        o.frequency.value = freqOf(semi);
+        o.detune.value = cents + k * uniDet;
+        applyBends(o.frequency, "freq", semi); // glide this osc's own pitch line
+        const g = c.createGain();
+        g.gain.value = norm;
+        o.connect(g);
+        if (uni > 1 && uniW > 0.001) {
+          const pan = c.createStereoPanner();
+          pan.pan.value = k * uniW;
+          g.connect(pan);
+          pan.connect(vf);
+        } else {
+          g.connect(vf);
+        }
+        o.start(t);
+        oscs.push(o);
+      }
     };
-    addOsc(p.osc1.wave, p.osc1.semi, p.osc1.cents, p.osc1.level);
-    if (p.osc2On) addOsc(p.osc2.wave, p.osc2.semi, p.osc2.cents, p.osc2.level);
+    addOsc(p.osc1.wave, p.osc1.semi, p.osc1.cents, p.osc1.level, uniN);
+    if (p.osc2On) addOsc(p.osc2.wave, p.osc2.semi, p.osc2.cents, p.osc2.level, uniN);
     if (p.sub.level > 0) addOsc(p.sub.wave, p.sub.oct * 12, 0, p.sub.level);
 
     // noise source (unpitched) → its own level gain → filter
@@ -1257,8 +1288,13 @@ class AudioEngine {
       l.start(t);
       lfos.push(l);
     }
-    return { kind: "synth", vg, r: ae.r, oscs, vf, noiseSrc, sampleSrc, lfos };
+    const handle: VoiceHandle = { kind: "synth", vg, r: ae.r, oscs, vf, noiseSrc, sampleSrc, lfos };
+    if (p.voices?.mode === "mono") this._monoVoices.set(dest, handle);
+    return handle;
   }
+  // the last-started voice per destination, for mono-mode stealing (stale handles are
+  // fine — releaseVoice tolerates already-stopped sources)
+  private _monoVoices = new Map<AudioNode, VoiceHandle>();
 
   // Release a voice at an explicit time. `instant` skips the patch release.
   // `cancelAndHoldAtTime` holds the level the amp envelope has at `when` (the
@@ -1973,10 +2009,21 @@ class AudioEngine {
     this.resolveOverlaps(dest, c);
     this.saveArr();
   }
+  // With the loop toggle OFF an audio clip is pinned to its material: returns the
+  // content's span in beats (the clip's max length), or null when no cap applies.
+  private clipContentCap(c: ArrClip): number | null {
+    if (c.content.kind !== "audio" || c.content.loop !== false) return null;
+    const bd = 60 / this.arrangement.bpm;
+    const s = this.audioClipSource(c, bd, this.arrangement.bpm);
+    return s ? Math.max(0.25, s.trimmedSec / s.rate / bd) : null;
+  }
   resizeClip(trackId: string, clipId: string, lengthBeats: number) {
     const found = this.findClip(trackId, clipId);
     if (!found) return;
-    found[1].lengthBeats = Math.max(0.25, lengthBeats);
+    let len = Math.max(0.25, lengthBeats);
+    const cap = this.clipContentCap(found[1]);
+    if (cap != null) len = Math.min(len, cap); // loop OFF: the edge stops at the sample's end
+    found[1].lengthBeats = len;
     this.stopAudioForClip(clipId); // re-fire with the new length (fixes stale stop time)
     this.resolveOverlaps(found[0], found[1]);
     this.saveArr();
@@ -2024,10 +2071,23 @@ class AudioEngine {
   }
 
   // write back edited clip content (from the piano roll / step grid / loop editor)
-  setClipContent(trackId: string, clipId: string, content: ArrClip["content"]) {
+  setClipContent(trackId: string, clipId: string, content: ArrClip["content"], undoable = true) {
     const found = this.findClip(trackId, clipId);
     const prev = found?.[1].content;
+    // content edits (piano-roll/drum-grid commits, audio-param knobs) are undo steps —
+    // coalesced per clip so a knob drag or a burst of note edits is ONE ⌘Z. Without
+    // this, ⌘Z after editing notes silently reverted the last TIMELINE op instead.
+    if (found && undoable) this.pushUndoCoalesced("content:" + clipId);
     if (found) found[1].content = content;
+    // loop OFF pins the clip to its material — toggling loop off (or shrinking the
+    // content via trim/transpose/sync) pulls an over-long clip's edge in with it
+    if (found) {
+      const cap = this.clipContentCap(found[1]);
+      if (cap != null && found[1].lengthBeats > cap + 1e-6) {
+        found[1].lengthBeats = cap;
+        this.stopAudioForClip(clipId); // a live node's stop time is stale after the trim
+      }
+    }
     // Reflect the edit on a clip that's playing RIGHT NOW:
     //  · RATE-only change (sync / semi / cents) → smoothly re-rate the live source (no
     //    gap) so a knob drag warbles continuously.
@@ -2038,6 +2098,7 @@ class AudioEngine {
         prev.bufId !== content.bufId ||
         prev.loopId !== content.loopId ||
         prev.reverse !== content.reverse ||
+        (prev.loop ?? true) !== (content.loop ?? true) || // loop toggle changes the source's loop config
         (prev.a ?? 0) !== (content.a ?? 0) ||
         (prev.b ?? 1) !== (content.b ?? 1) ||
         prev.loopA !== content.loopA ||
@@ -2069,9 +2130,27 @@ class AudioEngine {
   }
 
   setArrangementBpm(bpm: number) {
-    this.arrangement.bpm = Math.min(220, Math.max(40, Math.round(bpm)));
-    if (this.arrangeMode) this.setBpm(this.arrangement.bpm);
-    else this.saveArr();
+    const prev = this.arrangement.bpm;
+    const next = Math.min(220, Math.max(40, Math.round(bpm)));
+    if (next !== prev) {
+      // UNSYNCED audio clips are TIME-TRUE: their wall-clock span survives a tempo
+      // change, so their beat-length rescales with it — end points move, the sample is
+      // never cut (nor left looping) by a tempo move. Synced clips stretch with the
+      // grid instead (rate ∝ bpm), so their beat-span stays put. No overlap resolution
+      // here: a grown clip may overlap a neighbor visually until the user next edits —
+      // trimming neighbors on every tempo tick would be destructive mid-drag.
+      const ratio = next / prev;
+      for (const t of this.arrangement.tracks) {
+        for (const c of t.clips) {
+          if (c.content.kind === "audio" && !c.content.sync) c.lengthBeats = Math.max(0.01, c.lengthBeats * ratio);
+        }
+      }
+    }
+    this.arrangement.bpm = next;
+    // keep the transport clock in lockstep even when stopped — waveform geometry, the
+    // consolidate bounce, and tempo-synced FX all read the live bpm
+    this.setBpm(next);
+    this.saveArr();
   }
   setArrangementLoop(start: number, end: number, on: boolean) {
     this.arrangement.loop = { start: Math.max(0, start), end: Math.max(start + 0.25, end), on };
@@ -2632,20 +2711,21 @@ class AudioEngine {
   }
 
   // Does this audio clip overflow its content (so it auto-loops to fill)? Mirrors the
-  // scheduler's rule: clipLenSec > contentSec at the clip's rate. Used by the editor to
-  // show/hide the loop-seam controls.
+  // scheduler's rule: clipLenSec > contentSec at the clip's rate, gated by the per-clip
+  // loop toggle. Used by the editor to show/hide the loop-seam controls.
   audioClipLoops(clip: ArrClip): boolean {
     if (clip.content.kind !== "audio") return false;
     const cc = clip.content;
+    if (cc.loop === false) return false;
     const buf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
     if (!buf) return false;
     const a = Math.min(0.999, Math.max(0, cc.a ?? 0));
     const b = Math.min(1, Math.max(a + 0.001, cc.b ?? 1));
     let rate = 1;
-    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.bpm / cc.rootBpm;
+    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.arrangement.bpm / cc.rootBpm;
     rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
     const contentSec = rate > 0 ? ((b - a) * buf.duration) / rate : (b - a) * buf.duration;
-    const clipLenSec = clip.lengthBeats * (60 / this.bpm);
+    const clipLenSec = clip.lengthBeats * (60 / this.arrangement.bpm);
     return clipLenSec > contentSec + 0.01;
   }
 
@@ -3090,11 +3170,13 @@ class AudioEngine {
     this._pendingSeekBeat = Math.max(0, at);
     this.emit("transport");
   }
-  // stop: halt and return the playhead to the start (loop-brace start if looping, else 0)
+  // stop: halt and return the playhead to the start (loop-brace start if looping, else 0).
+  // Also parks the dotted insert marker back home — a full stop resets the page.
   stopArrangementToStart() {
     const home = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop.start : 0;
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
     this._pendingSeekBeat = home;
+    this.setInsertBeat(home);
     this.emit("transport");
   }
   // return-to-start without stopping playback (⏮): seek to home
@@ -3271,6 +3353,8 @@ class AudioEngine {
     this.pushUndo();
     for (const { t, c } of pairs) {
       c.lengthBeats = Math.max(0.25, c.lengthBeats + delta);
+      const cap = this.clipContentCap(c);
+      if (cap != null) c.lengthBeats = Math.min(c.lengthBeats, cap); // loop OFF: pinned to material
       this.resolveOverlaps(t, c);
       this.stopAudioForClip(c.id);
     }
@@ -3310,7 +3394,7 @@ class AudioEngine {
     this.pushUndo();
     for (const { t, c } of audio) {
       if (c.content.kind !== "audio") continue;
-      this.setClipContent(t.id, c.id, { ...c.content, reverse: !c.content.reverse });
+      this.setClipContent(t.id, c.id, { ...c.content, reverse: !c.content.reverse }, false); // reverseSelection pushed its own undo frame
     }
     this.emit("select");
   }
@@ -3358,6 +3442,9 @@ class AudioEngine {
     this._undo.push(this._snapshot());
     this._restoreArrangement(next);
   }
+  // bumped on every undo/redo restore — editors key on it to remount with the
+  // restored content (a piano roll must never keep a stale working copy)
+  undoStamp = 0;
   private _restoreArrangement(snap: UndoSnap) {
     this._coalesceKey = null; // time-travel invalidates any in-flight gesture run
     this.stopAudioClips(); // any playing sources reference clips that may be gone
@@ -3381,7 +3468,15 @@ class AudioEngine {
         }
       }
     }
-    this.clearSelection();
+    // keep whatever selection still EXISTS in the restored state — undo must not
+    // yank the editor out from under the user; only vanished ids are dropped
+    const alive = new Set<string>();
+    for (const t of this.arrangement.tracks) for (const cl of t.clips) alive.add(cl.id);
+    this.selClips = new Set([...this.selClips].filter((id) => alive.has(id)));
+    if (this._primaryClipId && !alive.has(this._primaryClipId)) this._primaryClipId = this.selClips.values().next().value ?? null;
+    if (this._selTrackId && !this.arrangement.tracks.some((t) => t.id === this._selTrackId)) this._selTrackId = null;
+    this.timeSel = null; // a time range rarely survives a restore meaningfully
+    this.undoStamp++;
     saveArrangement(this.arrangement);
     this.emit("arrange");
     this.emit("fx");
@@ -3480,13 +3575,13 @@ class AudioEngine {
   // applying live to the bounced clip). Returns null when no clip has a decoded buffer.
   private async renderAudioSpan(sel: ArrClip[], startBeat: number, lenBeats: number): Promise<AudioBuffer | null> {
     const c = this.ensureCtx();
-    const bd = this.beatDur();
+    const bd = 60 / this.arrangement.bpm; // bounce at the ARRANGEMENT's tempo, playing or not
     const sr = c.sampleRate;
     const frames = Math.max(1, Math.ceil(lenBeats * bd * sr));
     const off = new OfflineAudioContext(2, frames, sr);
     let any = false;
     for (const clip of sel) {
-      const s = this.audioClipSource(clip, bd);
+      const s = this.audioClipSource(clip, bd, this.arrangement.bpm);
       if (!s) continue;
       const when = (clip.startBeat - startBeat) * bd;
       const stopAt = when + clip.lengthBeats * bd;
@@ -3552,7 +3647,7 @@ class AudioEngine {
               a: 0,
               b: 1,
               sync: sel.some((c) => c.content.kind === "audio" && c.content.sync),
-              rootBpm: this.bpm,
+              rootBpm: this.arrangement.bpm,
               bars: Math.max(1, Math.round(len / bpb)),
             },
           };
@@ -3680,9 +3775,9 @@ class AudioEngine {
 
   // playbackRate for an audio clip: grid-sync (bpm/rootBpm) × varispeed (semi+cents).
   // The single source of truth for rate, shared by the scheduler and live re-rating.
-  private audioClipRate(cc: { sync?: boolean; rootBpm?: number; semi?: number; cents?: number }): number {
+  private audioClipRate(cc: { sync?: boolean; rootBpm?: number; semi?: number; cents?: number }, bpm = this.bpm): number {
     let rate = 1;
-    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.bpm / cc.rootBpm;
+    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = bpm / cc.rootBpm;
     rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
     return rate;
   }
@@ -3690,7 +3785,7 @@ class AudioEngine {
   // Resolve an audio clip's playable source — the buffer (reversed / loop-xfaded as
   // needed), rate, trim seconds, loop points, per-clip gain. Shared by the live
   // scheduler and the consolidate bounce so both voice a clip IDENTICALLY.
-  private audioClipSource(clip: ArrClip, bd: number) {
+  private audioClipSource(clip: ArrClip, bd: number, bpm = this.bpm) {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
     let srcBuf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
@@ -3713,14 +3808,15 @@ class AudioEngine {
     const trimmedSec = (b - a) * dur;
     // ── rate: grid-sync (match the arrangement tempo via the sample's native rootBpm,
     //    same as LoopLanes) × varispeed (semi+cents). No rootBpm ⇒ sync is a no-op. ──
-    const rate = this.audioClipRate(cc);
+    const rate = this.audioClipRate(cc, bpm);
     // ── auto-loop (Ableton song rule): a clip loops ONLY when it's longer than its
     //    content. contentSec = how long the trimmed region [a,b] plays in clip seconds;
     //    if the clip's length exceeds that, loop the loopA/loopB sub-region (default a/b)
-    //    to fill the remainder — re-hashing from the loop start. No user toggle. ──
+    //    to fill the remainder — re-hashing from the loop start. The per-clip `loop`
+    //    toggle (absent = on) turns this off: play once, silence to the clip's end. ──
     const clipLenSec = clip.lengthBeats * bd;
     const contentSec = rate > 0 ? trimmedSec / rate : trimmedSec;
-    const looping = clipLenSec > contentSec + 0.01 && !!cc.bufId;
+    const looping = clipLenSec > contentSec + 0.01 && !!cc.bufId && cc.loop !== false;
     let buf = rawBuf;
     let loopStartSec = a * dur;
     let loopEndSec = b * dur;
@@ -3774,7 +3870,10 @@ class AudioEngine {
   // more/fewer beats as the tempo moves, exactly like what you hear.
   private _waveCache: Record<string, { key: string; wave: NonNullable<ReturnType<AudioEngine["buildClipWave"]>> }> = {};
   private buildClipWave(clip: ArrClip) {
-    const s = this.audioClipSource(clip, this.beatDur());
+    // the timeline is defined by the ARRANGEMENT's tempo — never the transport clock,
+    // which other pages (lab/legacy sequencer) may have left at their own bpm
+    const bd = 60 / this.arrangement.bpm;
+    const s = this.audioClipSource(clip, bd, this.arrangement.bpm);
     if (!s) return null;
     return {
       peaks: this.peaksOf(s.buf),
@@ -3785,13 +3884,13 @@ class AudioEngine {
       looping: s.looping,
       loopStartSec: s.loopStartSec,
       loopEndSec: s.loopEndSec,
-      secPerBeat: this.beatDur(),
+      secPerBeat: bd,
     };
   }
   audioClipWave(clip: ArrClip) {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
-    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, cc.sync, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, this.bpm, clip.lengthBeats].join("|");
+    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, cc.sync, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, cc.loop, this.arrangement.bpm, clip.lengthBeats].join("|");
     const hit = this._waveCache[clip.id];
     if (hit && hit.key === key) return hit.wave;
     const wave = this.buildClipWave(clip);
