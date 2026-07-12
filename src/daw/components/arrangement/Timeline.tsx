@@ -31,7 +31,7 @@ type Drag =
   // selected clip's gesture-start position → the whole selection drags as one unit
   | { mode: "move"; trackId: string; clipId: string; grabBeat: number; base: number; moved: boolean; dup: boolean; multi?: { trackId: string; clipId: string; base: number }[] }
   | { mode: "resize"; trackId: string; clipId: string; moved?: boolean }
-  | { mode: "seek" }
+  | { mode: "seek"; last: number }
   | { mode: "brace"; anchor: number }
   // drag over empty lane space: paint a time selection + marquee-select intersecting clips
   | { mode: "marquee"; x0: number; y0: number; anchorBeat: number; anchorTrack: number; moved: boolean }
@@ -61,6 +61,12 @@ export function Timeline({
     const g = engine.snapBeats;
     return free || g <= 0 ? b : Math.round(b / g) * g;
   };
+  // scrub quantum: the snap grid, falling back to whole beats when snap is off —
+  // ruler scrubbing always lands on a gridline
+  const scrubQuantize = (b: number) => {
+    const q = engine.snapBeats || 1;
+    return Math.round(b / q) * q;
+  };
 
   // hit-test a clip at (x,y): returns {track, clip, edge} or null
   const hitClip = (x: number, y: number): { t: ArrTrack; c: ArrClip; edge: boolean } | null => {
@@ -88,14 +94,17 @@ export function Timeline({
     cv.setPointerCapture(e.pointerId);
     const { x, y } = localXY(e);
 
-    // ruler: click to seek, drag to set the loop brace (⌘/shift while dragging)
+    // ruler: click to seek, drag to set the loop brace (⌘/shift while dragging).
+    // Scrubbing QUANTIZES to the grid (snap, or whole beats when snap is off) — a
+    // seek re-anchors the clock + restarts sources, so it fires only when the target
+    // crosses onto a NEW gridline, never continuously with the mouse. ⌘ = free.
     if (y < HEAD_H) {
-      const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
+      const beat = Math.max(0, cmd(e) ? xToBeat(x) : scrubQuantize(xToBeat(x)));
       if (e.shiftKey) {
         drag.current = { mode: "brace", anchor: beat };
       } else {
         engine.seekArrangement(beat);
-        drag.current = { mode: "seek" };
+        drag.current = { mode: "seek", last: beat };
       }
       return;
     }
@@ -164,7 +173,11 @@ export function Timeline({
     const { x } = localXY(e);
     const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
     if (d.mode === "seek") {
-      engine.seekArrangement(beat);
+      const target = Math.max(0, cmd(e) ? xToBeat(x) : scrubQuantize(xToBeat(x)));
+      if (Math.abs(target - d.last) > 1e-9) {
+        engine.seekArrangement(target);
+        d.last = target;
+      }
     } else if (d.mode === "brace") {
       const s = Math.min(d.anchor, beat);
       const en = Math.max(d.anchor, beat);
@@ -295,6 +308,7 @@ export function Timeline({
         { label: "split here", hint: "⌘E", onClick: () => engine.splitAtInsert() },
         ...(multi ? [{ label: "consolidate", hint: "⌘J", onClick: () => void engine.consolidateSelection() }] : []),
         { label: "duplicate", hint: "⌘D", onClick: () => (multi ? engine.duplicateSelectedClips() : engine.duplicateClip(hit.t.id, hit.c.id)) },
+        { label: hit.c.muted ? "unmute" : "mute", hint: "0", onClick: () => engine.toggleMuteSelection() },
         { separator: true },
         { label: multi ? "delete clips" : "delete clip", danger: true, hint: "⌫", onClick: () => (multi ? engine.deleteSelectedClips() : engine.removeClip(hit.t.id, hit.c.id)) },
       ],
@@ -515,12 +529,13 @@ export function Timeline({
         const cw = Math.max(4, c.lengthBeats * view.current.ppb);
         if (x + cw < 0 || x > w) return;
         const selected = engine.isClipSelected(c.id);
+        const dim = t.mute || !!c.muted; // muted clip = deactivated (drawn dim, silent)
         g.fillStyle = c.color || base;
-        g.globalAlpha = t.mute ? 0.35 : 0.9;
+        g.globalAlpha = dim ? 0.35 : 0.9;
         g.beginPath();
         g.roundRect(x, y + 3, cw, ROW_H - 8, 3);
         g.fill();
-        g.globalAlpha = 1;
+        g.globalAlpha = dim ? 0.45 : 1;
         // audio waveform, drawn in PLAYBACK TRUTH: each pixel maps its timeline beat →
         // buffer seconds through the same geometry the scheduler uses (rate, trim,
         // auto-loop wrap, cut at content end). Unsynced clips stretch/squeeze across
@@ -554,7 +569,7 @@ export function Timeline({
             const bpx = boundaries.map((b) => beatToX(c.startBeat + b));
             const TAPER_PX = 12;
             let bi = 0;
-            g.globalAlpha = t.mute ? 0.35 : 1;
+            g.globalAlpha = dim ? 0.35 : 1;
             g.fillStyle = "rgba(255,255,255,0.5)";
             const px0 = Math.max(Math.ceil(x), KEY_W);
             const px1 = Math.min(x + cw, w);
@@ -585,7 +600,7 @@ export function Timeline({
               const ex = beatToX(c.startBeat + oneShotEnd);
               if (ex > x + 2 && ex < x + cw - 1) g.fillRect(ex - 0.5, y + 4, 1.5, ROW_H - 10);
             }
-            g.globalAlpha = 1;
+            g.globalAlpha = dim ? 0.45 : 1; // back to the clip's preview alpha
           }
         }
         // mini content preview (MIDI notes)
@@ -646,7 +661,8 @@ export function Timeline({
             });
           }
         }
-        // name + selection outline
+        // name + selection outline (always full alpha)
+        g.globalAlpha = 1;
         g.fillStyle = "rgba(0,0,0,0.6)";
         g.font = "8px ui-monospace, monospace";
         g.fillText(c.name || t.name, x + 4, y + 13);

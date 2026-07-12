@@ -59,6 +59,7 @@ export interface ArrClip {
   name?: string;
   color?: string; // optional per-clip tint (defaults by track/kind)
   swing?: number; // per-clip swing %, 0.5 (straight ≡ absent) … 0.75 (hard); applied at schedule time
+  muted?: boolean; // deactivated (Ableton "0"): stays on the timeline, drawn dim, never scheduled
 }
 
 // ── per-clip swing (MPC/Ableton-style, optional) ──
