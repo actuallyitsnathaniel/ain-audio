@@ -73,8 +73,19 @@ export function AudioClipEditor({ content, looping = false, onCommit }: { conten
       <div className="flex flex-wrap items-end gap-x-[12px] gap-y-[6px]">
         <Knob size={34} label="semi" value={content.semi ?? 0} min={-24} max={24} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, semi: Math.round(v) })} fmt={(v) => (Math.round(v) > 0 ? "+" : "") + Math.round(v)} />
         <Knob size={34} label="fine" value={content.cents ?? 0} min={-100} max={100} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, cents: Math.round(v) })} fmt={(v) => Math.round(v) + "c"} />
-        <button className={toggle + " self-end " + on(!!content.sync)} title="grid-sync: match the arrangement tempo using the sample's native bpm (set below). varispeed rides on top" onClick={() => onCommit({ ...content, sync: !content.sync })}>
+        <button
+          className={toggle + " self-end " + on(!!content.sync)}
+          title="grid-sync (tape): match the arrangement tempo by re-rating — pitch moves with tempo. needs the native bpm (set below)"
+          onClick={() => onCommit({ ...content, sync: !content.sync, warp: false })}
+        >
           sync {content.sync ? "on" : "off"}
+        </button>
+        <button
+          className={toggle + " self-end " + on(!!content.warp)}
+          title="WARP: pitch-preserving tempo-fit (needs the native bpm below) + duration-preserving transpose. rendered offline (signalsmith-stretch); plays tape-style until the render lands"
+          onClick={() => onCommit({ ...content, warp: !content.warp, sync: false })}
+        >
+          warp {content.warp ? "on" : "off"}
         </button>
         <button className={toggle + " self-end " + on(!!content.reverse)} title="play the sample backwards" onClick={() => onCommit({ ...content, reverse: !content.reverse })}>
           rev {content.reverse ? "on" : "off"}
@@ -85,6 +96,13 @@ export function AudioClipEditor({ content, looping = false, onCommit }: { conten
           onClick={() => onCommit({ ...content, loop: content.loop === false })}
         >
           loop {content.loop !== false ? "on" : "off"}
+        </button>
+        <button
+          className={toggle + " self-end " + on(!!content.norm)}
+          title="auto-normalize: scanned peak → makeup gain to ≈ −1 dBFS (your gain knob rides on top)"
+          onClick={() => onCommit({ ...content, norm: !content.norm })}
+        >
+          norm {content.norm ? "on" : "off"}
         </button>
         {looping && (
           <span className="flex items-end gap-[12px] rounded-[3px] border border-line bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] px-[8px] py-[3px]">

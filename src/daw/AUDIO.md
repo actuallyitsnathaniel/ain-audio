@@ -229,6 +229,26 @@ the piano roll's own keys (on its DOM-focused canvas) then act alone. Taking foc
 timeline blurs any focused canvas so keys can never double-fire. When the editor region closes,
 focus falls back to the timeline.
 
+**WARP — pitch-preserving tempo-fit + duration-preserving transpose (deferral #5/#6).**
+Per-clip `warp?: boolean` (mutually exclusive with tape-style `sync`). Powered by
+[signalsmith-stretch](https://signalsmith-audio.co.uk/code/stretch/) (WASM/AudioWorklet — see
+CREDITS.md): `stretchRender` runs the worklet inside an `OfflineAudioContext`
+(rate = `bpm/rootBpm`, `semitones` = semi + cents/100) and caches the result per
+(buffer · reverse · ratio · transpose), FIFO-capped at 12 renders. `audioClipSource` swaps the
+cached render in at **rate 1** (all the existing trim/loop/xfade math just works on the
+stretched buffer); a cache miss plays the **varispeed fallback** and kicks a 200 ms-debounced
+render (`requestWarp`, safe to call every tick — a tempo drag only renders the settled ratio);
+when it lands, the live node stops + re-fires warped and `_warpGen` invalidates the wave cache.
+The bounce (`renderAudioSpan`) AWAITS warp renders so ⌘J never prints the fallback. Warped
+clips keep a constant beat-span across tempo changes (like synced; excluded from the time-true
+length rescale). No `rootBpm` ⇒ ratio 1 — warp still gives duration-preserving transpose.
+
+**Auto-normalize (deferral #7).** Per-clip `norm?: boolean` (new imports default ON): `peakOf`
+full-scans the buffer once (WeakMap-cached) and `audioClipSource` folds `min(8, 0.89/peak)`
+(≈ −1 dBFS target, +18 dB cap) into the effective gain — scheduler, bounce, and the timeline
+wave (which now reads `wv.gain`) all agree. The gain knob rides on top; `norm` toggle in the
+clip editor.
+
 **Per-clip audio loop toggle + content-end magnet.** The audio content's `loop?: boolean`
 (absent = ON, so old saves keep looping) gates the auto-loop: OFF = **the clip is pinned to its
 material** — `clipContentCap` clamps `lengthBeats` to the content's span in every path

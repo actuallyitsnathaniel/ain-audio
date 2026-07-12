@@ -14,6 +14,8 @@ import { DRUM_BASE } from "./data/drum-midi";
 import { arrangementBeats, emptyArrangement, loadArrangement, newClipId, newTrackId, saveArrangement, swingDelay, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
 import { splitContent } from "./data/clip-split";
 import { putAudio, allAudio, pruneAudio, clearAudio, encodeWav } from "./data/audio-store";
+// pitch-preserving stretch (WASM/AudioWorklet) — see CREDITS.md "signalsmith-stretch"
+import SignalsmithStretch from "signalsmith-stretch";
 import { FxChain, newFxId, type FxDeviceState } from "./fx-chain";
 import { FX_DEVICES, FX_DEVICE_TYPES, type FxDeviceType } from "./fx-devices";
 import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
@@ -2101,6 +2103,8 @@ class AudioEngine {
         prev.loopId !== content.loopId ||
         prev.reverse !== content.reverse ||
         (prev.loop ?? true) !== (content.loop ?? true) || // loop toggle changes the source's loop config
+        !!prev.warp !== !!content.warp || // warp swaps the whole source buffer
+        !!prev.norm !== !!content.norm || // normalize changes the fire-time gain
         (prev.a ?? 0) !== (content.a ?? 0) ||
         (prev.b ?? 1) !== (content.b ?? 1) ||
         prev.loopA !== content.loopA ||
@@ -2137,14 +2141,14 @@ class AudioEngine {
     if (next !== prev) {
       // UNSYNCED audio clips are TIME-TRUE: their wall-clock span survives a tempo
       // change, so their beat-length rescales with it — end points move, the sample is
-      // never cut (nor left looping) by a tempo move. Synced clips stretch with the
-      // grid instead (rate ∝ bpm), so their beat-span stays put. No overlap resolution
-      // here: a grown clip may overlap a neighbor visually until the user next edits —
-      // trimming neighbors on every tempo tick would be destructive mid-drag.
+      // never cut (nor left looping) by a tempo move. Synced/WARPED clips stretch with
+      // the grid instead (varispeed / stretch render), so their beat-span stays put.
+      // No overlap resolution here: a grown clip may overlap a neighbor visually until
+      // the user next edits — trimming neighbors mid-tempo-drag would be destructive.
       const ratio = next / prev;
       for (const t of this.arrangement.tracks) {
         for (const c of t.clips) {
-          if (c.content.kind === "audio" && !c.content.sync) c.lengthBeats = Math.max(0.01, c.lengthBeats * ratio);
+          if (c.content.kind === "audio" && !c.content.sync && !c.content.warp) c.lengthBeats = Math.max(0.01, c.lengthBeats * ratio);
         }
       }
     }
@@ -2712,22 +2716,18 @@ class AudioEngine {
     return peaks;
   }
 
-  // Does this audio clip overflow its content (so it auto-loops to fill)? Mirrors the
-  // scheduler's rule: clipLenSec > contentSec at the clip's rate, gated by the per-clip
-  // loop toggle. Used by the editor to show/hide the loop-seam controls.
+  // Does this audio clip overflow its content (so it auto-loops to fill)? Asks the
+  // SAME resolver the scheduler uses (warp/varispeed/trim all included), gated by
+  // the per-clip loop toggle. Used by the editor to show/hide the loop-seam controls.
   audioClipLoops(clip: ArrClip): boolean {
     if (clip.content.kind !== "audio") return false;
     const cc = clip.content;
-    if (cc.loop === false) return false;
-    const buf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
-    if (!buf) return false;
-    const a = Math.min(0.999, Math.max(0, cc.a ?? 0));
-    const b = Math.min(1, Math.max(a + 0.001, cc.b ?? 1));
-    let rate = 1;
-    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = this.arrangement.bpm / cc.rootBpm;
-    rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
-    const contentSec = rate > 0 ? ((b - a) * buf.duration) / rate : (b - a) * buf.duration;
-    const clipLenSec = clip.lengthBeats * (60 / this.arrangement.bpm);
+    if (cc.loop === false || !cc.bufId) return false;
+    const bd = 60 / this.arrangement.bpm;
+    const s = this.audioClipSource(clip, bd, this.arrangement.bpm);
+    if (!s) return false;
+    const contentSec = s.rate > 0 ? s.trimmedSec / s.rate : s.trimmedSec;
+    const clipLenSec = clip.lengthBeats * bd;
     return clipLenSec > contentSec + 0.01;
   }
 
@@ -2761,6 +2761,7 @@ class AudioEngine {
     this._importBufs = {};
     this._reverseBufs = {};
     this._waveCache = {};
+    this._warpCache.clear();
     this.arrangement = emptyArrangement();
     saveArrangement(this.arrangement);
     this.insertBeat = 0;
@@ -3603,6 +3604,25 @@ class AudioEngine {
     const sr = c.sampleRate;
     const frames = Math.max(1, Math.ceil(lenBeats * bd * sr));
     const off = new OfflineAudioContext(2, frames, sr);
+    // bounce quality: WAIT for warp renders instead of printing the varispeed fallback
+    for (const clip of sel) {
+      if (clip.content.kind !== "audio" || !clip.content.warp || !clip.content.bufId) continue;
+      const cc = clip.content;
+      let src = this._importBufs[cc.bufId!];
+      if (!src) continue;
+      const rev = !!cc.reverse;
+      if (rev) src = this.reversedBuffer(cc.bufId!, src);
+      const key = this.warpKey(cc, rev);
+      if (!this._warpCache.has(key)) {
+        const { ratio, semis } = this.warpParams(cc);
+        try {
+          this._warpCache.set(key, await this.stretchRender(src, ratio, semis));
+          this._warpGen++;
+        } catch {
+          /* render failed → the bounce prints the varispeed fallback */
+        }
+      }
+    }
     let any = false;
     for (const clip of sel) {
       const s = this.audioClipSource(clip, bd, this.arrangement.bpm);
@@ -3806,9 +3826,81 @@ class AudioEngine {
     return rate;
   }
 
-  // Resolve an audio clip's playable source — the buffer (reversed / loop-xfaded as
-  // needed), rate, trim seconds, loop points, per-clip gain. Shared by the live
-  // scheduler and the consolidate bounce so both voice a clip IDENTICALLY.
+  // ── WARP — pitch-preserving tempo-fit + duration-preserving transpose ────────
+  // Offline stretch renders (signalsmith-stretch WASM worklet inside an
+  // OfflineAudioContext), cached per (buffer, ratio, transpose) so the scheduler
+  // keeps playing plain buffer sources at rate 1. A cache miss plays the tape-style
+  // varispeed FALLBACK and kicks a debounced render; when it lands, the live node
+  // re-fires warped. Renders happen once per settled tempo, never during a drag.
+  private _warpCache = new Map<string, AudioBuffer>();
+  private _warpTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  private _warpPending = new Set<string>();
+  private _warpGen = 0; // bumped when a render lands — wave-cache invalidation
+  private warpParams(cc: { rootBpm?: number; semi?: number; cents?: number }) {
+    const ratio = cc.rootBpm && cc.rootBpm > 0 ? this.arrangement.bpm / cc.rootBpm : 1;
+    const semis = (cc.semi ?? 0) + (cc.cents ?? 0) / 100;
+    return { ratio, semis };
+  }
+  private warpKey(cc: { bufId?: string; rootBpm?: number; semi?: number; cents?: number }, rev: boolean) {
+    const { ratio, semis } = this.warpParams(cc);
+    return `${cc.bufId}|${rev ? 1 : 0}|${ratio.toFixed(4)}|${semis.toFixed(2)}`;
+  }
+  private async stretchRender(src: AudioBuffer, ratio: number, semitones: number): Promise<AudioBuffer> {
+    const frames = Math.max(1, Math.ceil(src.length / ratio));
+    const off = new OfflineAudioContext(src.numberOfChannels, frames, src.sampleRate);
+    const node = await SignalsmithStretch(off);
+    node.connect(off.destination);
+    const chans: Float32Array[] = [];
+    for (let ch = 0; ch < src.numberOfChannels; ch++) chans.push(src.getChannelData(ch));
+    await node.addBuffers(chans);
+    node.schedule({ output: 0, active: true, input: 0, rate: ratio, semitones });
+    return await off.startRendering();
+  }
+  // safe to call every schedTick — debounced so a tempo drag's flood of ratios only
+  // renders the one it settles on
+  private requestWarp(key: string, src: AudioBuffer, ratio: number, semis: number, clipId: string) {
+    if (this._warpCache.has(key) || this._warpPending.has(key)) return;
+    clearTimeout(this._warpTimers[key]);
+    this._warpTimers[key] = setTimeout(() => {
+      if (this._warpCache.has(key) || this._warpPending.has(key)) return;
+      this._warpPending.add(key);
+      void this.stretchRender(src, ratio, semis)
+        .then((out) => {
+          this._warpCache.set(key, out);
+          if (this._warpCache.size > 12) this._warpCache.delete(this._warpCache.keys().next().value!); // FIFO cap
+          this._warpGen++;
+          this.stopAudioForClip(clipId); // the fallback node → re-fire warped next tick
+          this.emit("arrange"); // waveforms recompute
+        })
+        .catch(() => {
+          /* render failed — the varispeed fallback stands */
+        })
+        .finally(() => this._warpPending.delete(key));
+    }, 200);
+  }
+
+  // full-scan |peak| of a buffer, cached per AudioBuffer (one-time cost) — drives
+  // the auto-normalize makeup gain
+  private _peakScalar = new WeakMap<AudioBuffer, number>();
+  private peakOf(buf: AudioBuffer): number {
+    const hit = this._peakScalar.get(buf);
+    if (hit != null) return hit;
+    let p = 0;
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < d.length; i++) {
+        const a = Math.abs(d[i]);
+        if (a > p) p = a;
+      }
+    }
+    this._peakScalar.set(buf, p);
+    return p;
+  }
+
+  // Resolve an audio clip's playable source — the buffer (reversed / warped /
+  // loop-xfaded as needed), rate, trim seconds, loop points, per-clip gain (incl.
+  // auto-normalize makeup). Shared by the live scheduler and the consolidate bounce
+  // so both voice a clip IDENTICALLY.
   private audioClipSource(clip: ArrClip, bd: number, bpm = this.bpm) {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
@@ -3824,15 +3916,38 @@ class AudioEngine {
       [ta, tb] = [1 - tb, 1 - ta];
       if (tla != null && tlb != null) [tla, tlb] = [1 - tlb, 1 - tla];
     }
-    const rawBuf = srcBuf;
+    // ── WARP: swap in the cached stretch render (plays at rate 1 — tempo-fit and
+    //    transpose are baked in, pitch/duration-preserving). Cache miss → keep the
+    //    tape-style varispeed fallback and kick a debounced render. ──
+    let rawBuf = srcBuf;
+    let bufKey = cc.bufId + (rev ? ":rev" : ""); // identity for the xfade-loop cache
+    let warped = false;
+    if (cc.warp && cc.bufId) {
+      const key = this.warpKey(cc, rev);
+      const hit = this._warpCache.get(key);
+      if (hit) {
+        rawBuf = hit;
+        bufKey = "warp:" + key;
+        warped = true;
+      } else {
+        const { ratio, semis } = this.warpParams(cc);
+        this.requestWarp(key, srcBuf, ratio, semis, clip.id);
+      }
+    }
     // a/b trim (0..1 of the buffer) → seconds; per-clip gain
     const a = Math.min(0.999, Math.max(0, ta));
     const b = Math.min(1, Math.max(a + 0.001, tb));
     const dur = rawBuf.duration;
     const trimmedSec = (b - a) * dur;
-    // ── rate: grid-sync (match the arrangement tempo via the sample's native rootBpm,
-    //    same as LoopLanes) × varispeed (semi+cents). No rootBpm ⇒ sync is a no-op. ──
-    const rate = this.audioClipRate(cc, bpm);
+    // ── rate: warped buffers already sit on the grid (rate 1); otherwise grid-sync
+    //    (bpm/rootBpm, same as LoopLanes) × varispeed (semi+cents). ──
+    const rate = warped ? 1 : this.audioClipRate(cc, bpm);
+    // auto-normalize: scanned peak → makeup toward ≈ −1 dBFS (capped at +18 dB)
+    let gain = cc.gain ?? 1;
+    if (cc.norm) {
+      const pk = this.peakOf(rawBuf);
+      if (pk > 1e-4) gain *= Math.min(8, 0.89 / pk);
+    }
     // ── auto-loop (Ableton song rule): a clip loops ONLY when it's longer than its
     //    content. contentSec = how long the trimmed region [a,b] plays in clip seconds;
     //    if the clip's length exceeds that, loop the loopA/loopB sub-region (default a/b)
@@ -3853,12 +3968,12 @@ class AudioEngine {
         le = this.snapZeroCross(rawBuf, le);
         if (le <= ls) le = Math.min(1, ls + 0.001);
       }
-      // distinct xfade cache key when reversed (different buffer, same bufId)
-      buf = this.xfadeLoopBuffer(rawBuf, cc.bufId + (rev ? ":rev" : ""), 0, ls, le, cc.xfade ?? 0);
+      // distinct xfade cache key per source variant (reversed / warped buffers differ)
+      buf = this.xfadeLoopBuffer(rawBuf, bufKey, 0, ls, le, cc.xfade ?? 0);
       loopStartSec = ls * dur;
       loopEndSec = le * dur;
     }
-    return { buf, rate, gain: cc.gain ?? 1, startSec: a * dur, endSec: b * dur, trimmedSec, looping, loopStartSec, loopEndSec };
+    return { buf, rate, gain, startSec: a * dur, endSec: b * dur, trimmedSec, looping, loopStartSec, loopEndSec };
   }
 
   // ── timeline waveforms ──
@@ -3905,6 +4020,7 @@ class AudioEngine {
       startSec: s.startSec,
       endSec: s.endSec,
       rate: s.rate,
+      gain: s.gain, // effective gain incl. auto-normalize makeup (the wave shows it)
       looping: s.looping,
       loopStartSec: s.loopStartSec,
       loopEndSec: s.loopEndSec,
@@ -3914,7 +4030,7 @@ class AudioEngine {
   audioClipWave(clip: ArrClip) {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
-    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, cc.sync, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, cc.loop, this.arrangement.bpm, clip.lengthBeats].join("|");
+    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, cc.sync, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, cc.loop, cc.warp, cc.norm, cc.warp ? this._warpGen : 0, this.arrangement.bpm, clip.lengthBeats].join("|");
     const hit = this._waveCache[clip.id];
     if (hit && hit.key === key) return hit.wave;
     const wave = this.buildClipWave(clip);

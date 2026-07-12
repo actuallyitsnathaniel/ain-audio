@@ -48,6 +48,8 @@ export type ClipContent =
       key?: string; // detected musical key (display)
       reverse?: boolean; // play backwards
       loop?: boolean; // auto-loop to fill a clip longer than the content (absent = ON); off = play once, silence after
+      warp?: boolean; // WARP mode: pitch-preserving tempo-fit (via rootBpm) + duration-preserving transpose (offline stretch render); off = tape-style varispeed
+      norm?: boolean; // auto-normalize: scanned peak → makeup gain to ≈ −1 dBFS (set true on import)
     };
 
 export interface ArrClip {
