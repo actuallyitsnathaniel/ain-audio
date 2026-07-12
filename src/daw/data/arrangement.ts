@@ -48,7 +48,8 @@ export type ClipContent =
       key?: string; // detected musical key (display)
       reverse?: boolean; // play backwards
       loop?: boolean; // auto-loop to fill a clip longer than the content (absent = ON); off = play once, silence after
-      warp?: boolean; // WARP mode: pitch-preserving tempo-fit (via rootBpm) + duration-preserving transpose (offline stretch render); off = tape-style varispeed
+      warp?: boolean; // LEGACY (pre-dropdown): warp on = "complex" — read via warpModeOf, never written anymore
+      warpMode?: WarpMode; // the warp algorithm dropdown: repitch (tape varispeed) · beats (transient slicer) · complex (stretch node); absent = off
       norm?: boolean; // auto-normalize: scanned peak → makeup gain to ≈ −1 dBFS (set true on import)
     };
 
@@ -62,6 +63,18 @@ export interface ArrClip {
   color?: string; // optional per-clip tint (defaults by track/kind)
   swing?: number; // per-clip swing %, 0.5 (straight ≡ absent) … 0.75 (hard); applied at schedule time
   muted?: boolean; // deactivated (Ableton "0"): stays on the timeline, drawn dim, never scheduled
+}
+
+// ── warp modes (the per-clip dropdown, Ableton-style) ──
+// off      — natural rate; time-true length across tempo changes
+// repitch  — tape varispeed to the grid (bpm/rootBpm): pitch moves with tempo
+// beats    — transient slicer: 1/16 slices play at NATURAL rate on the re-spaced grid
+//            (punch preserved; gated gaps when slower, crossfaded overlaps when faster)
+// complex  — signalsmith-stretch: pitch-locked tempo-fit + duration-preserving transpose
+export type WarpMode = "off" | "repitch" | "beats" | "complex";
+// resolves the mode incl. LEGACY clips saved before the dropdown (sync → repitch, warp → complex)
+export function warpModeOf(cc: { warpMode?: WarpMode; warp?: boolean; sync?: boolean }): WarpMode {
+  return cc.warpMode ?? (cc.warp ? "complex" : cc.sync ? "repitch" : "off");
 }
 
 // ── per-clip swing (MPC/Ableton-style, optional) ──

@@ -8,7 +8,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../../engine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { Knob } from "../Knob";
-import type { ClipContent } from "../../data/arrangement";
+import { warpModeOf, type ClipContent, type WarpMode } from "../../data/arrangement";
 
 type AudioContentT = Extract<ClipContent, { kind: "audio" }>;
 
@@ -73,20 +73,21 @@ export function AudioClipEditor({ content, looping = false, onCommit }: { conten
       <div className="flex flex-wrap items-end gap-x-[12px] gap-y-[6px]">
         <Knob size={34} label="semi" value={content.semi ?? 0} min={-24} max={24} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, semi: Math.round(v) })} fmt={(v) => (Math.round(v) > 0 ? "+" : "") + Math.round(v)} />
         <Knob size={34} label="fine" value={content.cents ?? 0} min={-100} max={100} defaultValue={0} bipolar onChange={(v) => onCommit({ ...content, cents: Math.round(v) })} fmt={(v) => Math.round(v) + "c"} />
-        <button
-          className={toggle + " self-end " + on(!!content.sync)}
-          title="grid-sync (tape): match the arrangement tempo by re-rating — pitch moves with tempo. needs the native bpm (set below)"
-          onClick={() => onCommit({ ...content, sync: !content.sync, warp: false })}
-        >
-          sync {content.sync ? "on" : "off"}
-        </button>
-        <button
-          className={toggle + " self-end " + on(!!content.warp)}
-          title="WARP: pitch-preserving tempo-fit (needs the native bpm below) + duration-preserving transpose. rendered offline (signalsmith-stretch); plays tape-style until the render lands"
-          onClick={() => onCommit({ ...content, warp: !content.warp, sync: false })}
-        >
-          warp {content.warp ? "on" : "off"}
-        </button>
+        {/* the warp-algorithm dropdown (Ableton-style). Writing warpMode clears the
+            legacy sync/warp flags — warpModeOf keeps old saves working. */}
+        <label className="flex items-center gap-[4px] self-end font-mono text-[9px] text-faint" title="warp algorithm: off = natural speed (time-true) · repitch = tape varispeed to the grid (pitch follows tempo) · beats = transient slicer, punch preserved (drums) · complex = pitch-locked stretch (melodic/full mixes). beats + complex need the native bpm below for tempo-fit; transpose stays pitch-true in complex, per-slice in beats">
+          <select
+            value={warpModeOf(content)}
+            onChange={(e) => onCommit({ ...content, warpMode: e.target.value === "off" ? undefined : (e.target.value as WarpMode), sync: undefined, warp: undefined })}
+            aria-label="warp mode"
+            className={"cursor-pointer appearance-none rounded-[3px] border px-[7px] py-[3px] font-mono text-[9px] transition-colors focus:outline-none " + (warpModeOf(content) !== "off" ? "border-accent bg-panel2 text-accent" : "border-line bg-panel2 text-faint")}
+          >
+            <option value="off">warp: off</option>
+            <option value="repitch">warp: repitch</option>
+            <option value="beats">warp: beats</option>
+            <option value="complex">warp: complex</option>
+          </select>
+        </label>
         <button className={toggle + " self-end " + on(!!content.reverse)} title="play the sample backwards" onClick={() => onCommit({ ...content, reverse: !content.reverse })}>
           rev {content.reverse ? "on" : "off"}
         </button>

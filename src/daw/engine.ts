@@ -11,11 +11,11 @@ import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
 import { clipBeats, newNoteId, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
 import { DRUM_BASE } from "./data/drum-midi";
-import { arrangementBeats, emptyArrangement, loadArrangement, newClipId, newTrackId, saveArrangement, swingDelay, type ArrClip, type Arrangement, type ArrTrack, type TrackKind } from "./data/arrangement";
+import { arrangementBeats, emptyArrangement, loadArrangement, newClipId, newTrackId, saveArrangement, swingDelay, warpModeOf, type ArrClip, type Arrangement, type ArrTrack, type TrackKind, type WarpMode } from "./data/arrangement";
 import { splitContent } from "./data/clip-split";
 import { putAudio, allAudio, pruneAudio, clearAudio, encodeWav } from "./data/audio-store";
 // pitch-preserving stretch (WASM/AudioWorklet) — see CREDITS.md "signalsmith-stretch"
-import SignalsmithStretch from "signalsmith-stretch";
+import SignalsmithStretch, { type StretchNode } from "signalsmith-stretch";
 import { FxChain, newFxId, type FxDeviceState } from "./fx-chain";
 import { FX_DEVICES, FX_DEVICE_TYPES, type FxDeviceType } from "./fx-devices";
 import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
@@ -1827,7 +1827,11 @@ class AudioEngine {
   }
   removeTrack(id: string) {
     const t = this.findTrack(id);
-    if (t) for (const c of t.clips) this.stopAudioForClip(c.id); // stop any live audio
+    if (t)
+      for (const c of t.clips) {
+        this.stopAudioForClip(c.id); // stop any live audio
+        this.disposeStretch(c.id);
+      }
     this.arrangement.tracks = this.arrangement.tracks.filter((t) => t.id !== id);
     const s = this._arrStrips[id];
     if (s) {
@@ -1992,6 +1996,7 @@ class AudioEngine {
     const t = this.findTrack(trackId);
     if (t) t.clips = t.clips.filter((c) => c.id !== clipId);
     this.stopAudioForClip(clipId); // kill its live source so deleting stops the sound
+    this.disposeStretch(clipId);
     this.saveArr();
   }
   // move a clip (optionally to another track); startBeat clamped ≥ 0
@@ -2083,6 +2088,8 @@ class AudioEngine {
     // this, ⌘Z after editing notes silently reverted the last TIMELINE op instead.
     if (found && undoable) this.pushUndoCoalesced("content:" + clipId);
     if (found) found[1].content = content;
+    // left complex mode → the live stretch node is dead weight; drop it
+    if (found && content.kind === "audio" && warpModeOf(content) !== "complex" && this._stretch[clipId]) this.disposeStretch(clipId);
     // loop OFF pins the clip to its material — toggling loop off (or shrinking the
     // content via trim/transpose/sync) pulls an over-long clip's edge in with it
     if (found) {
@@ -2103,7 +2110,7 @@ class AudioEngine {
         prev.loopId !== content.loopId ||
         prev.reverse !== content.reverse ||
         (prev.loop ?? true) !== (content.loop ?? true) || // loop toggle changes the source's loop config
-        !!prev.warp !== !!content.warp || // warp swaps the whole source buffer
+        warpModeOf(prev) !== warpModeOf(content) || // a warp-mode change swaps the whole source path
         !!prev.norm !== !!content.norm || // normalize changes the fire-time gain
         (prev.a ?? 0) !== (content.a ?? 0) ||
         (prev.b ?? 1) !== (content.b ?? 1) ||
@@ -2148,7 +2155,7 @@ class AudioEngine {
       const ratio = next / prev;
       for (const t of this.arrangement.tracks) {
         for (const c of t.clips) {
-          if (c.content.kind === "audio" && !c.content.sync && !c.content.warp) c.lengthBeats = Math.max(0.01, c.lengthBeats * ratio);
+          if (c.content.kind === "audio" && warpModeOf(c.content) === "off") c.lengthBeats = Math.max(0.01, c.lengthBeats * ratio);
         }
       }
     }
@@ -2762,6 +2769,7 @@ class AudioEngine {
     this._reverseBufs = {};
     this._waveCache = {};
     this._warpCache.clear();
+    for (const id in this._stretch) this.disposeStretch(id);
     this.arrangement = emptyArrangement();
     saveArrangement(this.arrangement);
     this.insertBeat = 0;
@@ -2793,6 +2801,8 @@ class AudioEngine {
     const referenced = new Set<string>();
     for (const t of this.arrangement.tracks) for (const cl of t.clips) if (cl.content.kind === "audio" && cl.content.bufId) referenced.add(cl.content.bufId);
     void pruneAudio(referenced);
+    // warm the live stretch nodes for restored COMPLEX clips (first play = no fallback)
+    for (const t of this.arrangement.tracks) for (const cl of t.clips) if (cl.content.kind === "audio" && warpModeOf(cl.content) === "complex") this.ensureStretchNode(cl);
     this.emit("arrange");
   }
   // reverse an imported buffer (cached), for reverse playback. Returns a NEW buffer.
@@ -2937,6 +2947,38 @@ class AudioEngine {
       // (drift-free across rapid drags). This is the real-time pitch rise/fall while
       // dragging the tempo — the tape-warble effect.
       if (bpm !== prevBpm) {
+        // LIVE warp nodes just take the new rate — pitch stays locked through the
+        // drag, and input position stays beat-continuous (a warp clip consumes
+        // 60/rootBpm input-seconds per beat at ANY tempo, and the clock re-anchored).
+        // The rate schedule POPS all queued changes at/after now (worklet semantics),
+        // so: re-add the CURRENT pass's end stop at its new wall time, and drop the
+        // dedupe keys of popped FUTURE passes so schedTick re-fires them.
+        if (this.sequencePlaying && this.arrangeMode) {
+          const curBeat = this.currentBeat();
+          for (const clipId in this._stretch) {
+            const e = this._stretch[clipId];
+            if (!e.ready || !e.node) continue;
+            const wc = this.arrangement.tracks.flatMap((t2) => t2.clips).find((x) => x.id === clipId);
+            if (!wc || wc.content.kind !== "audio") continue;
+            const rootBpm = wc.content.rootBpm;
+            // this schedule pops ANY queued change on the node (one-slot queue) —
+            // the bookkeeping below re-establishes what got popped
+            e.node.schedule({ output: tt, rate: rootBpm && rootBpm > 0 ? bpm / rootBpm : 1 });
+            for (const key in this._stretchFired) {
+              if (!key.startsWith(clipId + "@")) continue;
+              const sb = parseFloat(key.slice(clipId.length + 1));
+              const f = this._stretchFired[key];
+              if (curBeat >= sb && curBeat < sb + wc.lengthBeats) {
+                // playing pass: its end moved with the tempo — recompute + re-send later
+                f.off = tt + (sb + wc.lengthBeats - curBeat) * (60 / bpm);
+                f.when = Math.min(f.when, tt); // start already effective
+                f.stopSent = false; // the sweep re-sends it at the new wall time
+              } else if (sb > curBeat) {
+                delete this._stretchFired[key]; // its queued start was popped — re-fire
+              }
+            }
+          }
+        }
         for (const key in this._startedAudio) {
           const a = this._startedAudio[key];
           if (a.synced && a.baseBpm > 0) a.src.playbackRate.setTargetAtTime(a.baseRate * (bpm / a.baseBpm), tt, 0.02);
@@ -3072,6 +3114,12 @@ class AudioEngine {
       try { this._startedAudio[key].src.stop(); } catch { /* already ended */ }
     }
     this._startedAudio = {};
+    // silence every live warp node + forget its passes (they re-fire on next play)
+    for (const clipId in this._stretch) {
+      const e = this._stretch[clipId];
+      if (e.ready && e.node && this.ctx) e.node.schedule({ output: this.ctx.currentTime, active: false }); // no outputTime: silence NOW + wipe the queued passes (intended)
+    }
+    this._stretchFired = {};
   }
   // Stop + forget any playing audio source(s) for ONE clip, so the scheduler re-fires it
   // fresh at the next tick with its new geometry. Called whenever a clip's position /
@@ -3083,6 +3131,11 @@ class AudioEngine {
       try { this._startedAudio[key].src.stop(); } catch { /* already ended */ }
       delete this._startedAudio[key];
     }
+    // the live warp node (if any) goes silent + forgets its passes — it re-fires
+    // next tick with fresh geometry
+    const e = this._stretch[clipId];
+    if (e?.ready && e.node && this.ctx) e.node.schedule({ output: this.ctx.currentTime, active: false }); // no outputTime: silence NOW + wipe the queued passes (intended)
+    for (const key in this._stretchFired) if (key.startsWith(clipId + "@")) delete this._stretchFired[key];
   }
 
   // piano-roll transport (clears beat mode so the scheduler walks the note clip)
@@ -3313,7 +3366,7 @@ class AudioEngine {
     if (!ids.length) return;
     this.pushUndo();
     for (const t of this.arrangement.tracks) {
-      for (const c of t.clips) if (ids.includes(c.id)) this.stopAudioForClip(c.id);
+      for (const c of t.clips) if (ids.includes(c.id)) { this.stopAudioForClip(c.id); this.disposeStretch(c.id); }
       t.clips = t.clips.filter((c) => !ids.includes(c.id));
     }
     this.clearSelection();
@@ -3604,19 +3657,21 @@ class AudioEngine {
     const sr = c.sampleRate;
     const frames = Math.max(1, Math.ceil(lenBeats * bd * sr));
     const off = new OfflineAudioContext(2, frames, sr);
-    // bounce quality: WAIT for warp renders instead of printing the varispeed fallback
+    // bounce quality: WAIT for beats/complex renders instead of printing the fallback
     for (const clip of sel) {
-      if (clip.content.kind !== "audio" || !clip.content.warp || !clip.content.bufId) continue;
+      if (clip.content.kind !== "audio" || !clip.content.bufId) continue;
       const cc = clip.content;
+      const mode = warpModeOf(cc);
+      if (mode !== "beats" && mode !== "complex") continue;
       let src = this._importBufs[cc.bufId!];
       if (!src) continue;
       const rev = !!cc.reverse;
       if (rev) src = this.reversedBuffer(cc.bufId!, src);
-      const key = this.warpKey(cc, rev);
+      const key = this.warpKey(cc, rev, mode);
       if (!this._warpCache.has(key)) {
         const { ratio, semis } = this.warpParams(cc);
         try {
-          this._warpCache.set(key, await this.stretchRender(src, ratio, semis));
+          this._warpCache.set(key, mode === "beats" ? this.beatsRender(src, ratio, semis, cc.rootBpm ?? 0) : await this.stretchRender(src, ratio, semis));
           this._warpGen++;
         } catch {
           /* render failed → the bounce prints the varispeed fallback */
@@ -3690,7 +3745,9 @@ class AudioEngine {
               gain: 1,
               a: 0,
               b: 1,
-              sync: sel.some((c) => c.content.kind === "audio" && c.content.sync),
+              // the bounce is already tempo-fitted at the bounce bpm; repitch keeps it
+              // grid-locked across future tempo changes when any source clip was warped
+              warpMode: sel.some((c) => c.content.kind === "audio" && warpModeOf(c.content) !== "off") ? ("repitch" as const) : undefined,
               rootBpm: this.arrangement.bpm,
               bars: Math.max(1, Math.round(len / bpb)),
             },
@@ -3817,34 +3874,99 @@ class AudioEngine {
     else this.emit("clip");
   }
 
-  // playbackRate for an audio clip: grid-sync (bpm/rootBpm) × varispeed (semi+cents).
-  // The single source of truth for rate, shared by the scheduler and live re-rating.
-  private audioClipRate(cc: { sync?: boolean; rootBpm?: number; semi?: number; cents?: number }, bpm = this.bpm): number {
+  // playbackRate for an audio clip in REPITCH (tape) mode: grid-fit (bpm/rootBpm) ×
+  // varispeed (semi+cents). The single source of truth for rate, shared by the
+  // scheduler and live re-rating. Other warp modes bake their rate into renders/nodes.
+  private audioClipRate(cc: { warpMode?: WarpMode; warp?: boolean; sync?: boolean; rootBpm?: number; semi?: number; cents?: number }, bpm = this.bpm): number {
     let rate = 1;
-    if (cc.sync && cc.rootBpm && cc.rootBpm > 0) rate = bpm / cc.rootBpm;
+    if (warpModeOf(cc) === "repitch" && cc.rootBpm && cc.rootBpm > 0) rate = bpm / cc.rootBpm;
     rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
     return rate;
   }
 
   // ── WARP — pitch-preserving tempo-fit + duration-preserving transpose ────────
-  // Offline stretch renders (signalsmith-stretch WASM worklet inside an
-  // OfflineAudioContext), cached per (buffer, ratio, transpose) so the scheduler
-  // keeps playing plain buffer sources at rate 1. A cache miss plays the tape-style
-  // varispeed FALLBACK and kicks a debounced render; when it lands, the live node
-  // re-fires warped. Renders happen once per settled tempo, never during a drag.
+  // LIVE playback uses persistent stretch nodes (below). The OFFLINE renders here
+  // serve the consolidate bounce (renderAudioSpan awaits them) and, when present,
+  // improve the brief not-yet-ready fallback.
   private _warpCache = new Map<string, AudioBuffer>();
-  private _warpTimers: Record<string, ReturnType<typeof setTimeout>> = {};
-  private _warpPending = new Set<string>();
   private _warpGen = 0; // bumped when a render lands — wave-cache invalidation
   private warpParams(cc: { rootBpm?: number; semi?: number; cents?: number }) {
     const ratio = cc.rootBpm && cc.rootBpm > 0 ? this.arrangement.bpm / cc.rootBpm : 1;
     const semis = (cc.semi ?? 0) + (cc.cents ?? 0) / 100;
     return { ratio, semis };
   }
-  private warpKey(cc: { bufId?: string; rootBpm?: number; semi?: number; cents?: number }, rev: boolean) {
+  private warpKey(cc: { bufId?: string; rootBpm?: number; semi?: number; cents?: number }, rev: boolean, algo: "complex" | "beats") {
     const { ratio, semis } = this.warpParams(cc);
-    return `${cc.bufId}|${rev ? 1 : 0}|${ratio.toFixed(4)}|${semis.toFixed(2)}`;
+    return `${algo}|${cc.bufId}|${rev ? 1 : 0}|${ratio.toFixed(4)}|${semis.toFixed(2)}|${cc.rootBpm ?? 0}`;
   }
+  // ── BEATS mode — the drum warp: a transient-preserving SLICER, not a stretcher.
+  // The source is cut at its own 1/16 grid (rootBpm); each slice plays at NATURAL
+  // rate (repitched by `semis` via per-slice resampling) but slice STARTS land on the
+  // re-spaced output grid. Faster tempo → slices overlap (short crossfades); slower →
+  // gated silence after each slice. Pure buffer math, rendered once per settled tempo.
+  private beatsRender(src: AudioBuffer, ratio: number, semis: number, rootBpm: number): AudioBuffer {
+    const c = this.ensureCtx();
+    const sr = src.sampleRate;
+    const srcLen = src.length;
+    const sliceSrc = Math.max(32, Math.round(((60 / (rootBpm > 0 ? rootBpm : this.arrangement.bpm)) * 0.25) * sr)); // 1/16 in source frames
+    const sliceOut = sliceSrc / ratio; // slice-start spacing in the output
+    const outLen = Math.max(1, Math.ceil(srcLen / ratio));
+    const out = c.createBuffer(src.numberOfChannels, outLen, sr);
+    const pitch = Math.pow(2, semis / 12); // per-slice repitch = resampled read
+    const fadeIn = Math.max(1, Math.round(sr * 0.002));
+    const fadeOut = Math.max(1, Math.round(sr * 0.005));
+    const nSlices = Math.ceil(srcLen / sliceSrc);
+    for (let ch = 0; ch < src.numberOfChannels; ch++) {
+      const s = src.getChannelData(ch);
+      const d = out.getChannelData(ch);
+      for (let i = 0; i < nSlices; i++) {
+        const srcStart = i * sliceSrc;
+        const outStart = Math.round(i * sliceOut);
+        // the slice plays until ITS OWN source material runs out (never bleeds into
+        // the next slice's transient) or the render ends
+        const copyLen = Math.min(Math.floor(sliceSrc / pitch), outLen - outStart);
+        for (let j = 0; j < copyLen; j++) {
+          const sp = srcStart + j * pitch;
+          const si = Math.floor(sp);
+          if (si >= srcLen - 1) break;
+          const frac = sp - si;
+          let v = s[si] * (1 - frac) + s[si + 1] * frac;
+          if (j < fadeIn) v *= j / fadeIn;
+          const left = copyLen - j;
+          if (left < fadeOut) v *= left / fadeOut;
+          d[outStart + j] += v; // += : overlapping slices crossfade via the edge fades
+        }
+      }
+    }
+    return out;
+  }
+  // debounced beats render — ARMED ONCE per key, never reset (schedTick re-requests
+  // every ~25ms; a reset-on-call debounce would never fire — learned the hard way),
+  // with liveness re-checked at fire time so tempo drags only render the settled ratio.
+  private _beatsTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  private requestBeats(key: string, clipId: string) {
+    if (this._warpCache.has(key) || this._beatsTimers[key] != null) return;
+    this._beatsTimers[key] = setTimeout(() => {
+      delete this._beatsTimers[key];
+      if (this._warpCache.has(key)) return;
+      const wc = this.arrangement.tracks.flatMap((t) => t.clips).find((x) => x.id === clipId);
+      if (!wc || wc.content.kind !== "audio" || warpModeOf(wc.content) !== "beats") return;
+      const cc = wc.content;
+      const bufId = cc.bufId;
+      if (!bufId) return;
+      if (this.warpKey(cc, !!cc.reverse, "beats") !== key) return; // superseded
+      let src = this._importBufs[bufId];
+      if (!src) return;
+      if (cc.reverse) src = this.reversedBuffer(bufId, src);
+      const { ratio, semis } = this.warpParams(cc);
+      this._warpCache.set(key, this.beatsRender(src, ratio, semis, cc.rootBpm ?? 0));
+      if (this._warpCache.size > 12) this._warpCache.delete(this._warpCache.keys().next().value!);
+      this._warpGen++;
+      this.stopAudioForClip(clipId); // fallback node → re-fire sliced next tick
+      this.emit("arrange");
+    }, 200);
+  }
+
   private async stretchRender(src: AudioBuffer, ratio: number, semitones: number): Promise<AudioBuffer> {
     const frames = Math.max(1, Math.ceil(src.length / ratio));
     const off = new OfflineAudioContext(src.numberOfChannels, frames, src.sampleRate);
@@ -3856,27 +3978,95 @@ class AudioEngine {
     node.schedule({ output: 0, active: true, input: 0, rate: ratio, semitones });
     return await off.startRendering();
   }
-  // safe to call every schedTick — debounced so a tempo drag's flood of ratios only
-  // renders the one it settles on
-  private requestWarp(key: string, src: AudioBuffer, ratio: number, semis: number, clipId: string) {
-    if (this._warpCache.has(key) || this._warpPending.has(key)) return;
-    clearTimeout(this._warpTimers[key]);
-    this._warpTimers[key] = setTimeout(() => {
-      if (this._warpCache.has(key) || this._warpPending.has(key)) return;
-      this._warpPending.add(key);
-      void this.stretchRender(src, ratio, semis)
-        .then((out) => {
-          this._warpCache.set(key, out);
-          if (this._warpCache.size > 12) this._warpCache.delete(this._warpCache.keys().next().value!); // FIFO cap
-          this._warpGen++;
-          this.stopAudioForClip(clipId); // the fallback node → re-fire warped next tick
-          this.emit("arrange"); // waveforms recompute
-        })
-        .catch(() => {
-          /* render failed — the varispeed fallback stands */
-        })
-        .finally(() => this._warpPending.delete(key));
-    }, 200);
+  // ── LIVE warp playback: one persistent stretch node per warp clip ────────────
+  // The node holds the clip's input buffers (loaded ONCE per buffer/reverse variant)
+  // and plays pitch-locked in real time — the scheduler fires it via schedule()
+  // (input position, rate, semitones, loop region), and a tempo drag just re-schedules
+  // `rate`: a warp clip consumes exactly 60/rootBpm input-seconds per BEAT at any
+  // tempo, so with the re-anchored clock the input position stays continuous — no
+  // stop/refire, no pitch snap. The tape fallback below covers only the async warm-up.
+  private _stretch: Record<string, { node: StretchNode | null; gain: GainNode; loadedKey: string; ready: boolean }> = {};
+  // per-pass bookkeeping. PROVEN worklet semantics (see the repro in warp-stretch memory):
+  // the node's timeline keeps at most ONE queued future change — any schedule() call
+  // pops every queued change at/after "now". So a pass's deactivate must be sent ONLY
+  // after its start has taken effect; `stopSent` tracks that deferred send.
+  private _stretchFired: Record<string, { when: number; off: number; stopSent: boolean }> = {};
+  private ensureStretchNode(clip: ArrClip) {
+    if (clip.content.kind !== "audio" || warpModeOf(clip.content) !== "complex") return;
+    const cc = clip.content;
+    const bufId = cc.bufId;
+    if (!bufId) return;
+    const src0 = this._importBufs[bufId];
+    if (!src0) return;
+    const rev = !!cc.reverse;
+    const loadKey = bufId + (rev ? ":rev" : "");
+    const cur = this._stretch[clip.id];
+    if (cur && cur.loadedKey === loadKey) return; // loaded (or loading) the right variant
+    if (cur) this.disposeStretch(clip.id); // buffer/reverse changed → rebuild
+    const c = this.ensureCtx();
+    const entry = { node: null as StretchNode | null, gain: c.createGain(), loadedKey: loadKey, ready: false };
+    this._stretch[clip.id] = entry;
+    void SignalsmithStretch(c)
+      .then(async (node) => {
+        if (this._stretch[clip.id] !== entry) {
+          try { node.disconnect(); } catch { /* fine */ }
+          return; // superseded while loading
+        }
+        entry.node = node;
+        // stock preset — the one config their demos use; a custom blockMs is the only
+        // unverified deviation, so it's out until proven needed
+        // a processor exception kills the node FOREVER while `ready` stays true —
+        // make that audible (tape fallback) + visible instead of silent
+        node.onprocessorerror = () => {
+          console.warn("[warp] stretch processor died for clip", clip.id, "— tape fallback engaged");
+          this.disposeStretch(clip.id);
+        };
+        node.connect(entry.gain);
+        const src = rev ? this.reversedBuffer(bufId, src0) : src0;
+        const chans: Float32Array[] = [];
+        for (let ch = 0; ch < src.numberOfChannels; ch++) chans.push(src.getChannelData(ch).slice()); // copies — the worklet may transfer
+        await node.addBuffers(chans);
+        if (this._stretch[clip.id] !== entry) return;
+        entry.ready = true;
+      })
+      .catch(() => {
+        if (this._stretch[clip.id] === entry) delete this._stretch[clip.id]; // node failed → tape fallback stands
+      });
+  }
+  private disposeStretch(clipId: string) {
+    const e = this._stretch[clipId];
+    if (!e) return;
+    try { e.node?.stop(); e.node?.disconnect(); } catch { /* fine */ }
+    try { e.gain.disconnect(); } catch { /* fine */ }
+    delete this._stretch[clipId];
+    for (const key in this._stretchFired) if (key.startsWith(clipId + "@")) delete this._stretchFired[key];
+  }
+
+  // dev console probe: `engine.debugStretch()` dumps live-warp state and plays a 1s
+  // 440Hz beep through a FRESH stretch node wired straight to the speakers (no strips,
+  // no clips). Beep heard = library + ctx fine (fault is in our plumbing); no beep =
+  // node-level failure. Watch the console for inputTime ticks + processor errors.
+  async debugStretch() {
+    const c = this.ensureCtx();
+    console.log("[warp] ctx", c.state, "t=", c.currentTime.toFixed(3));
+    console.log("[warp] nodes:", Object.entries(this._stretch).map(([id, e]) => ({ id, ready: e.ready, key: e.loadedKey })));
+    console.log("[warp] fired:", Object.keys(this._stretchFired));
+    const node = await SignalsmithStretch(c);
+    node.onprocessorerror = () => console.warn("[warp] PROBE processor error");
+    node.connect(c.destination);
+    const n = Math.floor(c.sampleRate * 1);
+    const sine = new Float32Array(n);
+    for (let i = 0; i < n; i++) sine[i] = Math.sin((i / c.sampleRate) * 2 * Math.PI * 440) * 0.2;
+    await node.addBuffers([sine]);
+    const t0 = c.currentTime + 0.1;
+    // proven pattern: start only (one-slot queue) — the stop is sent after it's playing
+    node.schedule({ output: t0, active: true, input: 0, rate: 1, semitones: 0 });
+    node.setUpdateInterval(0.25, () => console.log("[warp] probe inputTime", node.inputTime.toFixed(3)));
+    console.log("[warp] probe scheduled — you should hear a 1s beep");
+    setTimeout(() => node.schedule({ output: c.currentTime, active: false }), 1100);
+    setTimeout(() => {
+      try { node.disconnect(); } catch { /* fine */ }
+    }, 2500);
   }
 
   // full-scan |peak| of a buffer, cached per AudioBuffer (one-time cost) — drives
@@ -3901,7 +4091,7 @@ class AudioEngine {
   // loop-xfaded as needed), rate, trim seconds, loop points, per-clip gain (incl.
   // auto-normalize makeup). Shared by the live scheduler and the consolidate bounce
   // so both voice a clip IDENTICALLY.
-  private audioClipSource(clip: ArrClip, bd: number, bpm = this.bpm) {
+  private audioClipSource(clip: ArrClip, bd: number, bpm = this.bpm, opts?: { noWarpSwap?: boolean }) {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
     let srcBuf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
@@ -3916,22 +4106,23 @@ class AudioEngine {
       [ta, tb] = [1 - tb, 1 - ta];
       if (tla != null && tlb != null) [tla, tlb] = [1 - tlb, 1 - tla];
     }
-    // ── WARP: swap in the cached stretch render (plays at rate 1 — tempo-fit and
-    //    transpose are baked in, pitch/duration-preserving). Cache miss → keep the
-    //    tape-style varispeed fallback and kick a debounced render. ──
+    // ── WARP MODES (beats/complex): swap in a cached render (plays at rate 1 —
+    //    tempo-fit + transpose baked in). A miss keeps the tempo-fit tape fallback;
+    //    beats kicks its debounced slicer render. complex renders come only from the
+    //    bounce cache (live playback uses the stretch NODE — see noWarpSwap). ──
     let rawBuf = srcBuf;
     let bufKey = cc.bufId + (rev ? ":rev" : ""); // identity for the xfade-loop cache
     let warped = false;
-    if (cc.warp && cc.bufId) {
-      const key = this.warpKey(cc, rev);
+    const mode = warpModeOf(cc);
+    if ((mode === "beats" || mode === "complex") && cc.bufId && !opts?.noWarpSwap) {
+      const key = this.warpKey(cc, rev, mode);
       const hit = this._warpCache.get(key);
       if (hit) {
         rawBuf = hit;
         bufKey = "warp:" + key;
         warped = true;
-      } else {
-        const { ratio, semis } = this.warpParams(cc);
-        this.requestWarp(key, srcBuf, ratio, semis, clip.id);
+      } else if (mode === "beats") {
+        this.requestBeats(key, clip.id);
       }
     }
     // a/b trim (0..1 of the buffer) → seconds; per-clip gain
@@ -3939,9 +4130,11 @@ class AudioEngine {
     const b = Math.min(1, Math.max(a + 0.001, tb));
     const dur = rawBuf.duration;
     const trimmedSec = (b - a) * dur;
-    // ── rate: warped buffers already sit on the grid (rate 1); otherwise grid-sync
-    //    (bpm/rootBpm, same as LoopLanes) × varispeed (semi+cents). ──
-    const rate = warped ? 1 : this.audioClipRate(cc, bpm);
+    // ── rate: warped buffers already sit on the grid (rate 1). A beats/complex clip
+    //    whose render/node is pending plays the TAPE fallback tempo-fitted (bpm/rootBpm,
+    //    NO varispeed transpose — grid timing wins over provisional pitch). repitch/off:
+    //    grid-fit × varispeed as before. ──
+    const rate = warped ? 1 : mode === "beats" || mode === "complex" ? (cc.rootBpm && cc.rootBpm > 0 ? bpm / cc.rootBpm : 1) : this.audioClipRate(cc, bpm);
     // auto-normalize: scanned peak → makeup toward ≈ −1 dBFS (capped at +18 dB)
     let gain = cc.gain ?? 1;
     if (cc.norm) {
@@ -4030,7 +4223,8 @@ class AudioEngine {
   audioClipWave(clip: ArrClip) {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
-    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, cc.sync, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, cc.loop, cc.warp, cc.norm, cc.warp ? this._warpGen : 0, this.arrangement.bpm, clip.lengthBeats].join("|");
+    const mode = warpModeOf(cc);
+    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, mode, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, cc.loop, cc.norm, mode === "beats" || mode === "complex" ? this._warpGen : 0, this.arrangement.bpm, clip.lengthBeats].join("|");
     const hit = this._waveCache[clip.id];
     if (hit && hit.key === key) return hit.wave;
     const wave = this.buildClipWave(clip);
@@ -4055,12 +4249,56 @@ class AudioEngine {
   ) {
     if (clip.content.kind !== "audio") return;
     const cc = clip.content;
-    const s = this.audioClipSource(clip, bd);
+    // live COMPLEX warp: keep the per-clip stretch node warm; once ready it plays this
+    // clip pitch-locked (the buffer path below is only the async warm-up fallback)
+    const isComplex = warpModeOf(cc) === "complex";
+    if (isComplex) this.ensureStretchNode(clip);
+    const st = isComplex ? this._stretch[clip.id] : undefined;
+    const useLive = !!(st && st.ready && st.node);
+    const s = this.audioClipSource(clip, bd, this.bpm, { noWarpSwap: useLive });
     if (!s) return; // not imported yet
     const braceLen = brace ? brace.end - brace.start : 0;
     // fire one instance at absolute start beat `sb`, optionally offset into the clip
     const fire = (sb: number, clipOffsetBeats: number) => {
       const key = clip.id + "@" + sb.toFixed(3);
+      if (useLive && st && st.node) {
+        // ── live stretch path: drive the persistent node instead of a buffer source.
+        // s came with noWarpSwap, so rate/positions are in ORIGINAL-buffer terms. ──
+        if (this._stretchFired[key]) return;
+        const c = this.ctx!;
+        const catchUp = Math.max(0, clipOffsetBeats) * bd;
+        const when = Math.max(c.currentTime, whenOf(sb + clipOffsetBeats));
+        const stopAt = whenOf(sb + clip.lengthBeats);
+        const input = s.startSec + catchUp * s.rate;
+        // one-shot content may run out before the clip's edge (silence after)
+        const contentOut = s.rate > 0 ? (s.endSec - input) / s.rate : 0;
+        const off = s.looping ? stopAt : Math.min(stopAt, when + Math.max(0, contentOut));
+        if (off <= when) return;
+        this._stretchFired[key] = { when, off, stopSent: false };
+        // the node takes over from any tape-fallback source still playing this pass
+        const fb = this._startedAudio[key];
+        if (fb) {
+          try { fb.src.stop(); } catch { /* already ended */ }
+          delete this._startedAudio[key];
+        }
+        st.gain.gain.value = s.gain;
+        try { st.gain.disconnect(); } catch { /* not connected */ }
+        st.gain.connect(this.trackStrip(t));
+        // START only — never pass `outputTime`, and never queue the stop here: the
+        // worklet holds ONE queued future change, so a second schedule() would pop
+        // this start (that was the total-silence bug). The deactivate is sent by the
+        // sweep below once this start has taken effect.
+        st.node.schedule({
+          output: when,
+          active: true,
+          input,
+          rate: s.rate,
+          semitones: (cc.semi ?? 0) + (cc.cents ?? 0) / 100,
+          loopStart: s.looping ? s.loopStartSec : 0,
+          loopEnd: s.looping ? s.loopEndSec : 0, // equal values = looping disabled
+        });
+        return;
+      }
       if (this._startedAudio[key]) return;
       const c = this.ctx!;
       const g = c.createGain();
@@ -4094,7 +4332,7 @@ class AudioEngine {
       src.onended = () => {
         try { g.disconnect(); } catch { /* fine */ }
       };
-      this._startedAudio[key] = { src, synced: !!cc.sync, baseRate: s.rate, baseBpm: this.bpm };
+      this._startedAudio[key] = { src, synced: warpModeOf(cc) === "repitch", baseRate: s.rate, baseBpm: this.bpm };
     };
     // brace loop: an instance per pass whose start lands in the window. Without a brace,
     // fire once when startBeat enters the window (or immediately if we began mid-clip).
@@ -4116,6 +4354,22 @@ class AudioEngine {
       if (clipEnd <= fromBeatAbs || sb >= toBeatAbs) continue;
       const offsetBeats = fromBeatAbs > sb ? fromBeatAbs - sb : 0; // mid-clip catch-up
       fire(sb, offsetBeats);
+    }
+    // ── deferred pass-end stops for the live stretch node. The worklet keeps ONE
+    // queued future change (proven in the repro), so each pass's deactivate is sent
+    // only once its start has taken effect and the end is near. (Brace edge: a stop
+    // popped by the next pass's start at the same instant is harmless — the new
+    // start replaces it.) ──
+    if (useLive && st && st.node && this.ctx) {
+      const nowT = this.ctx.currentTime;
+      for (const k in this._stretchFired) {
+        if (!k.startsWith(clip.id + "@")) continue;
+        const f = this._stretchFired[k];
+        if (!f.stopSent && nowT >= f.when && f.off <= nowT + AudioEngine.SCHED_AHEAD * 2) {
+          st.node.schedule({ output: f.off, active: false });
+          f.stopSent = true;
+        }
+      }
     }
   }
 

@@ -232,16 +232,22 @@ focus falls back to the timeline.
 **WARP — pitch-preserving tempo-fit + duration-preserving transpose (deferral #5/#6).**
 Per-clip `warp?: boolean` (mutually exclusive with tape-style `sync`). Powered by
 [signalsmith-stretch](https://signalsmith-audio.co.uk/code/stretch/) (WASM/AudioWorklet — see
-CREDITS.md): `stretchRender` runs the worklet inside an `OfflineAudioContext`
-(rate = `bpm/rootBpm`, `semitones` = semi + cents/100) and caches the result per
-(buffer · reverse · ratio · transpose), FIFO-capped at 12 renders. `audioClipSource` swaps the
-cached render in at **rate 1** (all the existing trim/loop/xfade math just works on the
-stretched buffer); a cache miss plays the **varispeed fallback** and kicks a 200 ms-debounced
-render (`requestWarp`, safe to call every tick — a tempo drag only renders the settled ratio);
-when it lands, the live node stops + re-fires warped and `_warpGen` invalidates the wave cache.
-The bounce (`renderAudioSpan`) AWAITS warp renders so ⌘J never prints the fallback. Warped
-clips keep a constant beat-span across tempo changes (like synced; excluded from the time-true
-length rescale). No `rootBpm` ⇒ ratio 1 — warp still gives duration-preserving transpose.
+CREDITS.md). **Live playback = one persistent stretch node per warp clip** (`_stretch`,
+`ensureStretchNode`): input buffers load once per buffer/reverse variant (channel COPIES —
+the worklet may transfer), `configure({blockMs: 80})`, node → per-clip gain → track strip.
+The scheduler fires it via `schedule({output, active, input, rate, semitones, loopStart/End})`
+with its own `_stretchFired` dedupe; one-shot content deactivates at
+`min(clip end, content end)`. **A tempo change just re-schedules `rate`** — pitch stays locked
+through the whole drag and the input position stays beat-continuous because a warp clip consumes
+exactly `60/rootBpm` input-seconds per beat at ANY tempo (self-checked invariant). `audioClipSource`
+is called with `noWarpSwap` for the live path so rate/positions are in original-buffer terms.
+The tape-style tempo-fit fallback covers only the async node warm-up (and node failure);
+`stopAudioForClip`/`stopAudioClips` deactivate nodes + clear passes; nodes dispose on clip/track
+delete, warp-off, and newProject; `loadPersistedAudio` pre-warms restored warp clips. OFFLINE
+renders (`stretchRender` in an `OfflineAudioContext`, `_warpCache`) remain for the ⌘J bounce
+(awaited — never prints the fallback). Warped clips keep a constant beat-span across tempo
+changes (excluded from the time-true length rescale). No `rootBpm` ⇒ ratio 1 — warp still gives
+duration-preserving transpose.
 
 **Auto-normalize (deferral #7).** Per-clip `norm?: boolean` (new imports default ON): `peakOf`
 full-scans the buffer once (WeakMap-cached) and `audioClipSource` folds `min(8, 0.89/peak)`
