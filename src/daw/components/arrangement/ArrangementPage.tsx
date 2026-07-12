@@ -104,7 +104,9 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
       <div className="flex items-center gap-[6px]">
         <Knob value={t.vol} min={0} max={1} defaultValue={0.8} size={22} onChange={(v) => engine.setTrackVol(t.id, v)} label="" fmt={() => ""} />
         <Knob value={t.pan} min={-1} max={1} defaultValue={0} size={22} bipolar onChange={(v) => engine.setTrackPan(t.id, v)} label="" fmt={() => ""} />
-        <button className={chip(fxOpen || hasFx)} onClick={() => onFx(t.id)} title={hasFx ? "track fx (" + t.devices!.length + " device" + (t.devices!.length > 1 ? "s" : "") + ")" : "track fx"}>
+        {/* glows ONLY while this track's fx pane is open (the glow = "keys/edits go here";
+            a has-devices glow on every track made it easy to edit the wrong one) */}
+        <button className={chip(fxOpen)} onClick={() => onFx(t.id)} title={hasFx ? "track fx (" + t.devices!.length + " device" + (t.devices!.length > 1 ? "s" : "") + ")" : "track fx"}>
           fx
         </button>
         {t.kind === "midi" && (
@@ -134,7 +136,6 @@ const MASTER_ID = "__master__";
 // Same vocabulary as TrackHeader: name row, then fader + fx chip.
 function MasterHeader({ fxOpen, onFx }: { fxOpen: boolean; onFx: () => void }) {
   const eng = useEngine(["fx"]);
-  const anyOn = eng.masterDevices().some((d) => !!(d.params as { on?: boolean }).on);
   return (
     <div className="flex flex-col justify-center gap-[3px] px-[8px]" style={{ height: ROW_H }}>
       <div className="flex items-center gap-[5px]">
@@ -143,7 +144,7 @@ function MasterHeader({ fxOpen, onFx }: { fxOpen: boolean; onFx: () => void }) {
       </div>
       <div className="flex items-center gap-[6px]">
         <Knob value={eng.masterVol} min={0} max={1} defaultValue={0.95} size={22} onChange={(v) => engine.setMasterVol(v)} label="" fmt={() => ""} />
-        <button className={chip(fxOpen || anyOn)} onClick={onFx} title="master fx">
+        <button className={chip(fxOpen)} onClick={onFx} title="master fx">
           fx
         </button>
       </div>
