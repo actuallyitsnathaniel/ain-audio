@@ -12,6 +12,7 @@ import { engine } from "../../engine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { openContextMenu } from "../context-menu-bus";
 import { clipBeats } from "../../data/clips";
+import { DRUM_BASE } from "../../data/drum-midi";
 import { type ArrClip, type ArrTrack } from "../../data/arrangement";
 
 const HEAD_H = 22; // ruler height
@@ -434,14 +435,28 @@ export function Timeline({
       g.fillRect(0, y + ROW_H - 1, w, 1);
     });
 
-    // gridlines across the visible range (labels drawn later, over the ruler bg)
+    // gridlines across the visible range (labels drawn later, over the ruler bg).
+    // Hierarchy: bars (strong) → beats (medium) → SNAP subdivisions (faint) — the
+    // sub-beat lines appear/disappear with the snap setting (⌘1/⌘2), like Ableton's
+    // grid, and only when they have ≥6px of room.
+    const snap = engine.snapBeats;
     for (let b = firstBeat; b <= lastBeat; b++) {
       const x = beatToX(b);
       if (x < KEY_W - 1 || x > w) continue;
       const isBar = b % bpb === 0;
       if (!isBar && !showBeatLines) continue; // too zoomed out to show beat lines
+      if (!isBar && snap >= bpb) continue; // bar-snap: no beat lines between bars
       g.fillStyle = isBar ? "rgba(255,255,255,0.13)" : "rgba(255,255,255,0.045)";
       g.fillRect(x, HEAD_H, 1, h - HEAD_H);
+    }
+    if (snap > 0 && snap < 1 && snap * beatPx >= 6) {
+      g.fillStyle = "rgba(255,255,255,0.022)";
+      for (let b = firstBeat; b < lastBeat; b += snap) {
+        if (Math.abs(b - Math.round(b)) < 1e-6) continue; // integer beats already drawn
+        const x = beatToX(b);
+        if (x < KEY_W - 1 || x > w) continue;
+        g.fillRect(x, HEAD_H, 1, h - HEAD_H);
+      }
     }
 
     // ruler bg + loop brace
@@ -606,6 +621,30 @@ export function Timeline({
           g.fillStyle = "rgba(255,255,255,0.8)";
           tri(x + cw - 2);
           if (tiles) tri(x + cw - 9);
+        }
+        // mini content preview (DRUM hits) — the piano-roll notes are the lossless
+        // truth (lane = pitch − DRUM_BASE); a notes-less clip falls back to the grid
+        if (c.content.kind === "drum") {
+          const pat = c.content.pattern;
+          const clen = Math.max(0.25, pat.steps * 0.25); // step = 1/16
+          const dots: { beat: number; lane: number }[] = [];
+          if (c.content.notes?.notes.length) {
+            for (const n of c.content.notes.notes) dots.push({ beat: n.start, lane: n.pitch - DRUM_BASE });
+          } else {
+            Object.keys(pat.on).forEach((laneId, li) => (pat.on[laneId] || []).forEach((on, s) => { if (on) dots.push({ beat: s * 0.25, lane: li }); }));
+          }
+          if (dots.length) {
+            let lo = Infinity, hi = -Infinity;
+            dots.forEach((d) => { lo = Math.min(lo, d.lane); hi = Math.max(hi, d.lane); });
+            const span = Math.max(1, hi - lo);
+            g.fillStyle = "rgba(255,255,255,0.55)";
+            dots.forEach((d) => {
+              const dx = x + (d.beat / clen) * Math.min(cw, c.lengthBeats * view.current.ppb);
+              const dy = y + 6 + (1 - (d.lane - lo) / span) * (ROW_H - 16);
+              if (dx > x + cw - 2) return;
+              g.fillRect(dx, dy, 2, 2);
+            });
+          }
         }
         // name + selection outline
         g.fillStyle = "rgba(0,0,0,0.6)";

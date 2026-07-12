@@ -204,7 +204,13 @@ single-clip.
 the viewport center — same math as ⌘+wheel. The Timeline publishes `{ zoom(factor) }` into a
 `zoomApiRef` prop; the page's single keyboard authority calls it (no canvas focus needed).
 **⌘1/⌘2** step the snap grid finer/coarser through the snap Select's own ladder
-(bar → 1/4 → 1/8 → 1/16 → 1/32), Ableton-style.
+(bar → 1/4 → 1/8 → 1/16 → 1/32), Ableton-style. The timeline GRID follows the snap setting:
+sub-beat lines (faint) appear at the snap subdivisions when they have ≥6px of room, and
+bar-snap hides the beat lines between bars — the drawn grid always shows where things will land.
+Drum clips draw a mini hit preview on their timeline blocks (piano-roll notes = truth,
+`lane = pitch − DRUM_BASE`; grid fallback for notes-less clips). The track/master `fx` chip
+glows ONLY while that chain's pane is open (a has-devices glow on every track caused
+wrong-track edits); device count lives in the chip's tooltip.
 
 **Pane key focus (Ableton/Logic last-clicked-area model).** The studio has two key-focus panes:
 the **timeline** (default — toolbar, track headers, canvas, master row) and the **editor** (the
