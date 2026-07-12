@@ -14,6 +14,10 @@ point of use in the code/docs.
 - [Tailwind CSS 4](https://tailwindcss.com)
 - [Framer Motion](https://motion.dev)
 - [@unhead/react](https://unhead.unjs.io)
+- [signalsmith-stretch](https://signalsmith-audio.co.uk/code/stretch/) (Signalsmith Audio, MIT) —
+  polyphonic pitch-shift / time-stretch (WASM + AudioWorklet). Powers the studio's per-clip
+  WARP mode: pitch-preserving tempo-fit + duration-preserving transpose, rendered offline into
+  cached buffers in `engine.ts` (`stretchRender`).
 
 ## Build / dev toolchain
 

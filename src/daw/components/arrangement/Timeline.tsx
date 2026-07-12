@@ -344,7 +344,8 @@ export function Timeline({
       cents: 0,
       semi: 0,
       snap: true,
-      rootBpm: res.bpm, // detected native tempo (drives grid-sync)
+      norm: true, // new imports auto-normalize (deferral #7)
+      rootBpm: res.bpm, // detected native tempo (drives grid-sync / warp)
       bars: res.bars,
       key: res.key,
     };
@@ -548,7 +549,7 @@ export function Timeline({
           const wv = engine.audioClipWave(c);
           if (wv) {
             tiles = wv.looping;
-            const gain = Math.min(1.5, c.content.gain ?? 1);
+            const gain = Math.min(1.5, wv.gain); // effective gain (incl. auto-normalize)
             const midY = y + 3 + (ROW_H - 8) / 2;
             const half = (ROW_H - 8) / 2 - 4;
             const n = wv.peaks.length;
