@@ -4,7 +4,7 @@
 // Gesture set models Ableton Live's MIDI Note Editor (non-draw-mode).
 //
 // Edit:
-//   click empty → draw a note · click a note → select · shift+click → add/remove ·
+//   dbl-click empty → create a note (one grid cell) · click a note → select · shift+click → add/remove ·
 //   drag empty → marquee select (shift adds) · drag a note → move the selection ·
 //   drag right edge → resize · hold ⌘/ctrl while moving/resizing → bypass snap ·
 //   ⌥/ctrl+drag a note → duplicate the selection · double-click / right-click → delete
@@ -29,7 +29,9 @@ import { useRafLoop } from "../../hooks/useRafLoop";
 import { cloneClip, clipBeats, newNoteId, type AutoPoint, type Note, type NoteClip } from "../../data/clips";
 import { Knob } from "../Knob";
 
-const SNAP = 0.25; // beats (1/16)
+// the roll's grid size comes from the engine (adjustable, separate from the timeline's
+// snap): the drawn grid, note creation, nudge steps and min lengths all follow it live
+const snapSize = () => engine.rollSnapBeats || 0.25;
 const ROW_H = 14; // px per semitone row
 const KEY_W = 30; // left piano-key gutter
 const LO_MIDI = 12; // C0
@@ -46,7 +48,10 @@ const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", 
 const noteName = (m: number) => NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
 
 const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#54adbd";
-const snapTo = (b: number) => Math.round(b / SNAP) * SNAP;
+const snapTo = (b: number) => {
+  const s = snapSize();
+  return Math.round(b / s) * s;
+};
 const isBlack = (m: number) => [1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 // Live's modifier convention: ⌘(mac)/ctrl(win) bypasses snap & is the "command" key
@@ -92,6 +97,12 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
   useEffect(() => {
     laneRef.current = lane;
   }, [lane]);
+  // re-render on transport events so the grid select tracks ⌘1/⌘2 snap changes
+  useEffect(() => {
+    const fn = () => bump((x) => x + 1);
+    engine.on("transport", fn);
+    return () => engine.off("transport", fn);
+  }, []);
   const laneH = () => (laneRef.current.open ? VEL_H : LANE_TAB_H);
 
   const commit = () => {
@@ -450,12 +461,12 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
       const anchor = byId(d.anchor);
       if (!anchor) return;
       const end = free ? xToBeat(x) : snapTo(xToBeat(x));
-      const newLen = clamp(end - anchor.start, SNAP, tb - anchor.start);
+      const newLen = clamp(end - anchor.start, snapSize(), tb - anchor.start);
       const dLen = newLen - (d.base.get(d.anchor) || newLen);
       d.base.forEach((len0, id) => {
         const n = byId(id);
         if (!n) return;
-        n.length = clamp(len0 + dLen, SNAP, tb - n.start);
+        n.length = clamp(len0 + dLen, snapSize(), tb - n.start);
       });
       commit();
       return;
@@ -492,7 +503,9 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
     }
     // create only inside the pitch grid (not the gutter keyboard or the bottom lane)
     if (!clipRef.current || x < KEY_W || y >= gridH()) return;
-    const note: Note = { id: newNoteId(), pitch: clamp(yToPitch(y), LO_MIDI, HI_MIDI), start: clamp(snapTo(xToBeat(x) - SNAP / 2), 0, totalBeats() - SNAP * 2), length: SNAP * 2, vel: 0.85 };
+    // Ableton grid-cell creation: the note fills the grid cell you double-clicked
+    const s = snapSize();
+    const note: Note = { id: newNoteId(), pitch: clamp(yToPitch(y), LO_MIDI, HI_MIDI), start: clamp(Math.floor(xToBeat(x) / s) * s, 0, Math.max(0, totalBeats() - s)), length: s, vel: 0.85 };
     clipRef.current.notes.push(note);
     sel.current = new Set([note.id]);
     blip(note.pitch);
@@ -553,7 +566,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
     sel.current.forEach((id) => {
       const n = byId(id);
       if (!n) return;
-      n.length = clamp(snapTo(n.length + dBeat), SNAP, tb - n.start);
+      n.length = clamp(snapTo(n.length + dBeat), snapSize(), tb - n.start);
     });
     commit();
   };
@@ -608,6 +621,16 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
     });
     commit();
   };
+  // "0" — deactivate/reactivate (Ableton): any active in the selection → mute all
+  const toggleMuteSel = () => {
+    if (!sel.current.size) return;
+    const anyActive = [...sel.current].some((id) => !byId(id)?.muted);
+    sel.current.forEach((id) => {
+      const n = byId(id);
+      if (n) n.muted = anyActive || undefined;
+    });
+    commit();
+  };
   // the note immediately preceding `n` in time (for drawing the slide lead-in)
   const prevNote = (n: Note): Note | null => {
     let best: Note | null = null;
@@ -653,6 +676,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
         anySlide
           ? { label: "clear slide", onClick: () => setSlide(false) }
           : { label: "make slide note (bend prev)", onClick: () => setSlide(true) },
+        { label: [...sel.current].some((id) => !byId(id)?.muted) ? "mute" : "unmute", hint: "0", onClick: toggleMuteSel },
         { separator: true },
         { label: "octave up", hint: "⇧↑", onClick: () => nudge(0, 12, false) },
         { label: "octave down", hint: "⇧↓", onClick: () => nudge(0, -12, false) },
@@ -692,15 +716,20 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
       return;
     }
     if (!sel.current.size) return;
+    if (k === "0") {
+      e.preventDefault();
+      toggleMuteSel(); // Ableton "0" — deactivate/reactivate the selection
+      return;
+    }
     const altFree = e.altKey; // alt = bypass snap on time nudge (Live convention)
     if (k === "ArrowLeft") {
       e.preventDefault();
-      if (e.shiftKey) resizeSel(-SNAP);
-      else nudge(-SNAP, 0, altFree);
+      if (e.shiftKey) resizeSel(-snapSize());
+      else nudge(-snapSize(), 0, altFree);
     } else if (k === "ArrowRight") {
       e.preventDefault();
-      if (e.shiftKey) resizeSel(SNAP);
-      else nudge(SNAP, 0, altFree);
+      if (e.shiftKey) resizeSel(snapSize());
+      else nudge(snapSize(), 0, altFree);
     } else if (k === "ArrowUp") {
       e.preventDefault();
       if (cmd(e)) velSel(0.1); // ⌘/ctrl+↑ → velocity +10 (Live convention)
@@ -868,8 +897,11 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
       g.fillStyle = bar ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.07)";
       g.fillRect(x, 0, bar ? 1.5 : 1, gh);
     }
-    if (v.ppb >= 90) {
-      for (let b = 0; b <= tb; b += SNAP) {
+    // sub-beat lines at the roll's snap grid — appear/disappear with the setting
+    // (⌘1/⌘2 or the grid select), gated on ≥5px of room instead of a fixed zoom
+    const gs = snapSize();
+    if (gs * v.ppb >= 5) {
+      for (let b = 0; b <= tb; b += gs) {
         if (b % 1 === 0) continue;
         const x = beatToX(b);
         if (x < KEY_W || x > w) continue;
@@ -899,8 +931,9 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
       if (x + wn < KEY_W || x > w) return;
       const playing = pos.playing && pos.beat >= n.start && pos.beat < n.start + n.length;
       const selected = sel.current.has(n.id);
-      g.fillStyle = ac;
-      g.globalAlpha = playing ? 1 : 0.5 + n.vel * 0.4;
+      // deactivated notes draw gray + dim (Ableton) — still selectable/editable
+      g.fillStyle = n.muted ? "#5c5c66" : ac;
+      g.globalAlpha = n.muted ? 0.45 : playing ? 1 : 0.5 + n.vel * 0.4;
       g.beginPath();
       g.roundRect(x, y + 1, wn, ROW_H - 2, 2);
       g.fill();
@@ -1074,6 +1107,19 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
         <button className={"pointer-events-auto " + tabBtn(lane.mode === "vib")} onClick={() => setLane((l) => ({ ...l, mode: "vib", open: true }))} title="vibrato automation lane">
           vib
         </button>
+        {/* the roll's OWN grid — independent of the timeline's snap setting */}
+        <select
+          value={String(engine.rollSnapBeats)}
+          onChange={(e) => engine.setRollSnapBeats(Number(e.target.value))}
+          className="pointer-events-auto ml-[2px] cursor-pointer appearance-none rounded-[3px] border border-line bg-panel px-[5px] py-[2px] font-mono text-[9px] leading-none text-faint transition-colors hover:text-accent focus:outline-none"
+          title="note grid (⌘1 finer · ⌘2 coarser while the editor pane is focused)"
+          aria-label="note grid"
+        >
+          <option value="1">1/4</option>
+          <option value="0.5">1/8</option>
+          <option value="0.25">1/16</option>
+          <option value="0.125">1/32</option>
+        </select>
         <button
           className="pointer-events-auto ml-auto rounded-[3px] border border-line bg-panel px-[6px] py-[2px] font-mono text-[10px] leading-none text-faint transition-colors hover:text-accent"
           onClick={() => setLane((l) => ({ ...l, open: !l.open }))}

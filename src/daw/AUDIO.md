@@ -203,8 +203,14 @@ single-clip.
 **Keyboard zoom.** `+`/`−` (and ⌘+/−, intercepted from browser zoom) zoom the timeline around
 the viewport center — same math as ⌘+wheel. The Timeline publishes `{ zoom(factor) }` into a
 `zoomApiRef` prop; the page's single keyboard authority calls it (no canvas focus needed).
-**⌘1/⌘2** step the snap grid finer/coarser through the snap Select's own ladder
-(bar → 1/4 → 1/8 → 1/16 → 1/32), Ableton-style. The timeline GRID follows the snap setting:
+**⌘1/⌘2** step the snap grid finer/coarser, Ableton-style — **pane-aware**: with the timeline
+focused they walk the timeline ladder (bar → 1/4 → 1/8 → 1/16 → 1/32, `engine.snapBeats`);
+with the editor focused they walk the piano roll's OWN grid (`engine.rollSnapBeats`,
+1/4 → 1/32, its select lives in the roll's lane strip). The two snaps are deliberately
+independent — editing notes at 1/32 shouldn't coarsen clip placement or vice versa.
+**Ruler scrubbing is grid-quantized**: a seek re-anchors the clock + restarts sources, so the
+scrub target rounds to the snap grid (whole beats when snap is off; ⌘ = free) and re-seeks only
+when it crosses onto a NEW gridline — never continuously with the mouse. The timeline GRID follows the snap setting:
 sub-beat lines (faint) appear at the snap subdivisions when they have ≥6px of room, and
 bar-snap hides the beat lines between bars — the drawn grid always shows where things will land.
 Drum clips draw a mini hit preview on their timeline blocks (piano-roll notes = truth,
@@ -284,9 +290,12 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
   drag right edge → resize the selection · **hold ⌘/ctrl/⌥ to bypass snap** · **⌥+drag → duplicate**
   the selection (clone-in-place then move) · double-click / right-click a note → delete.
 - **Edit (keys, when focused):** ←/→ nudge · ⌥+←/→ nudge without snap · shift+←/→ resize · ↑/↓
-  transpose semitone · **shift+↑/↓ octave** · **⌘/ctrl+↑/↓ velocity ±10** · ⌘/ctrl+A select all ·
-  ⌘/ctrl+D duplicate (+1 beat) · delete/backspace · esc. A transpose/velocity change blips the
-  representative note so you hear the edit.
+  transpose semitone · **shift+↑/↓ octave** · **⌘/ctrl+↑/↓ velocity ±10** · **0 mute/unmute**
+  (deactivate, Ableton: gray + never voiced — `Note.muted`, filtered in `buildRuns` and the
+  drum-note path) · ⌘/ctrl+A select all · ⌘/ctrl+D duplicate (+1 beat) · delete/backspace · esc.
+  A transpose/velocity change blips the representative note so you hear the edit. The same "0"
+  on the TIMELINE pane deactivates the selected clips (`ArrClip.muted`, `toggleMuteSelection` —
+  dim, skipped by `schedTick`, live audio stopped; undoable).
 - **Navigate:** wheel → scroll pitch · shift+wheel → scroll time · ⌘/ctrl+wheel → zoom time around
   cursor · hold Space (or middle-drag) → pan. Wheel is a **non-passive native listener** so it can
   `preventDefault` the page scroll.

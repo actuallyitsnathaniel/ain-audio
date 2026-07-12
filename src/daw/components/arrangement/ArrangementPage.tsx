@@ -243,6 +243,22 @@ export function ArrangementPage() {
       // remounts its roll/grid via engine.undoStamp to show the restored content)
       if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) engine.redo(); else engine.undo(); return; }
       if (meta && e.key.toLowerCase() === "y") { e.preventDefault(); engine.redo(); return; }
+      // grid size: ⌘1 finer · ⌘2 coarser (Ableton) — PANE-AWARE: steps the timeline's
+      // snap ladder or the piano roll's own grid, whichever pane has key focus
+      if (meta && (e.key === "1" || e.key === "2")) {
+        e.preventDefault();
+        if (paneRef.current === "timeline") {
+          const grid = [engine.arrangement.beatsPerBar, 1, 0.5, 0.25, 0.125]; // bar → 1/32
+          const i = grid.findIndex((g) => Math.abs(g - engine.snapBeats) < 1e-6);
+          engine.setSnapBeats(e.key === "1" ? (i < 0 ? 0.25 : grid[Math.min(grid.length - 1, i + 1)]) : i < 0 ? 1 : grid[Math.max(0, i - 1)]);
+        } else {
+          const grid = [1, 0.5, 0.25, 0.125]; // 1/4 → 1/32
+          const i = grid.findIndex((g) => Math.abs(g - engine.rollSnapBeats) < 1e-6);
+          const at = i < 0 ? 2 : i; // unknown value → treat as 1/16
+          engine.setRollSnapBeats(e.key === "1" ? grid[Math.min(grid.length - 1, at + 1)] : grid[Math.max(0, at - 1)]);
+        }
+        return;
+      }
       // ── everything below is TIMELINE-scoped: skip when the editor pane has focus
       // (the piano roll / editors handle their own keys there) ──
       if (paneRef.current !== "timeline") return;
@@ -250,14 +266,6 @@ export function ArrangementPage() {
       // not the browser's). "=" is the unshifted + key.
       if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomApiRef.current?.zoom(1.25); return; }
       if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomApiRef.current?.zoom(1 / 1.25); return; }
-      // grid size: ⌘1 finer · ⌘2 coarser (Ableton) — steps the snap Select's own ladder
-      if (meta && (e.key === "1" || e.key === "2")) {
-        e.preventDefault();
-        const grid = [engine.arrangement.beatsPerBar, 1, 0.5, 0.25, 0.125]; // bar → 1/32
-        const i = grid.findIndex((g) => Math.abs(g - engine.snapBeats) < 1e-6);
-        engine.setSnapBeats(e.key === "1" ? (i < 0 ? 0.25 : grid[Math.min(grid.length - 1, i + 1)]) : i < 0 ? 1 : grid[Math.max(0, i - 1)]);
-        return;
-      }
       // select-all
       if (meta && e.key.toLowerCase() === "a") { e.preventDefault(); engine.selectAllClips(); return; }
       // delete every selected clip
@@ -286,6 +294,8 @@ export function ArrangementPage() {
       if (meta && e.key.toLowerCase() === "v") { if (engine.hasClipboard()) { e.preventDefault(); engine.pasteClipboard(); } return; }
       // arrow keys on the selection (need a selection to matter)
       if (engine.selClips.size) {
+        // "0" — deactivate/reactivate the selected clips (Ableton)
+        if (e.key === "0" && !meta) { e.preventDefault(); engine.toggleMuteSelection(); return; }
         const step = meta ? 0.25 : engine.snapBeats > 0 ? engine.snapBeats : 1; // ⌘ = fine (1/16)
         if (e.key === "ArrowLeft") { e.preventDefault(); if (e.shiftKey) engine.resizeSelection(-step); else engine.nudgeSelection(-step); return; }
         if (e.key === "ArrowRight") { e.preventDefault(); if (e.shiftKey) engine.resizeSelection(step); else engine.nudgeSelection(step); return; }
@@ -409,7 +419,7 @@ export function ArrangementPage() {
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse.</span>
+          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
         </div>
       </TrackSection>
     </main>

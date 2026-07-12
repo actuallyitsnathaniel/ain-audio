@@ -1598,7 +1598,8 @@ class AudioEngine {
   // but a slide placed right after a chord chains onto the top chord tone (the last
   // opened). For a clean sliding lead over chords, put the lead on its own channel.
   private buildRuns(notes: Note[]): NoteRun[] {
-    const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+    // muted (deactivated) notes stay in the clip but are never voiced
+    const sorted = notes.filter((n) => !n.muted).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
     const runs: NoteRun[] = [];
     let open: NoteRun | null = null;
     const EPS = 1e-4;
@@ -3211,6 +3212,13 @@ class AudioEngine {
     this.snapBeats = Math.max(0, beats);
     this.emit("transport");
   }
+  // the piano roll's OWN grid — deliberately separate from the timeline's snap
+  // (editing notes at 1/32 shouldn't coarsen/refine clip placement, and vice versa)
+  rollSnapBeats = 0.25; // 1/16
+  setRollSnapBeats(beats: number) {
+    this.rollSnapBeats = Math.min(1, Math.max(0.0625, beats));
+    this.emit("transport");
+  }
   // the insert marker: shared cursor for paste / create / split. Emits `arrange` so the
   // timeline redraws it.
   setInsertBeat(beat: number) {
@@ -3343,6 +3351,21 @@ class AudioEngine {
     for (const { c } of pairs) c.startBeat = Math.max(0, c.startBeat + d);
     for (const { t, c } of pairs) this.resolveOverlaps(t, c);
     for (const { c } of pairs) this.stopAudioForClip(c.id);
+    this.saveArr();
+    this.emit("select");
+  }
+  // "0" — deactivate/reactivate the selected clips (Ableton): if any is active, mute
+  // all; else unmute all. Muted audio clips stop their live sources immediately;
+  // unmuted ones re-fire fresh from the scheduler next tick.
+  toggleMuteSelection() {
+    const pairs = this.selectedPairs();
+    if (!pairs.length) return;
+    this.pushUndo();
+    const anyActive = pairs.some(({ c }) => !c.muted);
+    for (const { c } of pairs) {
+      c.muted = anyActive || undefined;
+      this.stopAudioForClip(c.id);
+    }
     this.saveArr();
     this.emit("select");
   }
@@ -4045,6 +4068,7 @@ class AudioEngine {
       for (const t of this.arrangement.tracks) {
         if (this.trackGain(t) <= 0) continue;
         for (const clip of t.clips) {
+          if (clip.muted) continue; // deactivated clip — drawn dim, never scheduled
           if (clip.content.kind === "midi") {
             const sel = this.trackVoice(t);
             const vibLane = clip.content.clip.autos?.find((a) => a.target === "vibrato");
@@ -4081,6 +4105,7 @@ class AudioEngine {
               const repOffset = r * contentLen;
               if (notes) {
                 for (const nt of notes.notes) {
+                  if (nt.muted) continue; // deactivated hit
                   const beat = repOffset + nt.start;
                   if (beat >= clip.lengthBeats) continue;
                   const lane = kit.lanes[nt.pitch - DRUM_BASE];

@@ -18,6 +18,7 @@ export interface Note {
   // length. Chords (un-slide notes) ring independently. A slide note with no note
   // to bend falls back to articulating normally.
   slide?: boolean;
+  muted?: boolean; // deactivated (Ableton "0"): stays in the clip, drawn gray, never voiced
 }
 
 // A clip-global automation lane: a free-draw curve over the timeline that modulates
