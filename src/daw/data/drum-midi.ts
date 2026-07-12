@@ -104,7 +104,8 @@ export function reconcileGridEdit(prev: NoteClip, pat: SequenceClip, kit: DrumKi
     const laneId = pitchToLane(kit, n.pitch);
     if (!laneId) { kept.push(n); continue; } // off-kit note: leave it
     const s = Math.round(n.start / STEP_BEATS);
-    const cellOn = s >= 0 && s < pat.steps && pat.on[laneId]?.[s];
+    if (s < 0 || s >= pat.steps) { kept.push(n); continue; } // outside the grid window: not the grid's to delete
+    const cellOn = pat.on[laneId]?.[s];
     if (cellOn) { kept.push(n); cellHas.add(laneId + ":" + s); } // grid still wants this cell → keep the note
     // else: grid turned this cell off → drop the note
   }

@@ -10,7 +10,7 @@ import { Knob } from "../Knob";
 import { PianoRoll } from "../piano-roll/PianoRoll";
 import { DrumClipGrid } from "./DrumClipGrid";
 import { AudioClipEditor } from "./AudioClipEditor";
-import { KITS } from "../../data/kits";
+import { KITS, resizeRow } from "../../data/kits";
 import type { SequenceClip } from "../../data/kits";
 import type { NoteClip } from "../../data/clips";
 import { patternToNotes, notesToPattern, pitchLaneName, reconcileGridEdit } from "../../data/drum-midi";
@@ -47,6 +47,21 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
   const commitGrid = (p: SequenceClip) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: p, notes: notes ? reconcileGridEdit(notes, p, kit) : patternToNotes(p, kit) });
   // roll edit → store the notes verbatim; keep pattern for kitId/steps
   const commitRoll = (nc: NoteClip) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: pat, notes: nc });
+  // pattern length in bars — grows/shrinks the step grid AND the roll together.
+  // Shrinking drops notes past the new end (the step-slice rule); growing keeps all.
+  const barSteps = pat.beatsPerBar * 4; // 1/16 steps per bar
+  const patBars = Math.max(1, Math.round(pat.steps / barSteps));
+  const setBars = (nBars: number) => {
+    const steps = Math.max(1, Math.min(16, nBars)) * barSteps;
+    const on: Record<string, boolean[]> = {};
+    const accent: Record<string, boolean[]> = {};
+    for (const k of Object.keys(pat.on)) on[k] = resizeRow(pat.on[k], steps);
+    for (const k of Object.keys(pat.accent)) accent[k] = resizeRow(pat.accent[k], steps);
+    const lenBeats = steps * 0.25;
+    const nc = notes ? { ...notes, bars: Math.max(1, Math.ceil(lenBeats / pat.beatsPerBar)), notes: notes.notes.filter((n) => n.start < lenBeats - 1e-6) } : undefined;
+    engine.setClipContent(trackId, clipId, { kind: "drum", pattern: { ...pat, steps, on, accent }, notes: nc });
+  };
+  const barOpts = [...new Set([1, 2, 4, 8, 16, patBars])].sort((a, b) => a - b);
   const tab = (v: "seq" | "roll", label: string) => (
     <button
       onClick={() => setView(v)}
@@ -73,6 +88,20 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
           </select>
           <span className="pointer-events-none absolute right-[4px] text-[7px] text-faint">▼</span>
         </span>
+        {/* pattern length — the grid scrolls, so any bar count stays editable */}
+        <label className="flex items-center gap-[4px] font-mono text-[9px] text-faint">
+          <select
+            value={patBars}
+            onChange={(e) => setBars(Number(e.target.value))}
+            aria-label="pattern length (bars)"
+            className="cursor-pointer appearance-none rounded-[2px] border border-line2 bg-panel2 px-[6px] py-[2px] font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
+          >
+            {barOpts.map((b) => (
+              <option key={b} value={b} className="bg-panel2">{b}</option>
+            ))}
+          </select>
+          bars
+        </label>
         <SwingKnob trackId={trackId} clipId={clipId} value={swing} />
         <span className="ml-auto flex items-center gap-[3px] rounded-[3px] border border-line p-[2px]">
           {tab("seq", "sequence")}
@@ -83,7 +112,7 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
         <DrumClipGrid key={clipId + "-seq:" + stamp} pattern={gridPat} notes={notes} startBeat={startBeat} onCommit={commitGrid} />
       ) : (
         <PianoRoll
-          key={clipId + "-roll:" + stamp}
+          key={clipId + "-roll:" + stamp + ":" + pat.steps}
           height={220}
           trackId={trackId}
           initialClip={notes ?? patternToNotes(pat, kit)}

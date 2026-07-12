@@ -63,61 +63,74 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
     });
   });
 
+  // pinned label column + a shared horizontal scroller for the step rows, so long
+  // patterns (any bar count) scroll while lane names / M/S stay put. Cells are
+  // FIXED-width (no more squeezing the pattern into the panel width).
   return (
-    <div ref={gridRef} className="flex flex-col gap-[5px]">
-      {kit.lanes.map((lane) => {
-        const on = pattern.on[lane.id] || [];
-        const accent = pattern.accent[lane.id] || [];
-        const mix = pattern.laneMix?.[lane.id];
-        return (
-          <div key={lane.id} className="flex items-center gap-[8px]">
-            <span className="w-[44px] shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
-            <span className="flex shrink-0 gap-[2px]">
-              <button className={msBtn(!!mix?.mute, true)} onClick={() => toggleMix(lane.id, "mute")} title="mute lane">M</button>
-              <button className={msBtn(!!mix?.solo)} onClick={() => toggleMix(lane.id, "solo")} title="solo lane">S</button>
-            </span>
-            <div className="flex flex-1 gap-[8px]">
-              {Array.from({ length: bars }).map((_, b) => (
-                <div key={b} className="flex flex-1 gap-[3px]">
-                  {Array.from({ length: BAR_STEPS }).map((_, i) => {
-                    const s = b * BAR_STEPS + i;
-                    if (s >= pattern.steps) return null;
-                    const isOn = on[s];
-                    const isAccent = accent[s];
-                    const beatStart = i % 4 === 0;
-                    // discrepancy: this on-step hides note detail the grid can't show
-                    // (off-grid / length / multi-hit / mid-velocity) → diagonal hatch
-                    const disc = isOn && !!notes && stepDiscrepancy(notes, kit, lane.id, s);
-                    return (
-                      <button
-                        key={s}
-                        data-step={s}
-                        onClick={(e) => toggle(lane.id, s, e.shiftKey)}
-                        title={`${lane.name} · step ${s + 1}${disc ? " — has off-grid / variable detail (edit in piano roll)" : isOn ? " (shift-click: accent)" : ""}`}
-                        style={
-                          disc
-                            ? { backgroundImage: "repeating-linear-gradient(45deg, transparent 0, transparent 2px, rgba(12,12,16,0.55) 2px, rgba(12,12,16,0.55) 4px)" }
-                            : undefined
-                        }
-                        className={
-                          "h-[24px] flex-1 rounded-[3px] border transition-colors " +
-                          (isOn
-                            ? isAccent
-                              ? "border-accent bg-accent"
-                              : "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_55%,transparent)]"
-                            : beatStart
-                              ? "border-line2 bg-panel2 hover:bg-[#202028]"
-                              : "border-line bg-[#141418] hover:bg-panel2")
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              ))}
+    <div ref={gridRef} className="flex gap-[8px]">
+      <div className="flex shrink-0 flex-col gap-[5px]">
+        {kit.lanes.map((lane) => {
+          const mix = pattern.laneMix?.[lane.id];
+          return (
+            <div key={lane.id} className="flex h-[24px] items-center gap-[8px]">
+              <span className="w-[44px] shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
+              <span className="flex shrink-0 gap-[2px]">
+                <button className={msBtn(!!mix?.mute, true)} onClick={() => toggleMix(lane.id, "mute")} title="mute lane">M</button>
+                <button className={msBtn(!!mix?.solo)} onClick={() => toggleMix(lane.id, "solo")} title="solo lane">S</button>
+              </span>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
+      <div className="fx-scroll min-w-0 flex-1 overflow-x-auto pb-[4px]">
+        <div className="flex w-max flex-col gap-[5px]">
+          {kit.lanes.map((lane) => {
+            const on = pattern.on[lane.id] || [];
+            const accent = pattern.accent[lane.id] || [];
+            return (
+              <div key={lane.id} className="flex gap-[8px]">
+                {Array.from({ length: bars }).map((_, b) => (
+                  <div key={b} className="flex gap-[3px]">
+                    {Array.from({ length: BAR_STEPS }).map((_, i) => {
+                      const s = b * BAR_STEPS + i;
+                      if (s >= pattern.steps) return null;
+                      const isOn = on[s];
+                      const isAccent = accent[s];
+                      const beatStart = i % 4 === 0;
+                      // discrepancy: this on-step hides note detail the grid can't show
+                      // (off-grid / length / multi-hit / mid-velocity) → diagonal hatch
+                      const disc = isOn && !!notes && stepDiscrepancy(notes, kit, lane.id, s);
+                      return (
+                        <button
+                          key={s}
+                          data-step={s}
+                          onClick={(e) => toggle(lane.id, s, e.shiftKey)}
+                          title={`${lane.name} · step ${s + 1}${disc ? " — has off-grid / variable detail (edit in piano roll)" : isOn ? " (shift-click: accent)" : ""}`}
+                          style={
+                            disc
+                              ? { backgroundImage: "repeating-linear-gradient(45deg, transparent 0, transparent 2px, rgba(12,12,16,0.55) 2px, rgba(12,12,16,0.55) 4px)" }
+                              : undefined
+                          }
+                          className={
+                            "h-[24px] w-[22px] shrink-0 rounded-[3px] border transition-colors " +
+                            (isOn
+                              ? isAccent
+                                ? "border-accent bg-accent"
+                                : "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_55%,transparent)]"
+                              : beatStart
+                                ? "border-line2 bg-panel2 hover:bg-[#202028]"
+                                : "border-line bg-[#141418] hover:bg-panel2")
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
