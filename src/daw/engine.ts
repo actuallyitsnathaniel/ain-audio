@@ -1018,7 +1018,8 @@ class AudioEngine {
   }
 
   // a 2-second looping noise buffer (white or pink), built once and reused by every
-  // voice's noise source. Pink uses the cheap Paul Kellet approximation.
+  // voice's noise source. Pink uses the cheap Paul Kellet approximation
+  // (https://www.firstpr.com.au/dsp/pink-noise/).
   private noiseBuf(type: "white" | "pink"): AudioBuffer {
     const cached = this._noiseBufs[type];
     if (cached) return cached;

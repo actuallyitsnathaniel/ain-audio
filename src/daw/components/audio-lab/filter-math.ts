@@ -1,4 +1,4 @@
-// ── biquad magnitude response (RBJ cookbook) ──────────────────────────────────
+// ── biquad magnitude response (RBJ cookbook: https://www.w3.org/TR/audio-eq-cookbook/) ──
 // Coefficients for the four filter types the synth exposes, then the magnitude of
 // H(e^jw) = (b0 + b1 z⁻¹ + b2 z⁻²)/(a0 + a1 z⁻¹ + a2 z⁻²) at frequency f. This is the
 // exact transfer function a BiquadFilterNode implements, so FilterGraph matches audio.
