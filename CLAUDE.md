@@ -73,3 +73,7 @@ removed. Don't go looking for them or recreate those patterns; build new UI in `
 
 Design tokens, the accent-color derivation, layout/breakpoint conventions, and the plain-CSS escape
 hatches → **[src/daw/DESIGN.md](src/daw/DESIGN.md)**.
+
+Curated external resources (awesome-webaudio etc.) → **[docs/RESOURCES.md](docs/RESOURCES.md)**.
+**Anything adopted from an external source gets a linked entry in [CREDITS.md](CREDITS.md) at
+adoption time** — that file is the full third-party accounting.

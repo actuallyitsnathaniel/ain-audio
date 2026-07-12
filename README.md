@@ -11,6 +11,8 @@ A modern audio portfolio website showcasing music and sound projects.
 - **[TailwindCSS](https://tailwindcss.com/)** - Utility-first CSS framework
 - **[Vercel](https://vercel.com/)** - Deployment and hosting
 
+Full third-party attribution (libraries, DSP technique sources, fonts, marks) → [CREDITS.md](./CREDITS.md).
+
 ## Development
 
 ```bash

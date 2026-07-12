@@ -144,7 +144,8 @@ notes }`. Each preset ships a `defaultPhrase` (authored with the `phrase()` help
 [data/presets.ts](data/presets.ts)); the roll clones it (`cloneClip`) so edits never mutate the
 shipped data.
 
-**The scheduler** (Chris Wilson "Tale of Two Clocks"). A `setInterval(~25 ms)` walks
+**The scheduler** (Chris Wilson, ["A Tale of Two Clocks"](https://web.dev/articles/audio-scheduling)).
+A `setInterval(~25 ms)` walks
 `ctx.currentTime`; each tick schedules every note whose start falls in the window
 `(_scheduledThrough, currentTime + 0.12s]`, mapping clip-beats → absolute ctx times and wrapping
 at the loop boundary, calling `startVoiceAt`/`releaseVoice` with sample-accurate times.
@@ -446,7 +447,8 @@ sampled preset — is a `SynthPatch`.
 amp gain → dest**. Two independent ADSRs (filter env on cutoff with `amt` + key-track; amp env on the
 gain) and **one routable LFO** (off / pitch→detune / cutoff→`filter.frequency` / amp→`gain`). Portamento
 `applyBends` drives **every** pitched source (osc frequency + sample detune); per-note vibrato and the
-patch LFO coexist. Noise buffers (white / Paul-Kellet pink) are built **once** and cached. `releaseVoice`
+patch LFO coexist. Noise buffers (white / [Paul Kellet](https://www.firstpr.com.au/dsp/pink-noise/)
+pink) are built **once** and cached. `releaseVoice`
 stops oscs + sub + noise + **sampleSrc** + all LFOs. A voice is ≤ ~14 nodes (bounded vs. the 256-voice cap).
 
 - **Sample source** (`SynthPatch.sample: SampleSource`) — a `SampledPreset`'s multisample used like an
@@ -479,7 +481,8 @@ stops oscs + sub + noise + **sampleSrc** + all LFOs. A voice is ≤ ~14 nodes (b
   the old PRESET LAB + SYNTH into one panel: instrument selector (`synthPatches`) + patch bar + on-screen
   `PresetKeyboard` + a **tabbed dashboard** (SOURCES / FILTER / AMP / LFO). Live visuals:
   [EnvGraph](components/audio-lab/EnvGraph.tsx) (ADSR curve, on AMP + FILTER tabs),
-  [FilterGraph](components/audio-lab/FilterGraph.tsx) (|H(f)| response via RBJ biquad math in
+  [FilterGraph](components/audio-lab/FilterGraph.tsx) (|H(f)| response via
+  [RBJ](https://www.w3.org/TR/audio-eq-cookbook/) biquad math in
   [filter-math.ts](components/audio-lab/filter-math.ts), no AudioContext), and
   [SampleWave](components/audio-lab/SampleWave.tsx) (C4 waveform with **draggable start/end + loop
   handles**). Subscribes to `["patch","synth","preset","midi"]`.
