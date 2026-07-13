@@ -69,6 +69,22 @@ persisted on the track (`ArrTrack.devices`, absent = no FX). Mutations mirror th
 id, to)`, `setTrackDeviceParams(trackId, id, params)`; `trackDevices(trackId)` reads. All
 mutations emit `"fx"`.
 
+**Gain staging + metering (channel-strip mixer).** Track/master volume is **linear gain in
+`[0, GAIN_MAX]`** where `GAIN_MAX = db2lin(6)` (≈ +6 dB headroom above unity). New tracks default
+to **unity (`vol: 1`, 0 dB)**. Faders use a **dB taper** ([db-fader.ts](db-fader.ts), self-checked
+in `db-fader.check.mjs`): position `p∈[0,1]` maps unity at `p=0.75`, `+6 dB` at the top, `−60 dB`
+→ −∞ below — two segments linear-in-dB (equal travel = equal dB). `posToGain`/`gainToPos` are exact
+inverses (legacy `vol` values just re-derive a position). **Per-strip metering**: each track strip
+has a post-fader/post-FX `AnalyserNode` tapped off `pan` (`_arrStrips[].an`); `engine.trackLevel(id)`
+→ `{rms, peak}` dB. `engine.masterLevel()` reads **either** tap per the `masterMeterPost` toggle
+(`setMasterMeterPost`, persisted `ain-master-meter`): **pre** = `anOut` (program level before the
+safety limiter + master fader — what the chain produces), **post** = `anPost` off the final
+`master` node (after limiter + makeup + fader — what leaves the speakers). Toggle is the pre/post
+chip in the master header. The
+[TrackFader](components/arrangement/TrackFader.tsx) draws an integrated meter behind the groove
+(RMS fill + 1.4 s peak-hold tick + clip latch at ~0 dBFS) via `useRafLoop` — imperative, never
+React state; the dB readout is click-to-type. Same fader on track headers and the master row.
+
 **UI** — [components/FxChainRack.tsx](components/FxChainRack.tsx) is the generic chain editor
 (device panels, add-dropdown, ✕ remove, per-device power dot), bound to a chain purely through
 callbacks. It renders as ONE non-wrapping row that scrolls horizontally forever (always-visible themed

@@ -108,10 +108,11 @@ interface GraphNodes {
   sum: GainNode;
   // the reorderable fx live in the master FxChain (sum → [devices] → anOut)
   // ── fixed tail (never reordered) ──
-  anOut: AnalyserNode;
+  anOut: AnalyserNode; // pre-limiter program level (spectrum + pre-limiter master meter)
   limiter: DynamicsCompressorNode; // brickwall safety, always last
   limMakeup: GainNode;
   master: GainNode;
+  anPost: AnalyserNode; // post-limiter final output (post-limiter master meter)
 }
 
 // the fixed master-bus safety limiter (the only effect NOT in the device chain)
@@ -165,8 +166,12 @@ const LS_WET = "ain-masterlab-wet";
 const LS_PATCHES = "ain-synth-patches"; // user-designed patches: { name: SynthPatch }
 const LS_MASTER_FX = "ain-master-fx"; // master-bus device chain: FxDeviceState[]
 const LS_MASTER_VOL = "ain-master-vol"; // master track fader
+const LS_MASTER_METER = "ain-master-meter"; // master meter tap: "pre" | "post"
 const posKey = (id: string) => "ain-pos:" + id;
 const db2lin = (db: number) => Math.pow(10, db / 20);
+// mixer gain ceiling: +6 dB of headroom above unity (linear ~1.995) for the
+// dB-calibrated faders. Stored track/master vol is linear gain in [0, GAIN_MAX].
+export const GAIN_MAX = db2lin(6);
 
 function loadMasterVol(): number {
   const v = parseFloat(localStorage.getItem(LS_MASTER_VOL) || "");
@@ -366,8 +371,8 @@ class AudioEngine {
   arrangement: Arrangement = loadArrangement();
   private _arrStrips: Record<
     string,
-    { gain: GainNode; pan: StereoPannerNode; fx: FxChain }
-  > = {}; // per-track vol/pan strip + FX chain
+    { gain: GainNode; pan: StereoPannerNode; fx: FxChain; an: AnalyserNode }
+  > = {}; // per-track vol/pan strip + FX chain + post-fader meter tap
   kit: DrumKit = DEFAULT_KIT;
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   loops: LoopLane[] = LOOPS;
@@ -529,6 +534,11 @@ class AudioEngine {
     n.limiter.connect(n.limMakeup);
     n.limMakeup.connect(n.master);
     n.master.connect(c.destination);
+    // post-limiter meter tap off the final output node (measure only)
+    n.anPost = c.createAnalyser();
+    n.anPost.fftSize = 2048;
+    n.anPost.smoothingTimeConstant = 0;
+    n.master.connect(n.anPost);
 
     this.nodes = n;
     // ── the modular master FxChain: sum → [devices] → anOut ──
@@ -871,7 +881,7 @@ class AudioEngine {
 
   setMasterVol(v: number) {
     this.pushUndoCoalesced("mastervol"); // one undo step per fader gesture
-    this.masterVol = Math.min(1, Math.max(0, v));
+    this.masterVol = Math.min(GAIN_MAX, Math.max(0, v));
     this.applyMasterVol();
   }
   private applyMasterVol() {
@@ -944,6 +954,33 @@ class AudioEngine {
       mix: this.levelOf(this.nodes.anMix),
       master: this.levelOf(this.nodes.anMaster),
     };
+  }
+
+  // ── mixer metering (post-fader, per strip) ──
+  // Live RMS+peak dB for ONE arrangement track's strip. Returns floor level (-90) if
+  // the strip hasn't been built yet (no sound ever routed through it). Imperative:
+  // the fader UI reads this every rAF frame, never through React state.
+  trackLevel(id: string): Levels {
+    const s = this._arrStrips[id];
+    return s ? this.levelOf(s.an) : { rms: -90, peak: -90 };
+  }
+  // master meter tap point (user toggle in the master header): "pre" = anOut, the
+  // program signal before the safety limiter + master fader (what the chain produces);
+  // "post" = the final output node, after limiter + makeup + master fader (what leaves
+  // the speakers). Persisted so the choice survives reloads.
+  masterMeterPost = localStorage.getItem(LS_MASTER_METER) === "post";
+  setMasterMeterPost(post: boolean) {
+    this.masterMeterPost = post;
+    try {
+      localStorage.setItem(LS_MASTER_METER, post ? "post" : "pre");
+    } catch {
+      /* fine */
+    }
+    this.emit("fx");
+  }
+  masterLevel(): Levels {
+    if (!this.nodes) return { rms: -90, peak: -90 };
+    return this.levelOf(this.masterMeterPost ? this.nodes.anPost : this.nodes.anOut);
   }
 
   getSpectrum(out: Uint8Array<ArrayBuffer>): boolean {
@@ -2070,12 +2107,18 @@ class AudioEngine {
       const gain = c.createGain();
       const pan = c.createStereoPanner();
       pan.connect(n.sum);
+      // post-strip meter tap: pan → analyser (measure only; also → sum). Reflects the
+      // true post-fader, post-FX signal this track contributes.
+      const an = c.createAnalyser();
+      an.fftSize = 2048;
+      an.smoothingTimeConstant = 0;
+      pan.connect(an);
       // per-track FX chain inserted between gain and pan: gain → [devices] → pan → sum.
       // Seeded from the track's persisted device list (empty = clean passthrough).
       const fx = new FxChain(c, gain, pan);
       fx.setDevices((t.devices || []).map((d) => structuredClone(d)));
       fx.applyAll(this.bpm);
-      s = this._arrStrips[t.id] = { gain, pan, fx };
+      s = this._arrStrips[t.id] = { gain, pan, fx, an };
     }
     s.gain.gain.value = t.vol * this.trackGain(t);
     s.pan.pan.value = t.pan;
@@ -2117,7 +2160,7 @@ class AudioEngine {
       presetId: kind === "midi" ? this.synthPatches[0] : undefined, // unified patch key
       mute: false,
       solo: false,
-      vol: 0.8,
+      vol: 1, // unity (0 dB) — the conventional DAW default; headroom lives at the master
       pan: 0,
       clips: [],
     };
@@ -2142,6 +2185,7 @@ class AudioEngine {
         s.fx.dispose();
         s.gain.disconnect();
         s.pan.disconnect();
+        s.an.disconnect();
       } catch {
         /* fine */
       }
@@ -2168,7 +2212,7 @@ class AudioEngine {
     const t = this.findTrack(id);
     if (!t) return;
     this.pushUndoCoalesced("vol:" + id); // one undo step per knob gesture
-    t.vol = Math.min(1, Math.max(0, vol));
+    t.vol = Math.min(GAIN_MAX, Math.max(0, vol));
     const s = this._arrStrips[id];
     if (s && this.ctx)
       s.gain.gain.setTargetAtTime(
