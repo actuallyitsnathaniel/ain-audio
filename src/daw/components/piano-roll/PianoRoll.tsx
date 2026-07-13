@@ -75,12 +75,11 @@ interface View {
   ppb: number;
 }
 
-// `channelId` binds the roll to a beat-maker MIDI channel's clip instead of the
-// global Audio-Lab clip; everything else (gestures, render, playhead) is identical.
-export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCommit, pitchLabel }: { height?: number; channelId?: string; trackId?: string; initialClip?: NoteClip; onCommit?: (clip: NoteClip) => void; pitchLabel?: (pitch: number) => string | null }) {
-  // which instrument to audition note previews through: a beat-maker channel, or an
-  // arrangement track. undefined ⇒ the global Audio-Lab patch (live keyboard).
-  const auditionId = channelId ?? trackId;
+// A MIDI clip editor. Binds to an arrangement clip (`onCommit` writes it back) or,
+// standalone, the Audio-Lab's active clip. `trackId` routes note-preview auditions
+// through that track's instrument; undefined ⇒ the global Audio-Lab patch.
+export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchLabel }: { height?: number; trackId?: string; initialClip?: NoteClip; onCommit?: (clip: NoteClip) => void; pitchLabel?: (pitch: number) => string | null }) {
+  const auditionId = trackId;
   const ref = useRef<HTMLCanvasElement>(null);
   const clipRef = useRef<NoteClip | null>(null);
   const sel = useRef<Set<string>>(new Set()); // selected note ids
@@ -108,8 +107,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
   const commit = () => {
     if (!clipRef.current) return;
     if (onCommit) onCommit(clipRef.current); // arrangement clip binding
-    else if (channelId) engine.setChannelClip(channelId, clipRef.current);
-    else engine.setActiveClip(clipRef.current);
+    else engine.setActiveClip(clipRef.current); // Audio-Lab active clip
   };
 
   const centerOn = (clip: NoteClip) => {
@@ -136,7 +134,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
   };
 
   useEffect(() => {
-    loadClip(initialClip || (channelId ? engine.getChannelClip(channelId) || { bars: 1, beatsPerBar: 4, notes: [] } : engine.getClip() || engine.samplePresets[0].defaultPhrase));
+    loadClip(initialClip || engine.getClip() || engine.samplePresets[0].defaultPhrase);
     const el = ref.current;
     if (!el) return;
     const onLoad = (e: Event) => loadClip((e as CustomEvent<NoteClip>).detail);
@@ -690,7 +688,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
       { separator: true },
       { label: "browser menu", hint: "⇧right-click", disabled: true },
     );
-    openContextMenu({ x: e.clientX, y: e.clientY, title: channelId ? "midi notes" : "piano roll", items });
+    openContextMenu({ x: e.clientX, y: e.clientY, title: "piano roll", items });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
@@ -911,14 +909,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
     }
 
     const ac = accent();
-    // a channel-bound roll follows ITS OWN loop position (channels can loop at a
-    // length different from the grid); the Audio-Lab roll follows the transport.
-    const pos = channelId
-      ? (() => {
-          const b = engine.channelPosition(channelId); // -1 when not playing
-          return { playing: b >= 0, beat: b < 0 ? 0 : b };
-        })()
-      : engine.getSequencePosition();
+    const pos = engine.getSequencePosition();
     g.save();
     g.beginPath();
     g.rect(KEY_W, 0, w - KEY_W, gh);
@@ -998,7 +989,7 @@ export function PianoRoll({ height = 280, channelId, trackId, initialClip, onCom
 
     // gutter keyboard (pitch area only)
     const held = gutterKey.current;
-    const sounding = new Set(engine.activeNotes(channelId));
+    const sounding = new Set(engine.activeNotes());
     g.save();
     g.beginPath();
     g.rect(0, 0, KEY_W, gh);

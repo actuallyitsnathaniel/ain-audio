@@ -5,7 +5,6 @@
 // beat-maker works immediately. The SequenceClip is the 16-step grid the
 // scheduler walks, sharing the Phase-2 clock.
 
-import type { MidiChannel } from "./clips";
 
 export type DrumSynth = "kick" | "snare" | "hat" | "clap" | "tom" | "rim";
 
@@ -22,21 +21,7 @@ export interface DrumKit {
   lanes: DrumLane[];
 }
 
-// A loopable melodic sample — a sustained loop layered alongside the drums,
-// playbackRate-matched to the grid tempo. Auto-discovered from src/assets/loops/.
-export interface LoopLane {
-  id: string; // filename stem
-  name: string; // display label (prettified id)
-  url: string; // resolved sample URL
-  rootBpm: number; // tempo the loop was recorded at (for playbackRate match)
-  rootKnown?: boolean; // true if rootBpm is a REAL known tempo (filename token / disk).
-  // false/undefined = a guess (load-time grid tempo); locking adopts the current tempo
-  // as the root so the lock itself is pitch-neutral and only later tempo moves warp it.
-  bars: number; // its length in bars
-  key?: string; // detected musical key / chord (e.g. "Am", "F#", "Cmaj7"), user-editable
-}
-
-// ── filename metadata parser (shared by build-time LOOPS + runtime addLoop) ──
+// ── filename metadata parser (imported audio clips detect bpm/bars/key from it) ──
 // Pulls tempo / bar-count / key out of a filename stem and returns a cleaned name.
 // Tokens are bounded by separators (start/end or space . _ -) so we don't grab the
 // "A" inside a word or the "90" inside "90s".
@@ -87,30 +72,17 @@ export function parseLoopMeta(stem: string): LoopMeta {
   return { name, bpm, bars: barTok ? parseInt(barTok[1], 10) : undefined, key };
 }
 
-// per-loop mixer state, keyed by loop id.
-export interface LoopState {
-  on: boolean; // layered in?
-  level: number; // 0–1 gain
-  mute: boolean;
-  solo: boolean;
-  sync?: boolean; // locked to grid tempo (playbackRate = bpm/rootBpm)? off = original speed
-  a?: number; // loop region start, fraction 0..1 of the buffer (default 0 = whole loop)
-  b?: number; // loop region end, fraction 0..1 of the buffer (default 1)
-  reverse?: boolean; // play the loop backwards
-}
-
-// per-lane step arrays live in SequenceClip keyed by lane id.
+// The drum-pattern model. Used by arrangement drum clips ({kind:"drum", pattern}).
+// per-lane step arrays keyed by lane id.
 export interface SequenceClip {
   steps: number; // 16
   beatsPerBar: number; // 4 → 16 steps = 1 bar of 1/16s
-  kitId?: string; // which kit voices this pattern (arrangement drum clips; default = current)
+  kitId?: string; // which kit voices this pattern (default = current)
   bpm: number;
   swing: number; // 0–0.7, shifts odd 1/16s later
   on: Record<string, boolean[]>; // laneId → per-step on/off
   accent: Record<string, boolean[]>; // laneId → per-step accent (louder hit)
-  loops: Record<string, LoopState>; // loopId → mixer state
   laneMix: Record<string, { mute: boolean; solo: boolean }>; // drum laneId → mute/solo
-  channels: MidiChannel[]; // melodic MIDI channels, played on the same clock
 }
 
 // ── lane definitions for the default kit ──
@@ -172,46 +144,6 @@ export const BOOMBAP_KIT: DrumKit = {
 
 export const KITS: DrumKit[] = [DEFAULT_KIT, BOOMBAP_KIT];
 
-// ── auto-discover loopable melodic samples ──
-// Drop src/assets/loops/<name>.m4a. Encode tempo + length in the filename so the
-// engine can sync it: "<name>-<rootBpm>bpm-<bars>bar.m4a" (e.g. dusty-keys-120bpm-2bar.m4a).
-// Missing tokens default to 120 bpm / 1 bar, or use LOOP_OVERRIDES below.
-const LOOP_FILES = import.meta.glob("/src/assets/loops/**/*.{m4a,flac,ogg,wav}", {
-  eager: true,
-  query: "?url",
-  import: "default",
-}) as Record<string, string>;
-
-interface LoopOverride {
-  name?: string;
-  rootBpm?: number;
-  bars?: number;
-  key?: string;
-}
-const LOOP_OVERRIDES: Record<string, LoopOverride> = {
-  // "dusty-keys": { name: "dusty keys", rootBpm: 120, bars: 2, key: "Am" },
-};
-
-export const LOOPS: LoopLane[] = Object.keys(LOOP_FILES)
-  .map((path) => {
-    const file = path.split("/").pop()!;
-    const stem = file.replace(KIT_EXT_RE, "");
-    const meta = parseLoopMeta(stem);
-    const id = (meta.name || "loop").toLowerCase().replace(/\s+/g, "-");
-    const ov = LOOP_OVERRIDES[id] || {};
-    const bpm = ov.rootBpm ?? meta.bpm;
-    return {
-      id,
-      name: ov.name || meta.name || id,
-      url: LOOP_FILES[path],
-      rootBpm: bpm ?? 120, // last-resort default; rootKnown stays false so lock re-bases
-      rootKnown: ov.rootBpm != null || meta.bpm != null, // a real tempo from override/filename
-      bars: ov.bars ?? meta.bars ?? 1,
-      key: ov.key ?? meta.key,
-    };
-  })
-  .sort((a, b) => a.name.localeCompare(b.name));
-
 // ── auto-discover reverb impulse responses ──
 // Drop src/assets/irs/<name>.wav and it appears in the REVERB device's IR selector
 // (loadReverbIR swaps it in). Empty folder → selector shows only the synth IR.
@@ -271,8 +203,5 @@ export function defaultSequence(kit: DrumKit = DEFAULT_KIT): SequenceClip {
   on.clap = row(12);
   accent.kick = row(0, 8);
   accent.snare = row(4);
-  // loop mixer state — off by default, unity level
-  const loops: Record<string, LoopState> = {};
-  LOOPS.forEach((l) => (loops[l.id] = { on: false, level: 0.8, mute: false, solo: false }));
-  return { steps: STEPS, beatsPerBar: 4, bpm: 120, swing: 0, on, accent, loops, laneMix, channels: [] };
+  return { steps: STEPS, beatsPerBar: 4, bpm: 120, swing: 0, on, accent, laneMix };
 }

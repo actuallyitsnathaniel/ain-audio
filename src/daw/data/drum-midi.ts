@@ -64,7 +64,7 @@ export function notesToPattern(clip: NoteClip, kit: DrumKit, steps: number): Seq
     on[laneId][s] = true;
     if (n.vel >= 0.85) accent[laneId][s] = true;
   }
-  return { steps, beatsPerBar: clip.beatsPerBar, bpm: 120, swing: 0, on, accent, loops: {}, laneMix: {}, channels: [] };
+  return { steps, beatsPerBar: clip.beatsPerBar, bpm: 120, swing: 0, on, accent, laneMix: {} };
 }
 
 // Does the note detail on (lane, step) exceed what the step grid can show? The grid can
