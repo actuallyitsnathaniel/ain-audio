@@ -713,6 +713,33 @@ export function Timeline({
       g.globalAlpha = 1;
     }
 
+    // pending quantized launch: a dashed accent line at the queued TARGET beat +
+    // a countdown bracket at the boundary the playhead is racing toward
+    const pl = engine.pendingLaunch();
+    if (pl) {
+      const tx = beatToX(pl.target);
+      if (tx >= KEY_W && tx <= w) {
+        g.strokeStyle = ac;
+        g.globalAlpha = 0.85;
+        g.setLineDash([3, 3]);
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.moveTo(tx, HEAD_H);
+        g.lineTo(tx, h);
+        g.stroke();
+        g.setLineDash([]);
+        // downward triangle tag in the ruler marking the launch target
+        g.fillStyle = ac;
+        g.beginPath();
+        g.moveTo(tx - 4, HEAD_H - 8);
+        g.lineTo(tx + 4, HEAD_H - 8);
+        g.lineTo(tx, HEAD_H - 2);
+        g.closePath();
+        g.fill();
+        g.globalAlpha = 1;
+      }
+    }
+
     // playhead
     const pos = engine.arrangementPosition();
     const px = beatToX(pos);

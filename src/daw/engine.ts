@@ -167,6 +167,7 @@ const LS_PATCHES = "ain-synth-patches"; // user-designed patches: { name: SynthP
 const LS_MASTER_FX = "ain-master-fx"; // master-bus device chain: FxDeviceState[]
 const LS_MASTER_VOL = "ain-master-vol"; // master track fader
 const LS_MASTER_METER = "ain-master-meter"; // master meter tap: "pre" | "post"
+const LS_LAUNCH_QUANT = "ain-launch-quant"; // launch quantize in beats (0 = off)
 const posKey = (id: string) => "ain-pos:" + id;
 const db2lin = (db: number) => Math.pow(10, db / 20);
 // mixer gain ceiling: +6 dB of headroom above unity (linear ~1.995) for the
@@ -338,6 +339,15 @@ class AudioEngine {
   private _seqVoices: VoiceHandle[] = []; // voices started by the scheduler
   private static SCHED_INTERVAL = 25; // ms — clock tick
   private static SCHED_AHEAD = 0.12; // s — schedule this far ahead of currentTime
+  // launch quantize: a seek requested WHILE PLAYING waits for the next quantum
+  // boundary (Ableton-style), so the musical phase never breaks. 0 = off (immediate).
+  launchQuant = ((): number => {
+    const v = parseFloat(localStorage.getItem(LS_LAUNCH_QUANT) || "");
+    return Number.isFinite(v) && v >= 0 ? v : 0;
+  })(); // beats (0 · 1 · 2 · 4 · 8 …), persisted
+  // a queued launch: jump to `target` when the song reaches beat `atBeat`. Re-aiming
+  // (a new seek before the boundary) replaces `target` but keeps `atBeat`.
+  private _pendingLaunch: { target: number; atBeat: number } | null = null;
   private static VIB_RATE = 5.5; // Hz — vibrato LFO rate (depth is automated)
   // "tiny fade at play and stop" (REAPER-style): a short gain ramp on every source
   // start/stop so the transport never hard-cuts a buffer mid-cycle (which clicks).
@@ -3650,6 +3660,7 @@ class AudioEngine {
     }
     this.sequencePlaying = false;
     this.transportMode = "track";
+    this._pendingLaunch = null; // a queued launch is moot once stopped
     // release any voices still ringing from scheduled notes
     const now = this.ctx ? this.ctx.currentTime : 0;
     this._seqVoices.forEach((h) => this.releaseVoice(h, now, true));
@@ -4518,8 +4529,55 @@ class AudioEngine {
   }
   // move the playhead to `beat` while playing, via the re-anchor trick (same as
   // setBpm): anchor the clock at the target beat now, re-schedule from here.
+  // launch-quantize setting (playback pane). 0 = immediate seeks.
+  setLaunchQuant(beats: number) {
+    this.launchQuant = Math.max(0, beats);
+    if (this.launchQuant === 0) this._pendingLaunch = null; // turning it off drops any queue
+    try {
+      localStorage.setItem(LS_LAUNCH_QUANT, String(this.launchQuant));
+    } catch {
+      /* fine */
+    }
+    this.emit("transport");
+  }
+  // the next quantum boundary strictly after `from` (in the WRAPPED beat domain, so it
+  // respects an active loop brace). Boundaries are multiples of `q` measured from the
+  // brace start (or song 0). If the next multiple lands at/after the brace end, it
+  // wraps to the brace start — the boundary is the loop point itself.
+  private nextQuantBoundary(from: number, q: number): number {
+    if (q <= 0) return from;
+    const br =
+      this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
+    const origin = br ? br.start : 0;
+    const rel = from - origin;
+    const next = origin + (Math.floor(rel / q + 1e-9) + 1) * q;
+    if (br && next >= br.end - 1e-9) return br.start; // boundary is the loop wrap point
+    return next;
+  }
+  // the pending-launch target for the timeline indicator (null when none queued)
+  pendingLaunch(): { target: number; atBeat: number } | null {
+    return this._pendingLaunch;
+  }
+
   seekArrangement(beat: number) {
     beat = Math.max(0, beat);
+    // QUANTIZED LAUNCH: while playing, defer the jump to the next quantum boundary so
+    // the phase never breaks. Re-aiming before the boundary replaces the target but
+    // keeps the same boundary (Ableton clip-launch feel).
+    if (this.launchQuant > 0 && this.sequencePlaying && this.arrangeMode && this.ctx) {
+      const cur = this.currentBeat();
+      const atBeat = this._pendingLaunch
+        ? this._pendingLaunch.atBeat // keep the boundary; just re-aim
+        : this.nextQuantBoundary(cur, this.launchQuant);
+      this._pendingLaunch = { target: beat, atBeat };
+      this.emit("transport");
+      return;
+    }
+    this._doSeek(beat);
+  }
+  // the actual re-anchor jump (immediate). Shared by immediate seeks + the pending-
+  // launch firing in schedTick.
+  private _doSeek(beat: number) {
     if (this.sequencePlaying && this.arrangeMode && this.ctx) {
       const now = this.ctx.currentTime;
       // release ringing voices + audio clips so a seek doesn't leave stuck sound
@@ -5275,6 +5333,17 @@ class AudioEngine {
   private schedTick() {
     const c = this.ctx;
     if (!c || !this.sequencePlaying) return;
+    // fire a pending quantized launch once the song reaches its boundary. Do it BEFORE
+    // scheduling this window so the jump re-anchors first. `_doSeek` clears + re-ticks,
+    // so null the queue first to avoid re-entry.
+    if (this._pendingLaunch && this.arrangeMode) {
+      const pl = this._pendingLaunch;
+      if (this.currentBeat() >= pl.atBeat - 1e-6) {
+        this._pendingLaunch = null;
+        this._doSeek(pl.target);
+        return; // _doSeek re-ticked from the new anchor
+      }
+    }
     const total = this.activeTotalBeats();
     if (total <= 0) return;
     const bd = this.beatDur();
