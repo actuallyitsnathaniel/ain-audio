@@ -419,7 +419,7 @@ export function ArrangementPage() {
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
+          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize (⌥ = stretch content) · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
         </div>
       </TrackSection>
     </main>

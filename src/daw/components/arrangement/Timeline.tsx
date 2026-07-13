@@ -211,6 +211,14 @@ export function Timeline({
       const c = tracks().find((t) => t.id === d.trackId)?.clips.find((x) => x.id === d.clipId);
       if (c) {
         let len = Math.max(0.25, beat - c.startBeat);
+        // ⌥+edge-drag = STRETCH the content to the new length (all clip kinds):
+        // MIDI/drum notes scale; audio gets a stretch factor (pitch-preserved when
+        // warped beats/complex, tape-style otherwise). No content-end magnet — the
+        // content end IS the thing being moved.
+        if (e.altKey) {
+          engine.stretchClipTo(d.trackId, d.clipId, len);
+          return;
+        }
         // magnetic CONTENT END for audio: when the (snapped) edge lands near where the
         // sample actually ends, snap exactly there — "reveal through to the end" never
         // overshoots into a loop sliver / silence by one grid line.
@@ -604,7 +612,8 @@ export function Timeline({
             g.globalAlpha = dim ? 0.45 : 1; // back to the clip's preview alpha
           }
         }
-        // mini content preview (MIDI notes)
+        // mini content preview (MIDI notes) — drawn at TRUE beat scale and TILED like
+        // playback (content repeats at its own length); never stretched to the block
         if (c.content.kind === "midi" && c.content.clip.notes.length) {
           const notes = c.content.clip.notes;
           let lo = 127, hi = 0;
@@ -614,14 +623,20 @@ export function Timeline({
           });
           const span = Math.max(1, hi - lo);
           const clen = Math.max(0.25, clipBeats(c.content.clip));
+          const reps = Math.min(64, Math.max(1, Math.ceil(c.lengthBeats / clen)));
           g.fillStyle = "rgba(255,255,255,0.55)";
-          notes.forEach((n) => {
-            const nx = x + (n.start / clen) * Math.min(cw, c.lengthBeats * view.current.ppb);
-            const nw = Math.max(1, (n.length / clen) * cw);
-            const ny = y + 6 + (1 - (n.pitch - lo) / span) * (ROW_H - 16);
-            if (nx > x + cw) return;
-            g.fillRect(nx, ny, Math.min(nw, x + cw - nx), 2);
-          });
+          for (let r = 0; r < reps; r++) {
+            const off = r * clen;
+            notes.forEach((n) => {
+              const sb2 = off + n.start;
+              if (sb2 >= c.lengthBeats) return;
+              const nx = x + (sb2 / c.lengthBeats) * cw;
+              const nw = Math.max(1, (n.length / c.lengthBeats) * cw);
+              const ny = y + 6 + (1 - (n.pitch - lo) / span) * (ROW_H - 16);
+              if (nx > x + cw) return;
+              g.fillRect(nx, ny, Math.min(nw, x + cw - nx), 2);
+            });
+          }
         }
         // end-corner marker (Ableton-style): ◥ = the clip simply ends here;
         // ◥◥ doubled = the content loops/tiles to fill the clip
@@ -653,13 +668,19 @@ export function Timeline({
             let lo = Infinity, hi = -Infinity;
             dots.forEach((d) => { lo = Math.min(lo, d.lane); hi = Math.max(hi, d.lane); });
             const span = Math.max(1, hi - lo);
+            const reps = Math.min(64, Math.max(1, Math.ceil(c.lengthBeats / clen)));
             g.fillStyle = "rgba(255,255,255,0.55)";
-            dots.forEach((d) => {
-              const dx = x + (d.beat / clen) * Math.min(cw, c.lengthBeats * view.current.ppb);
-              const dy = y + 6 + (1 - (d.lane - lo) / span) * (ROW_H - 16);
-              if (dx > x + cw - 2) return;
-              g.fillRect(dx, dy, 2, 2);
-            });
+            for (let r = 0; r < reps; r++) {
+              const off = r * clen;
+              dots.forEach((d) => {
+                const sb2 = off + d.beat;
+                if (sb2 >= c.lengthBeats) return;
+                const dx = x + (sb2 / c.lengthBeats) * cw;
+                const dy = y + 6 + (1 - (d.lane - lo) / span) * (ROW_H - 16);
+                if (dx > x + cw - 2) return;
+                g.fillRect(dx, dy, 2, 2);
+              });
+            }
           }
         }
         // name + selection outline (always full alpha)

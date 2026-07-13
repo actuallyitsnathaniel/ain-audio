@@ -49,8 +49,9 @@ export type ClipContent =
       reverse?: boolean; // play backwards
       loop?: boolean; // auto-loop to fill a clip longer than the content (absent = ON); off = play once, silence after
       warp?: boolean; // LEGACY (pre-dropdown): warp on = "complex" — read via warpModeOf, never written anymore
-      warpMode?: WarpMode; // the warp algorithm dropdown: repitch (tape varispeed) · beats (transient slicer) · complex (stretch node); absent = off
+      warpMode?: WarpMode; // the warp algorithm dropdown: varispeed (tape varispeed) · beats (transient slicer) · complex (stretch node); absent = off
       norm?: boolean; // auto-normalize: scanned peak → makeup gain to ≈ −1 dBFS (set true on import)
+      stretch?: number; // ⌥+edge-drag stretch factor (1 = natural): tape-style in off/varispeed, pitch-preserved in beats/complex (folds into the warp ratio)
     };
 
 export interface ArrClip {
@@ -67,14 +68,18 @@ export interface ArrClip {
 
 // ── warp modes (the per-clip dropdown, Ableton-style) ──
 // off      — natural rate; time-true length across tempo changes
-// repitch  — tape varispeed to the grid (bpm/rootBpm): pitch moves with tempo
+// varispeed  — tape varispeed to the grid (bpm/rootBpm): pitch moves with tempo
 // beats    — transient slicer: 1/16 slices play at NATURAL rate on the re-spaced grid
 //            (punch preserved; gated gaps when slower, crossfaded overlaps when faster)
 // complex  — signalsmith-stretch: pitch-locked tempo-fit + duration-preserving transpose
-export type WarpMode = "off" | "repitch" | "beats" | "complex";
-// resolves the mode incl. LEGACY clips saved before the dropdown (sync → repitch, warp → complex)
-export function warpModeOf(cc: { warpMode?: WarpMode; warp?: boolean; sync?: boolean }): WarpMode {
-  return cc.warpMode ?? (cc.warp ? "complex" : cc.sync ? "repitch" : "off");
+export type WarpMode = "off" | "varispeed" | "beats" | "complex";
+// resolves the mode incl. LEGACY clips saved before the dropdown (sync → varispeed, warp → complex)
+export function warpModeOf(cc: {
+  warpMode?: WarpMode;
+  warp?: boolean;
+  sync?: boolean;
+}): WarpMode {
+  return cc.warpMode ?? (cc.warp ? "complex" : cc.sync ? "varispeed" : "off");
 }
 
 // ── per-clip swing (MPC/Ableton-style, optional) ──
@@ -88,7 +93,10 @@ export function swingDelay(beat: number, swing?: number): number {
   if (s <= 0.5) return 0;
   const local = ((beat % 0.5) + 0.5) % 0.5;
   const apex = Math.min(0.75, s) * 0.5; // swung position of the odd 16th within the pair
-  const warped = local <= 0.25 ? local * (apex / 0.25) : apex + (local - 0.25) * ((0.5 - apex) / 0.25);
+  const warped =
+    local <= 0.25
+      ? local * (apex / 0.25)
+      : apex + (local - 0.25) * ((0.5 - apex) / 0.25);
   return warped - local;
 }
 
@@ -119,13 +127,16 @@ export interface Arrangement {
 // ── ids ──
 let _tid = 0;
 let _cid = 0;
-export const newTrackId = () => "t" + (_tid++).toString(36) + Date.now().toString(36);
-export const newClipId = () => "ac" + (_cid++).toString(36) + Date.now().toString(36);
+export const newTrackId = () =>
+  "t" + (_tid++).toString(36) + Date.now().toString(36);
+export const newClipId = () =>
+  "ac" + (_cid++).toString(36) + Date.now().toString(36);
 
 // total length of an arrangement in beats = end of the last clip (min 1 bar)
 export function arrangementBeats(a: Arrangement): number {
   let end = a.beatsPerBar; // at least one bar
-  for (const t of a.tracks) for (const c of t.clips) end = Math.max(end, c.startBeat + c.lengthBeats);
+  for (const t of a.tracks)
+    for (const c of t.clips) end = Math.max(end, c.startBeat + c.lengthBeats);
   return end;
 }
 
