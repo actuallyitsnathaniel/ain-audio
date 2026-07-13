@@ -782,5 +782,5 @@ export function Timeline({
 
 // a blank drum pattern sized to one bar (reuses SequenceClip shape minimally)
 function emptyDrumPattern(bpb: number) {
-  return { steps: 16, beatsPerBar: bpb, kitId: engine.kit.id, bpm: engine.arrangement.bpm, swing: 0, on: {}, accent: {}, loops: {}, laneMix: {}, channels: [] };
+  return { steps: 16, beatsPerBar: bpb, kitId: engine.kit.id, bpm: engine.arrangement.bpm, swing: 0, on: {}, accent: {}, laneMix: {} };
 }
