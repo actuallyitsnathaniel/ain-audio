@@ -9,24 +9,84 @@
 
 import type { Track } from "./data/tracks";
 import { PRESETS, type SampledPreset } from "./data/presets";
-import { clipBeats, newNoteId, sampleAuto, VIB_MAX_CENTS, type AutoLane, type AutoPoint, type MidiChannel, type Note, type NoteClip } from "./data/clips";
-import { DRUM_BASE } from "./data/drum-midi";
-import { arrangementBeats, emptyArrangement, loadArrangement, newClipId, newTrackId, saveArrangement, swingDelay, warpModeOf, type ArrClip, type Arrangement, type ArrTrack, type TrackKind, type WarpMode } from "./data/arrangement";
+import {
+  clipBeats,
+  newNoteId,
+  sampleAuto,
+  VIB_MAX_CENTS,
+  type AutoLane,
+  type AutoPoint,
+  type MidiChannel,
+  type Note,
+  type NoteClip,
+} from "./data/clips";
+import { DRUM_BASE, patternToNotes } from "./data/drum-midi";
+import {
+  arrangementBeats,
+  emptyArrangement,
+  loadArrangement,
+  newClipId,
+  newTrackId,
+  saveArrangement,
+  swingDelay,
+  warpModeOf,
+  type ArrClip,
+  type Arrangement,
+  type ArrTrack,
+  type TrackKind,
+  type WarpMode,
+} from "./data/arrangement";
 import { splitContent } from "./data/clip-split";
-import { putAudio, allAudio, pruneAudio, clearAudio, encodeWav } from "./data/audio-store";
+import {
+  putAudio,
+  allAudio,
+  pruneAudio,
+  clearAudio,
+  encodeWav,
+} from "./data/audio-store";
 // pitch-preserving stretch (WASM/AudioWorklet) — see CREDITS.md "signalsmith-stretch"
 import SignalsmithStretch, { type StretchNode } from "signalsmith-stretch";
 import { FxChain, newFxId, type FxDeviceState } from "./fx-chain";
 import { FX_DEVICES, FX_DEVICE_TYPES, type FxDeviceType } from "./fx-devices";
-import { BUILTIN_PATCHES, patchFromPreset, type SynthPatch } from "./data/patches";
+import {
+  BUILTIN_PATCHES,
+  patchFromPreset,
+  type SynthPatch,
+} from "./data/patches";
 import { parseMidi } from "./data/midi-file";
-import { DEFAULT_KIT, defaultSequence, KITS, LOOPS, parseLoopMeta, resizeRow, STEP_COUNTS, type DrumKit, type DrumLane, type DrumSynth, type LoopLane, type SequenceClip } from "./data/kits";
+import {
+  DEFAULT_KIT,
+  defaultSequence,
+  KITS,
+  LOOPS,
+  parseLoopMeta,
+  resizeRow,
+  STEP_COUNTS,
+  type DrumKit,
+  type DrumLane,
+  type DrumSynth,
+  type LoopLane,
+  type SequenceClip,
+} from "./data/kits";
 
 export type TransportMode = "track" | "sequence";
 
 const STEP_BEATS = 0.25; // one drum step = a 1/16 note
 
-type EngineEvent = "state" | "wet" | "fx" | "track" | "ready" | "synth" | "preset" | "transport" | "clip" | "midi" | "patch" | "arrange" | "select";
+type EngineEvent =
+  | "state"
+  | "wet"
+  | "fx"
+  | "track"
+  | "ready"
+  | "synth"
+  | "preset"
+  | "transport"
+  | "clip"
+  | "midi"
+  | "patch"
+  | "arrange"
+  | "select";
 
 export interface Levels {
   rms: number;
@@ -121,7 +181,11 @@ function loadMasterDevices(): FxDeviceState[] {
   } catch {
     /* corrupted → default */
   }
-  return FX_DEVICE_TYPES.map((t) => ({ id: newFxId(), type: t, params: FX_DEVICES[t].defaults() }));
+  return FX_DEVICE_TYPES.map((t) => ({
+    id: newFxId(),
+    type: t,
+    params: FX_DEVICES[t].defaults(),
+  }));
 }
 
 function loadUserPatches(): Record<string, SynthPatch> {
@@ -134,13 +198,18 @@ function loadUserPatches(): Record<string, SynthPatch> {
 
 // shallow-recursive partial + merge for editing a patch (its nesting is one level:
 // osc1/osc2/sub/noise/filter/filtEnv/ampEnv/lfo are flat objects of primitives).
-type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K];
+};
 function deepMerge<T extends object>(base: T, patch: DeepPartial<T>): T {
   const out = { ...base } as T;
   for (const k in patch) {
     const v = patch[k];
     if (v && typeof v === "object" && !Array.isArray(v)) {
-      out[k] = { ...(base[k] as object), ...(v as object) } as T[Extract<keyof T, string>];
+      out[k] = { ...(base[k] as object), ...(v as object) } as T[Extract<
+        keyof T,
+        string
+      >];
     } else if (v !== undefined) {
       out[k] = v as T[Extract<keyof T, string>];
     }
@@ -173,7 +242,10 @@ class AudioEngine {
   // merged patch store: built-ins + user patches (loaded from localStorage at boot).
   // Built-ins can be edited live for the session but are NOT persisted — they reset
   // to factory on reload; `saveUserPatch` captures the working sound as a user patch.
-  patches: Record<string, SynthPatch> = { ...structuredClone(BUILTIN_PATCHES), ...loadUserPatches() };
+  patches: Record<string, SynthPatch> = {
+    ...structuredClone(BUILTIN_PATCHES),
+    ...loadUserPatches(),
+  };
   get synthPatches(): string[] {
     return Object.keys(this.patches);
   }
@@ -190,7 +262,8 @@ class AudioEngine {
   private seedPresetPatches() {
     for (const pr of this.samplePresets) {
       if (pr.zones.length === 0) continue; // fallback-only ids stay synth patches
-      if (!(pr.name in this.patches)) this.patches[pr.name] = patchFromPreset(pr, pr.id);
+      if (!(pr.name in this.patches))
+        this.patches[pr.name] = patchFromPreset(pr, pr.id);
     }
   }
 
@@ -220,7 +293,8 @@ class AudioEngine {
   deleteUserPatch(name: string) {
     if (this.isBuiltinPatch(name) || !(name in this.patches)) return;
     delete this.patches[name];
-    if (this.synthPatch === name) this.synthPatch = Object.keys(BUILTIN_PATCHES)[0];
+    if (this.synthPatch === name)
+      this.synthPatch = Object.keys(BUILTIN_PATCHES)[0];
     this.persistUserPatches();
     this.emit("patch");
     this.emit("synth");
@@ -233,7 +307,8 @@ class AudioEngine {
   }
   private persistUserPatches() {
     const user: Record<string, SynthPatch> = {};
-    for (const id in this.patches) if (!this.isBuiltinPatch(id)) user[id] = this.patches[id];
+    for (const id in this.patches)
+      if (!this.isBuiltinPatch(id)) user[id] = this.patches[id];
     try {
       localStorage.setItem(LS_PATCHES, JSON.stringify(user));
     } catch {
@@ -284,11 +359,15 @@ class AudioEngine {
   // no per-op inverse logic). Bounded stacks. Clipboard holds copied clips (relative).
   private _undo: UndoSnap[] = [];
   private _redo: UndoSnap[] = [];
-  private _clipboard: { clips: ArrClip[]; trackKinds: TrackKind[] } | null = null;
+  private _clipboard: { clips: ArrClip[]; trackKinds: TrackKind[] } | null =
+    null;
   private static UNDO_MAX = 60;
   private _metroThrough = -1; // last beat we've scheduled a click for (arrangement clock)
   arrangement: Arrangement = loadArrangement();
-  private _arrStrips: Record<string, { gain: GainNode; pan: StereoPannerNode; fx: FxChain }> = {}; // per-track vol/pan strip + FX chain
+  private _arrStrips: Record<
+    string,
+    { gain: GainNode; pan: StereoPannerNode; fx: FxChain }
+  > = {}; // per-track vol/pan strip + FX chain
   kit: DrumKit = DEFAULT_KIT;
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   loops: LoopLane[] = LOOPS;
@@ -304,10 +383,27 @@ class AudioEngine {
   // this playback pass so the lookahead scheduler doesn't retrigger them every tick.
   // `synced` clips re-rate live when the tempo changes (the tape-warble effect):
   // `baseRate` is the rate at `baseBpm`, so a new tempo → baseRate·(bpm/baseBpm). Drift-free.
-  private _startedAudio: Record<string, { src: AudioBufferSourceNode; synced: boolean; baseRate: number; baseBpm: number }> = {};
+  private _startedAudio: Record<
+    string,
+    {
+      src: AudioBufferSourceNode;
+      synced: boolean;
+      baseRate: number;
+      baseBpm: number;
+    }
+  > = {};
   private _presetPeaks: Record<string, Float32Array> = {}; // "presetId:zoneIdx" → cached peaks
-  private _loopNodes: Record<string, { src: AudioBufferSourceNode; gain: GainNode; startCtx: number; startOff: number }> = {}; // live looping voices
-  private _chNodes: Record<string, { gain: GainNode; pan: StereoPannerNode }> = {}; // per-channel vol/pan strip
+  private _loopNodes: Record<
+    string,
+    {
+      src: AudioBufferSourceNode;
+      gain: GainNode;
+      startCtx: number;
+      startOff: number;
+    }
+  > = {}; // live looping voices
+  private _chNodes: Record<string, { gain: GainNode; pan: StereoPannerNode }> =
+    {}; // per-channel vol/pan strip
 
   private _startCtx = 0;
   private _offset = 0;
@@ -385,7 +481,10 @@ class AudioEngine {
 
   private ensureCtx(): AudioContext {
     if (!this.ctx) {
-      const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const Ctor =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
       this.ctx = new Ctor();
       this.buildGraph();
     }
@@ -436,7 +535,9 @@ class AudioEngine {
     // Seeded from the persisted device list. The limiter tail above is NOT in the
     // chain (it's the fixed safety stage).
     this._masterFx = new FxChain(c, n.sum, n.anOut);
-    this._masterFx.setDevices(this._masterDevices.map((d) => structuredClone(d)));
+    this._masterFx.setDevices(
+      this._masterDevices.map((d) => structuredClone(d)),
+    );
     this._masterFx.applyAll(this.bpm);
     this.applyWet(true);
     this.applyLimiter();
@@ -456,7 +557,10 @@ class AudioEngine {
     this.emit("fx");
   }
   masterDevices(): FxDeviceState[] {
-    return this._masterFx?.states() ?? this._masterDevices.map((d) => structuredClone(d));
+    return (
+      this._masterFx?.states() ??
+      this._masterDevices.map((d) => structuredClone(d))
+    );
   }
   addMasterDevice(type: FxDeviceType) {
     this.ensureCtx();
@@ -508,7 +612,11 @@ class AudioEngine {
       n.limiter.knee.setTargetAtTime(0, t, 0.02);
       n.limiter.attack.setTargetAtTime(0.002, t, 0.02);
       n.limiter.release.setTargetAtTime(0.12, t, 0.02);
-      n.limMakeup.gain.setTargetAtTime(db2lin(-this.limiter.ceiling * 0.25), t, 0.02);
+      n.limMakeup.gain.setTargetAtTime(
+        db2lin(-this.limiter.ceiling * 0.25),
+        t,
+        0.02,
+      );
     } else {
       n.limiter.threshold.setTargetAtTime(0, t, 0.02);
       n.limiter.ratio.setTargetAtTime(1, t, 0.02);
@@ -536,14 +644,19 @@ class AudioEngine {
     this._peaks = null;
     this.duration = 0;
     this.lmDb = track.kind === "pair" ? track.lmDb || 1.7 : 1.7;
-    this._offset = parseFloat(localStorage.getItem(posKey(track.id)) || "0") || 0;
+    this._offset =
+      parseFloat(localStorage.getItem(posKey(track.id)) || "0") || 0;
     this.emit("track");
     this.emit("state");
   }
 
   async loadTrack(track: Track, opts?: { autoplay?: boolean }) {
     const autoplay = opts && opts.autoplay;
-    if (this.track && this.track.id === track.id && (this.ready || this.loading)) {
+    if (
+      this.track &&
+      this.track.id === track.id &&
+      (this.ready || this.loading)
+    ) {
       if (autoplay && this.ready && !this.playing) this.play();
       return;
     }
@@ -657,13 +770,17 @@ class AudioEngine {
       }
     });
     // disconnect after the fade+stop; leave the tap gains at 0 (next start re-ramps them)
-    setTimeout(() => srcs.forEach((s) => {
-      try {
-        s.disconnect();
-      } catch {
-        /* fine */
-      }
-    }), (d + 0.02) * 1000);
+    setTimeout(
+      () =>
+        srcs.forEach((s) => {
+          try {
+            s.disconnect();
+          } catch {
+            /* fine */
+          }
+        }),
+      (d + 0.02) * 1000,
+    );
   }
 
   async play() {
@@ -709,7 +826,8 @@ class AudioEngine {
 
   getPosition(): number {
     if (!this.playing || !this.ctx) return this._offset;
-    const pos = this._offset + Math.max(0, this.ctx.currentTime - this._startCtx);
+    const pos =
+      this._offset + Math.max(0, this.ctx.currentTime - this._startCtx);
     if (this.duration && pos >= this.duration) {
       this.stopSources();
       this.playing = false;
@@ -727,7 +845,8 @@ class AudioEngine {
   }
 
   private savePos() {
-    if (this.track) localStorage.setItem(posKey(this.track.id), String(this._offset));
+    if (this.track)
+      localStorage.setItem(posKey(this.track.id), String(this._offset));
   }
 
   // ── controls ──
@@ -741,7 +860,11 @@ class AudioEngine {
   setLevelMatch(on: boolean) {
     this.levelMatch = !!on;
     if (this.nodes) {
-      this.nodes.lm.gain.setTargetAtTime(on ? db2lin(this.lmDb) : 1, this.ctx!.currentTime, 0.02);
+      this.nodes.lm.gain.setTargetAtTime(
+        on ? db2lin(this.lmDb) : 1,
+        this.ctx!.currentTime,
+        0.02,
+      );
     }
     this.emit("state");
   }
@@ -752,7 +875,12 @@ class AudioEngine {
     this.applyMasterVol();
   }
   private applyMasterVol() {
-    if (this.ctx && this.nodes) this.nodes.master.gain.setTargetAtTime(this.masterVol, this.ctx.currentTime, 0.02);
+    if (this.ctx && this.nodes)
+      this.nodes.master.gain.setTargetAtTime(
+        this.masterVol,
+        this.ctx.currentTime,
+        0.02,
+      );
     try {
       localStorage.setItem(LS_MASTER_VOL, String(this.masterVol));
     } catch {
@@ -810,8 +938,12 @@ class AudioEngine {
   }
 
   getLevels(): LevelPair {
-    if (!this.nodes) return { mix: { rms: -90, peak: -90 }, master: { rms: -90, peak: -90 } };
-    return { mix: this.levelOf(this.nodes.anMix), master: this.levelOf(this.nodes.anMaster) };
+    if (!this.nodes)
+      return { mix: { rms: -90, peak: -90 }, master: { rms: -90, peak: -90 } };
+    return {
+      mix: this.levelOf(this.nodes.anMix),
+      master: this.levelOf(this.nodes.anMaster),
+    };
   }
 
   getSpectrum(out: Uint8Array<ArrayBuffer>): boolean {
@@ -849,7 +981,8 @@ class AudioEngine {
     if (!this.patches[key]) {
       const pr = this.samplePresets.find((p) => p.id === id); // legacy preset-id call
       if (pr) {
-        if (!(pr.name in this.patches) && pr.zones.length) this.patches[pr.name] = patchFromPreset(pr, pr.id);
+        if (!(pr.name in this.patches) && pr.zones.length)
+          this.patches[pr.name] = patchFromPreset(pr, pr.id);
         key = pr.name;
       }
     }
@@ -860,11 +993,16 @@ class AudioEngine {
   }
   // decode the sample-source preset a patch references (no-op for osc-only patches)
   private warmPatch(p: SynthPatch) {
-    if (p.sample?.presetId && this.samplePresets.some((pr) => pr.id === p.sample!.presetId)) void this.loadPreset(p.sample.presetId);
+    if (
+      p.sample?.presetId &&
+      this.samplePresets.some((pr) => pr.id === p.sample!.presetId)
+    )
+      void this.loadPreset(p.sample.presetId);
   }
   // public: decode a preset's zones by id (for the sample waveform / manual warm)
   warmPreset(presetId: string) {
-    if (this.samplePresets.some((pr) => pr.id === presetId)) void this.loadPreset(presetId);
+    if (this.samplePresets.some((pr) => pr.id === presetId))
+      void this.loadPreset(presetId);
   }
 
   // Lazily fetch + decode every zone of a preset (mirrors fetchBuf). A zone that
@@ -893,10 +1031,13 @@ class AudioEngine {
   // has one (cached), else use the hand-authored defaultPhrase. Also returns a
   // bpm hint (from the .mid tempo, or the preset's bpmHint). Never throws — a
   // bad/missing .mid falls back to the static phrase.
-  async loadPresetPhrase(id: string): Promise<{ clip: NoteClip; bpm?: number } | null> {
+  async loadPresetPhrase(
+    id: string,
+  ): Promise<{ clip: NoteClip; bpm?: number } | null> {
     const preset = this.samplePresets.find((pr) => pr.id === id);
     if (!preset) return null;
-    if (!preset.phraseUrl) return { clip: preset.defaultPhrase, bpm: preset.bpmHint };
+    if (!preset.phraseUrl)
+      return { clip: preset.defaultPhrase, bpm: preset.bpmHint };
     if (this._phraseCache[id]) return this._phraseCache[id];
     try {
       const res = await fetch(preset.phraseUrl);
@@ -905,7 +1046,10 @@ class AudioEngine {
       if (!parsed) throw new Error("mid parse");
       // use the .mid's tempo only if it actually carried one; otherwise fall back
       // to the preset's bpmHint (Ableton clip-export omits tempo).
-      const out = { clip: parsed.clip, bpm: parsed.hasTempo ? parsed.bpm : preset.bpmHint };
+      const out = {
+        clip: parsed.clip,
+        bpm: parsed.hasTempo ? parsed.bpm : preset.bpmHint,
+      };
       this._phraseCache[id] = out;
       return out;
     } catch {
@@ -925,7 +1069,10 @@ class AudioEngine {
   // for densely-sampled instruments). Returns null if no zone decoded. The
   // returned rootMidi is the value to compute playbackRate against — clamped so
   // out-of-range notes never overshoot SHIFT_CAP.
-  private pickZone(preset: SampledPreset, midi: number): { buf: AudioBuffer; rootMidi: number; zoneIdx: number } | null {
+  private pickZone(
+    preset: SampledPreset,
+    midi: number,
+  ): { buf: AudioBuffer; rootMidi: number; zoneIdx: number } | null {
     const bufs = this._sampleBufs[preset.id];
     if (!bufs) return null;
     let containing = -1;
@@ -933,7 +1080,13 @@ class AudioEngine {
     let nearestDist = Infinity;
     preset.zones.forEach((z, i) => {
       if (!bufs[i]) return;
-      if (z.loMidi != null && z.hiMidi != null && midi >= z.loMidi && midi <= z.hiMidi) containing = i;
+      if (
+        z.loMidi != null &&
+        z.hiMidi != null &&
+        midi >= z.loMidi &&
+        midi <= z.hiMidi
+      )
+        containing = i;
       const d = Math.abs(z.rootMidi - midi);
       if (d < nearestDist) {
         nearestDist = d;
@@ -945,7 +1098,8 @@ class AudioEngine {
     const root = preset.zones[idx].rootMidi;
     // clamp the effective root so |midi - root| never exceeds the shift cap
     const cap = AudioEngine.SHIFT_CAP;
-    const effRoot = midi > root + cap ? midi - cap : midi < root - cap ? midi + cap : root;
+    const effRoot =
+      midi > root + cap ? midi - cap : midi < root - cap ? midi + cap : root;
     return { buf: bufs[idx]!, rootMidi: effRoot, zoneIdx: idx };
   }
 
@@ -959,7 +1113,14 @@ class AudioEngine {
   // the loop restarts at inD[aS] — which is physically the NEXT sample, so the wrap is
   // continuous. Equal-power (cos/sin) keeps perceived level constant across the blend.
   // Needs `xf` samples of pre-roll before loopStart (aS ≥ xf) — capped below.
-  private xfadeLoopBuffer(src: AudioBuffer, presetId: string, zoneIdx: number, a: number, b: number, xfadeSec: number): AudioBuffer {
+  private xfadeLoopBuffer(
+    src: AudioBuffer,
+    presetId: string,
+    zoneIdx: number,
+    a: number,
+    b: number,
+    xfadeSec: number,
+  ): AudioBuffer {
     const N = src.length;
     const aS = Math.floor(a * N);
     const bS = Math.floor(b * N);
@@ -968,7 +1129,16 @@ class AudioEngine {
     // available before loopStart (can't read before the buffer head).
     let xf = Math.floor(src.sampleRate * Math.max(0, xfadeSec));
     xf = Math.min(xf, Math.floor(region / 2), aS);
-    const key = presetId + ":" + zoneIdx + ":" + a.toFixed(4) + ":" + b.toFixed(4) + ":" + xf;
+    const key =
+      presetId +
+      ":" +
+      zoneIdx +
+      ":" +
+      a.toFixed(4) +
+      ":" +
+      b.toFixed(4) +
+      ":" +
+      xf;
     const hit = this._xfadeBufs[key];
     if (hit) return hit;
     if (xf < 8) return src; // fade off / too small / loop at buffer head → plain loop
@@ -983,7 +1153,8 @@ class AudioEngine {
         const fadeOut = Math.cos((t * Math.PI) / 2); // outgoing loop tail
         const fadeIn = Math.sin((t * Math.PI) / 2); // incoming = pre-roll before loopStart
         // tail [bS-xf+i] morphs into the material that leads INTO loopStart [aS-xf+i]
-        outD[bS - xf + i] = inD[bS - xf + i] * fadeOut + inD[aS - xf + i] * fadeIn;
+        outD[bS - xf + i] =
+          inD[bS - xf + i] * fadeOut + inD[aS - xf + i] * fadeIn;
       }
     }
     this._xfadeBufs[key] = out;
@@ -1032,7 +1203,13 @@ class AudioEngine {
     if (type === "white") {
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     } else {
-      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      let b0 = 0,
+        b1 = 0,
+        b2 = 0,
+        b3 = 0,
+        b4 = 0,
+        b5 = 0,
+        b6 = 0;
       for (let i = 0; i < len; i++) {
         const w = Math.random() * 2 - 1;
         b0 = 0.99886 * b0 + w * 0.0555179;
@@ -1066,14 +1243,25 @@ class AudioEngine {
     bends?: { toMidi: number; from: number; at: number }[], // hold until `from`, glide to `toMidi` by `at`
     // vibrato: depth follows a clip-global automation curve over the note's window.
     // `whenOfBeat(absClipBeat)` maps a clip beat to absolute ctx time.
-    autoVib?: { points: AutoPoint[]; startBeat: number; endBeat: number; whenOfBeat: (b: number) => number; rate?: number; intensity?: number },
+    autoVib?: {
+      points: AutoPoint[];
+      startBeat: number;
+      endBeat: number;
+      whenOfBeat: (b: number) => number;
+      rate?: number;
+      intensity?: number;
+    },
   ): VoiceHandle {
     const c = this.ensureCtx();
     const n = this.nodes!;
     const t = when;
     // schedule the portamento pitch ramps on a pitch param. `mode` picks the unit:
     // "detune" → cents offset from `midi`; "freq" → absolute Hz; "rate" → playbackRate.
-    const applyBends = (param: AudioParam, mode: "detune" | "freq" | "rate", base = 0) => {
+    const applyBends = (
+      param: AudioParam,
+      mode: "detune" | "freq" | "rate",
+      base = 0,
+    ) => {
       if (!bends || !bends.length) return;
       // base: detune→humanize offset (cents); freq→octave-shift semitones; rate→rootMidi
       const val = (m: number) =>
@@ -1088,7 +1276,10 @@ class AudioEngine {
         // hold the current pitch until the slide note begins, THEN glide to it,
         // so the bend happens during the slide note (not from the head's start)
         param.setValueAtTime(val(prevPitch), Math.max(t, b.from));
-        param.linearRampToValueAtTime(val(b.toMidi), Math.max(b.from + 0.005, b.at));
+        param.linearRampToValueAtTime(
+          val(b.toMidi),
+          Math.max(b.from + 0.005, b.at),
+        );
         prevPitch = b.toMidi;
       }
     };
@@ -1103,7 +1294,13 @@ class AudioEngine {
       const rate = autoVib.rate ?? AudioEngine.VIB_RATE;
       const scale = (autoVib.intensity ?? 1) * VIB_MAX_CENTS;
       // breakpoints inside the note's window, plus the window edges, give the ramp set
-      const edges = [startBeat, ...points.map((p) => p.beat).filter((b) => b > startBeat && b < endBeat), endBeat];
+      const edges = [
+        startBeat,
+        ...points
+          .map((p) => p.beat)
+          .filter((b) => b > startBeat && b < endBeat),
+        endBeat,
+      ];
       let anyDepth = false;
       const depth = c.createGain();
       depth.gain.setValueAtTime(sampleAuto(points, startBeat) * scale, t);
@@ -1148,7 +1345,10 @@ class AudioEngine {
       vf.type = p.filter.type;
       vf.Q.value = p.filter.q;
       // key-tracking: cutoff scales with how far the note is from C4
-      const cutBase = Math.min(18000, p.filter.cut * Math.pow(2, (p.filter.keyTrack * (midi - 60)) / 12));
+      const cutBase = Math.min(
+        18000,
+        p.filter.cut * Math.pow(2, (p.filter.keyTrack * (midi - 60)) / 12),
+      );
       // filter envelope (ADSR) on cutoff, peaking at cutBase + amt
       const fe = p.filtEnv;
       const cutPeak = Math.max(20, Math.min(18000, cutBase + fe.amt));
@@ -1173,7 +1373,13 @@ class AudioEngine {
     const oscs: OscillatorNode[] = [];
     // a pitched oscillator at `semi` offset, mixed at `level`, with portamento bends.
     // `uni` voices spread across ±uniDet cents / ±uniW pan (1 = plain center voice).
-    const addOsc = (wave: OscillatorType, semi: number, cents: number, level: number, uni = 1) => {
+    const addOsc = (
+      wave: OscillatorType,
+      semi: number,
+      cents: number,
+      level: number,
+      uni = 1,
+    ) => {
       if (level <= 0) return;
       const norm = level / Math.sqrt(uni);
       for (let i = 0; i < uni; i++) {
@@ -1199,7 +1405,8 @@ class AudioEngine {
       }
     };
     addOsc(p.osc1.wave, p.osc1.semi, p.osc1.cents, p.osc1.level, uniN);
-    if (p.osc2On) addOsc(p.osc2.wave, p.osc2.semi, p.osc2.cents, p.osc2.level, uniN);
+    if (p.osc2On)
+      addOsc(p.osc2.wave, p.osc2.semi, p.osc2.cents, p.osc2.level, uniN);
     if (p.sub.level > 0) addOsc(p.sub.wave, p.sub.oct * 12, 0, p.sub.level);
 
     // noise source (unpitched) → its own level gain → filter
@@ -1220,14 +1427,17 @@ class AudioEngine {
     // ride src.detune (cents), same as an osc. loop = sustain via loopStart/End.
     let sampleSrc: AudioBufferSourceNode | undefined;
     if (p.sample && p.sample.level > 0) {
-      const preset = this.samplePresets.find((pr) => pr.id === p.sample!.presetId);
+      const preset = this.samplePresets.find(
+        (pr) => pr.id === p.sample!.presetId,
+      );
       const zone = preset ? this.pickZone(preset, midi) : null;
       if (preset && zone) {
         const s = c.createBufferSource();
         // varispeed: note pitch × independent transpose (semi + cents), speed-coupled
         const vari = (p.sample.semi ?? 0) / 12 + (p.sample.cents ?? 0) / 1200;
         s.playbackRate.value = Math.pow(2, (midi - zone.rootMidi) / 12 + vari);
-        if (preset.humanize > 0 && s.detune) s.detune.value = (Math.random() * 2 - 1) * preset.humanize;
+        if (preset.humanize > 0 && s.detune)
+          s.detune.value = (Math.random() * 2 - 1) * preset.humanize;
         // playback window (0..1 of the buffer). loop region defaults to the window.
         const dur = zone.buf.duration;
         const a = Math.min(0.999, Math.max(0, p.sample.start ?? 0));
@@ -1243,14 +1453,22 @@ class AudioEngine {
             if (le <= ls) le = Math.min(1, ls + 0.001); // guard degenerate snap
           }
           // loop a buffer with the user's seam crossfade baked in → no click on wrap
-          s.buffer = this.xfadeLoopBuffer(zone.buf, p.sample.presetId, zone.zoneIdx, ls, le, p.sample.xfade ?? 0);
+          s.buffer = this.xfadeLoopBuffer(
+            zone.buf,
+            p.sample.presetId,
+            zone.zoneIdx,
+            ls,
+            le,
+            p.sample.xfade ?? 0,
+          );
           s.loop = true;
           s.loopStart = ls * dur;
           s.loopEnd = le * dur;
         } else {
           s.buffer = zone.buf;
         }
-        if (bends && bends.length && s.detune) applyBends(s.detune, "detune", s.detune.value);
+        if (bends && bends.length && s.detune)
+          applyBends(s.detune, "detune", s.detune.value);
         const sg = c.createGain();
         sg.gain.value = p.sample.level;
         s.connect(sg);
@@ -1285,13 +1503,24 @@ class AudioEngine {
       const lg = c.createGain();
       lg.gain.value = p.lfo.depth;
       l.connect(lg);
-      if (p.lfo.dest === "pitch") pitchTargets.forEach((d) => lg.connect(d)); // depth = cents
-      else if (p.lfo.dest === "cutoff" && filterOn) lg.connect(vf.frequency); // depth = Hz (no-op when bypassed)
+      if (p.lfo.dest === "pitch")
+        pitchTargets.forEach((d) => lg.connect(d)); // depth = cents
+      else if (p.lfo.dest === "cutoff" && filterOn)
+        lg.connect(vf.frequency); // depth = Hz (no-op when bypassed)
       else lg.connect(vg.gain); // amp tremolo, depth = linear gain
       l.start(t);
       lfos.push(l);
     }
-    const handle: VoiceHandle = { kind: "synth", vg, r: ae.r, oscs, vf, noiseSrc, sampleSrc, lfos };
+    const handle: VoiceHandle = {
+      kind: "synth",
+      vg,
+      r: ae.r,
+      oscs,
+      vf,
+      noiseSrc,
+      sampleSrc,
+      lfos,
+    };
     if (p.voices?.mode === "mono") this._monoVoices.set(dest, handle);
     return handle;
   }
@@ -1376,7 +1605,9 @@ class AudioEngine {
           else if (st === 128 || (st === 144 && vel === 0)) this.noteOff(note);
         };
       });
-      this.midiStatus = count ? count + " device" + (count > 1 ? "s" : "") : "no device";
+      this.midiStatus = count
+        ? count + " device" + (count > 1 ? "s" : "")
+        : "no device";
       this.emit("midi");
     };
     if (this._midiAccess) {
@@ -1403,18 +1634,38 @@ class AudioEngine {
   private liveKey(midi: number, channelId?: string) {
     return (channelId ?? "_") + ":" + midi;
   }
+  // live-keyboard routing: explicit channel > armed channel > the SELECTED midi track
+  // (so playing the Instrument panel of a selected track sounds THAT track — through
+  // its FX strip — without arming; unrouted keys fall back to the global lab patch)
+  private liveCid(channelId?: string): string | undefined {
+    if (channelId) return channelId;
+    if (this.armedChannel) return this.armedChannel;
+    const selId = this._selTrackId;
+    if (selId && this.arrangement.tracks.some((t) => t.id === selId && t.kind === "midi")) return selId;
+    return undefined;
+  }
   noteOn(midi: number, vel?: number, channelId?: string) {
     vel = vel == null ? 1 : vel;
     this.ensureCtx();
-    // no explicit channel ⇒ the global keyboard, which follows the armed channel
-    const cid = channelId ?? this.armedChannel ?? undefined;
+    const cid = this.liveCid(channelId);
     // drum-track preview: a note in the drum piano-roll triggers the pitch's kit lane
     // as a one-shot (no sustained voice), so it sounds like the drum it edits.
-    const dt = cid ? this.arrangement.tracks.find((tr) => tr.id === cid && tr.kind === "drum") : undefined;
+    const dt = cid
+      ? this.arrangement.tracks.find(
+          (tr) => tr.id === cid && tr.kind === "drum",
+        )
+      : undefined;
     if (dt) {
-      const kit = KITS.find((k) => k.id === this.drumTrackKitId(dt)) || this.kit;
+      const kit =
+        KITS.find((k) => k.id === this.drumTrackKitId(dt)) || this.kit;
       const lane = kit.lanes[midi - DRUM_BASE];
-      if (lane) this.voiceDrum(lane, this.ctx!.currentTime, vel > 0.85 ? 1 : 0.7, this.trackStrip(dt));
+      if (lane)
+        this.voiceDrum(
+          lane,
+          this.ctx!.currentTime,
+          vel > 0.85 ? 1 : 0.7,
+          this.trackStrip(dt),
+        );
       return;
     }
     this.noteOff(midi, true, cid);
@@ -1422,12 +1673,19 @@ class AudioEngine {
     // it is so previewing a note in the piano roll auditions that instrument, not the
     // global Audio-Lab patch. (ids don't collide: "ch…" vs "t…".)
     const sel = this.voiceForId(cid);
-    this._liveVoices[this.liveKey(midi, cid)] = this.startVoiceAt(midi, vel, this.ctx!.currentTime, sel);
+    this._liveVoices[this.liveKey(midi, cid)] = this.startVoiceAt(
+      midi,
+      vel,
+      this.ctx!.currentTime,
+      sel,
+    );
     this.emit("synth");
   }
   // the kit a drum track's clips use (from the first drum clip, else the current kit)
   private drumTrackKitId(t: ArrTrack): string {
-    for (const clip of t.clips) if (clip.content.kind === "drum") return clip.content.pattern.kitId || this.kit.id;
+    for (const clip of t.clips)
+      if (clip.content.kind === "drum")
+        return clip.content.pattern.kitId || this.kit.id;
     return this.kit.id;
   }
   // resolve a channel/track id to its voice selection (undefined = global patch)
@@ -1441,10 +1699,11 @@ class AudioEngine {
   }
 
   noteOff(midi: number, instant?: boolean, channelId?: string) {
-    const cid = channelId ?? this.armedChannel ?? undefined;
+    const cid = this.liveCid(channelId); // must mirror noteOn or the release misses its key
     const key = this.liveKey(midi, cid);
     // fall back to the global slot in case the note was pressed before arming
-    const h = this._liveVoices[key] ?? this._liveVoices[this.liveKey(midi, undefined)];
+    const h =
+      this._liveVoices[key] ?? this._liveVoices[this.liveKey(midi, undefined)];
     if (!h) return;
     delete this._liveVoices[key];
     delete this._liveVoices[this.liveKey(midi, undefined)];
@@ -1473,7 +1732,8 @@ class AudioEngine {
     for (const l of kit.lanes) {
       if (!this.sequence.on[l.id]) this.sequence.on[l.id] = blank();
       if (!this.sequence.accent[l.id]) this.sequence.accent[l.id] = blank();
-      if (!this.sequence.laneMix[l.id]) this.sequence.laneMix[l.id] = { mute: false, solo: false };
+      if (!this.sequence.laneMix[l.id])
+        this.sequence.laneMix[l.id] = { mute: false, solo: false };
     }
     void this.loadKit(kit);
     this.emit("transport");
@@ -1516,9 +1776,11 @@ class AudioEngine {
     this.sequence = seq;
     // warm the instruments any restored channels need
     for (const ch of seq.channels) {
-      if (this.samplePresets.some((pr) => pr.id === ch.presetId)) void this.loadPreset(ch.presetId);
+      if (this.samplePresets.some((pr) => pr.id === ch.presetId))
+        void this.loadPreset(ch.presetId);
     }
-    if (this.armedChannel && !live.has(this.armedChannel)) this.armedChannel = null;
+    if (this.armedChannel && !live.has(this.armedChannel))
+      this.armedChannel = null;
     this.emit("clip");
   }
 
@@ -1552,7 +1814,8 @@ class AudioEngine {
   // Arm a channel for keyboard input (one at a time; null = the global Audio-Lab
   // voice). Toggling the armed channel off reverts to the global voice.
   armChannel(id: string | null) {
-    this.armedChannel = id && this.sequence.channels.some((c) => c.id === id) ? id : null;
+    this.armedChannel =
+      id && this.sequence.channels.some((c) => c.id === id) ? id : null;
     this.emit("clip");
   }
 
@@ -1582,13 +1845,17 @@ class AudioEngine {
     if (id && this.patches[id]) return this.patches[id];
     const pr = id ? this.samplePresets.find((p) => p.id === id) : undefined;
     if (pr) {
-      if (!(pr.name in this.patches) && pr.zones.length) this.patches[pr.name] = patchFromPreset(pr, pr.id);
+      if (!(pr.name in this.patches) && pr.zones.length)
+        this.patches[pr.name] = patchFromPreset(pr, pr.id);
       if (this.patches[pr.name]) return this.patches[pr.name];
     }
     return this.currentPatch();
   }
   private channelVoice(ch: MidiChannel): VoiceSel {
-    return { patch: this.resolvePatch(ch.presetId), dest: this.channelStrip(ch) };
+    return {
+      patch: this.resolvePatch(ch.presetId),
+      dest: this.channelStrip(ch),
+    };
   }
 
   // Group a clip's notes into FL-style legato voice runs. A `slide` note that is
@@ -1602,17 +1869,29 @@ class AudioEngine {
   // opened). For a clean sliding lead over chords, put the lead on its own channel.
   private buildRuns(notes: Note[]): NoteRun[] {
     // muted (deactivated) notes stay in the clip but are never voiced
-    const sorted = notes.filter((n) => !n.muted).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+    const sorted = notes
+      .filter((n) => !n.muted)
+      .sort((a, b) => a.start - b.start || a.pitch - b.pitch);
     const runs: NoteRun[] = [];
     let open: NoteRun | null = null;
     const EPS = 1e-4;
     for (const n of sorted) {
       // a slide note continues the open run if it starts at/before that run's end
       if (n.slide && open && n.start <= open.endBeat + EPS) {
-        open.bends.push({ toMidi: n.pitch, fromBeat: n.start, atBeat: n.start + n.length });
+        open.bends.push({
+          toMidi: n.pitch,
+          fromBeat: n.start,
+          atBeat: n.start + n.length,
+        });
         open.endBeat = Math.max(open.endBeat, n.start + n.length);
       } else {
-        open = { startBeat: n.start, endBeat: n.start + n.length, pitch: n.pitch, vel: n.vel, bends: [] };
+        open = {
+          startBeat: n.start,
+          endBeat: n.start + n.length,
+          pitch: n.pitch,
+          vel: n.vel,
+          bends: [],
+        };
         runs.push(open);
       }
     }
@@ -1623,7 +1902,8 @@ class AudioEngine {
   private anyBeatSolo(): boolean {
     const mix = this.sequence.laneMix || {};
     if (Object.values(mix).some((m) => m.solo)) return true;
-    if (Object.values(this.sequence.loops).some((s) => s.solo && s.on)) return true;
+    if (Object.values(this.sequence.loops).some((s) => s.solo && s.on))
+      return true;
     return this.sequence.channels.some((c) => c.solo);
   }
   // 1 normally; 0 if this channel is muted, or a global solo is up and this isn't soloed
@@ -1640,7 +1920,11 @@ class AudioEngine {
       id: "ch" + ++this._chSeq + Date.now().toString(36),
       name: "channel " + (chans.length + 1),
       presetId,
-      clip: { bars: Math.max(1, Math.ceil(this.sequence.steps / 16)), beatsPerBar: 4, notes: [] },
+      clip: {
+        bars: Math.max(1, Math.ceil(this.sequence.steps / 16)),
+        beatsPerBar: 4,
+        notes: [],
+      },
       mute: false,
       solo: false,
       loop: true,
@@ -1702,7 +1986,12 @@ class AudioEngine {
     const t = this.ctx.currentTime;
     for (const ch of this.sequence.channels) {
       const s = this._chNodes[ch.id];
-      if (s) s.gain.gain.setTargetAtTime((ch.vol ?? 0.8) * this.channelGain(ch), t, 0.02);
+      if (s)
+        s.gain.gain.setTargetAtTime(
+          (ch.vol ?? 0.8) * this.channelGain(ch),
+          t,
+          0.02,
+        );
     }
   }
   // Solo is global, so any solo/mute toggle in any group must re-push live gains
@@ -1722,7 +2011,12 @@ class AudioEngine {
     if (!ch) return;
     ch.vol = Math.min(1, Math.max(0, vol));
     const s = this._chNodes[id];
-    if (s && this.ctx) s.gain.gain.setTargetAtTime(ch.vol * this.channelGain(ch), this.ctx.currentTime, 0.02);
+    if (s && this.ctx)
+      s.gain.gain.setTargetAtTime(
+        ch.vol * this.channelGain(ch),
+        this.ctx.currentTime,
+        0.02,
+      );
     this.emit("clip");
   }
   setChannelPan(id: string, pan: number) {
@@ -1730,7 +2024,8 @@ class AudioEngine {
     if (!ch) return;
     ch.pan = Math.min(1, Math.max(-1, pan));
     const s = this._chNodes[id];
-    if (s && this.ctx) s.pan.pan.setTargetAtTime(ch.pan, this.ctx.currentTime, 0.02);
+    if (s && this.ctx)
+      s.pan.pan.setTargetAtTime(ch.pan, this.ctx.currentTime, 0.02);
     this.emit("clip");
   }
   toggleChannelLoop(id: string) {
@@ -1811,7 +2106,13 @@ class AudioEngine {
     const n = this.arrangement.tracks.length + 1;
     const t: ArrTrack = {
       id: newTrackId(),
-      name: name || (kind === "midi" ? "midi " + n : kind === "drum" ? "drums " + n : "audio " + n),
+      name:
+        name ||
+        (kind === "midi"
+          ? "midi " + n
+          : kind === "drum"
+            ? "drums " + n
+            : "audio " + n),
       kind,
       presetId: kind === "midi" ? this.synthPatches[0] : undefined, // unified patch key
       mute: false,
@@ -1832,7 +2133,9 @@ class AudioEngine {
         this.stopAudioForClip(c.id); // stop any live audio
         this.disposeStretch(c.id);
       }
-    this.arrangement.tracks = this.arrangement.tracks.filter((t) => t.id !== id);
+    this.arrangement.tracks = this.arrangement.tracks.filter(
+      (t) => t.id !== id,
+    );
     const s = this._arrStrips[id];
     if (s) {
       try {
@@ -1867,7 +2170,12 @@ class AudioEngine {
     this.pushUndoCoalesced("vol:" + id); // one undo step per knob gesture
     t.vol = Math.min(1, Math.max(0, vol));
     const s = this._arrStrips[id];
-    if (s && this.ctx) s.gain.gain.setTargetAtTime(t.vol * this.trackGain(t), this.ctx.currentTime, 0.02);
+    if (s && this.ctx)
+      s.gain.gain.setTargetAtTime(
+        t.vol * this.trackGain(t),
+        this.ctx.currentTime,
+        0.02,
+      );
     this.saveArr();
   }
   setTrackPan(id: string, pan: number) {
@@ -1876,14 +2184,20 @@ class AudioEngine {
     this.pushUndoCoalesced("pan:" + id); // one undo step per knob gesture
     t.pan = Math.min(1, Math.max(-1, pan));
     const s = this._arrStrips[id];
-    if (s && this.ctx) s.pan.pan.setTargetAtTime(t.pan, this.ctx.currentTime, 0.02);
+    if (s && this.ctx)
+      s.pan.pan.setTargetAtTime(t.pan, this.ctx.currentTime, 0.02);
     this.saveArr();
   }
 
   // ── per-track FX chain API (the per-track FX UI drives these) ──
   // ensures the live strip+chain exists (builds it if the track was never voiced yet),
   // then returns it. Keeps t.devices (persisted) in sync after each mutation.
-  private trackFx(id: string): { s: { gain: GainNode; pan: StereoPannerNode; fx: FxChain }; t: ArrTrack } | null {
+  private trackFx(
+    id: string,
+  ): {
+    s: { gain: GainNode; pan: StereoPannerNode; fx: FxChain };
+    t: ArrTrack;
+  } | null {
     const t = this.findTrack(id);
     if (!t) return null;
     this.trackStrip(t); // idempotent build
@@ -1891,7 +2205,9 @@ class AudioEngine {
     return s ? { s, t } : null;
   }
   trackDevices(id: string): FxDeviceState[] {
-    return this._arrStrips[id]?.fx.states() ?? this.findTrack(id)?.devices ?? [];
+    return (
+      this._arrStrips[id]?.fx.states() ?? this.findTrack(id)?.devices ?? []
+    );
   }
   addTrackDevice(id: string, type: FxDeviceType) {
     const r = this.trackFx(id);
@@ -1945,7 +2261,10 @@ class AudioEngine {
   }
 
   // ── clip CRUD ──
-  private findClip(trackId: string, clipId: string): [ArrTrack, ArrClip] | null {
+  private findClip(
+    trackId: string,
+    clipId: string,
+  ): [ArrTrack, ArrClip] | null {
     const t = this.findTrack(trackId);
     const c = t?.clips.find((x) => x.id === clipId);
     return t && c ? [t, c] : null;
@@ -1969,11 +2288,20 @@ class AudioEngine {
     const ke = keep.startBeat + keep.lengthBeats;
     const out: ArrClip[] = [];
     for (const c of t.clips) {
-      if (c.id === keep.id) { out.push(c); continue; }
+      if (c.id === keep.id) {
+        out.push(c);
+        continue;
+      }
       const cs = c.startBeat;
       const ce = c.startBeat + c.lengthBeats;
-      if (ce <= ks || cs >= ke) { out.push(c); continue; } // no overlap
-      if (cs >= ks && ce <= ke) { this.stopAudioForClip(c.id); continue; } // fully covered → drop
+      if (ce <= ks || cs >= ke) {
+        out.push(c);
+        continue;
+      } // no overlap
+      if (cs >= ks && ce <= ke) {
+        this.stopAudioForClip(c.id);
+        continue;
+      } // fully covered → drop
       if (cs < ks && ce > ks) {
         // front overlap → shorten to end at ks (and if it ALSO pokes out the back past
         // ke, we lose that tail; a split is out of scope — trimming is the simple rule)
@@ -2000,7 +2328,12 @@ class AudioEngine {
     this.saveArr();
   }
   // move a clip (optionally to another track); startBeat clamped ≥ 0
-  moveClip(trackId: string, clipId: string, startBeat: number, toTrackId?: string) {
+  moveClip(
+    trackId: string,
+    clipId: string,
+    startBeat: number,
+    toTrackId?: string,
+  ) {
     const found = this.findClip(trackId, clipId);
     if (!found) return;
     const [from, c] = found;
@@ -2042,7 +2375,10 @@ class AudioEngine {
   // selection keeps its relative layout, selected clips can never trim each other in
   // resolveOverlaps; only non-selected clips under the drop get trimmed (as in a
   // single-clip drag). Beat-move only — cross-track hops stay single-clip / ↑↓ keys.
-  dragSelectionTo(items: { trackId: string; clipId: string; base: number }[], delta: number) {
+  dragSelectionTo(
+    items: { trackId: string; clipId: string; base: number }[],
+    delta: number,
+  ) {
     if (!items.length) return;
     const minBase = Math.min(...items.map((i) => i.base));
     const d = Math.max(delta, -minBase);
@@ -2061,12 +2397,57 @@ class AudioEngine {
     const found = this.findClip(trackId, clipId);
     if (!found) return null;
     const [t, c] = found;
-    const copy: ArrClip = { ...structuredClone(c), id: newClipId(), startBeat: c.startBeat + c.lengthBeats };
+    const copy: ArrClip = {
+      ...structuredClone(c),
+      id: newClipId(),
+      startBeat: c.startBeat + c.lengthBeats,
+    };
     t.clips.push(copy);
     this.resolveOverlaps(t, copy);
     this.saveArr();
     return copy;
   }
+  // ⌥+edge-drag STRETCH: content scales to the new clip length (vs. plain resize,
+  // which tiles/cuts). MIDI/drum scale their notes (lossless — the grid hatches
+  // off-grid results); audio stores a cumulative `stretch` factor — tape-style in
+  // off/varispeed, PITCH-PRESERVED in beats/complex (it folds into the warp ratio).
+  // Called live per drag move (self-correcting: the factor re-derives each call).
+  stretchClipTo(trackId: string, clipId: string, lengthBeats: number) {
+    const found = this.findClip(trackId, clipId);
+    if (!found) return;
+    const [t, c] = found;
+    const newLen = Math.max(0.25, lengthBeats);
+    const f = newLen / c.lengthBeats;
+    if (Math.abs(f - 1) < 1e-9) return;
+    if (c.content.kind === "midi") {
+      const nc = c.content.clip;
+      for (const n of nc.notes) {
+        n.start *= f;
+        n.length *= f;
+      }
+      nc.bars = Math.max(1, Math.ceil(newLen / nc.beatsPerBar));
+    } else if (c.content.kind === "drum") {
+      // notes are the truth (convert a grid-only pattern first so nothing is lost)
+      const dc = c.content; // narrow once — closures below would lose the discriminant
+      const kit = KITS.find((k) => k.id === dc.pattern.kitId) || this.kit;
+      const notes = dc.notes ?? patternToNotes(dc.pattern, kit);
+      for (const n of notes.notes) {
+        n.start *= f;
+        n.length *= f;
+      }
+      notes.bars = Math.max(1, Math.ceil(newLen / notes.beatsPerBar));
+      const steps = Math.max(1, Math.round(dc.pattern.steps * f));
+      c.content = { ...dc, pattern: { ...dc.pattern, steps }, notes };
+    } else {
+      const cur = c.content.stretch && c.content.stretch > 0 ? c.content.stretch : 1;
+      c.content = { ...c.content, stretch: Math.min(16, Math.max(1 / 16, cur * f)) };
+    }
+    c.lengthBeats = newLen;
+    this.stopAudioForClip(clipId); // live sources re-fire with the new geometry
+    this.resolveOverlaps(t, c);
+    this.saveArr();
+  }
+
   // per-clip swing (0.5 = straight … 0.75 = hard). Scheduler-side only — stored notes
   // stay straight, so the piano roll / grid always shows the unswung truth. Undoable as
   // one step per knob gesture (coalesced — the knob has no pointer-down hook).
@@ -2080,7 +2461,12 @@ class AudioEngine {
   }
 
   // write back edited clip content (from the piano roll / step grid / loop editor)
-  setClipContent(trackId: string, clipId: string, content: ArrClip["content"], undoable = true) {
+  setClipContent(
+    trackId: string,
+    clipId: string,
+    content: ArrClip["content"],
+    undoable = true,
+  ) {
     const found = this.findClip(trackId, clipId);
     const prev = found?.[1].content;
     // content edits (piano-roll/drum-grid commits, audio-param knobs) are undo steps —
@@ -2089,7 +2475,13 @@ class AudioEngine {
     if (found && undoable) this.pushUndoCoalesced("content:" + clipId);
     if (found) found[1].content = content;
     // left complex mode → the live stretch node is dead weight; drop it
-    if (found && content.kind === "audio" && warpModeOf(content) !== "complex" && this._stretch[clipId]) this.disposeStretch(clipId);
+    if (
+      found &&
+      content.kind === "audio" &&
+      warpModeOf(content) !== "complex" &&
+      this._stretch[clipId]
+    )
+      this.disposeStretch(clipId);
     // loop OFF pins the clip to its material — toggling loop off (or shrinking the
     // content via trim/transpose/sync) pulls an over-long clip's edge in with it
     if (found) {
@@ -2155,7 +2547,8 @@ class AudioEngine {
       const ratio = next / prev;
       for (const t of this.arrangement.tracks) {
         for (const c of t.clips) {
-          if (c.content.kind === "audio" && warpModeOf(c.content) === "off") c.lengthBeats = Math.max(0.01, c.lengthBeats * ratio);
+          if (c.content.kind === "audio" && warpModeOf(c.content) === "off")
+            c.lengthBeats = Math.max(0.01, c.lengthBeats * ratio);
         }
       }
     }
@@ -2166,7 +2559,11 @@ class AudioEngine {
     this.saveArr();
   }
   setArrangementLoop(start: number, end: number, on: boolean) {
-    this.arrangement.loop = { start: Math.max(0, start), end: Math.max(start + 0.25, end), on };
+    this.arrangement.loop = {
+      start: Math.max(0, start),
+      end: Math.max(start + 0.25, end),
+      on,
+    };
     this.loopOn = on;
     this.saveArr();
   }
@@ -2184,7 +2581,12 @@ class AudioEngine {
   // Voice one drum lane at `when`, into `dest`. Uses the lane's decoded one-shot when
   // available (looked up by lane id across kits), else its fallback synth voice. Shared
   // by the beat-maker (→ sum) and arrangement drum clips (→ the track strip).
-  private voiceDrum(lane: DrumLane, when: number, vel: number, dest: AudioNode) {
+  private voiceDrum(
+    lane: DrumLane,
+    when: number,
+    vel: number,
+    dest: AudioNode,
+  ) {
     const c = this.ensureCtx();
     const buf = this._drumBufs[lane.id];
     if (buf) {
@@ -2225,7 +2627,11 @@ class AudioEngine {
     o.start(when);
     o.stop(when + 0.05);
     o.onended = () => {
-      try { g.disconnect(); } catch { /* fine */ }
+      try {
+        g.disconnect();
+      } catch {
+        /* fine */
+      }
     };
   }
 
@@ -2345,7 +2751,10 @@ class AudioEngine {
         const peak = (i === 2 ? 0.5 : 0.35) * vel;
         g.gain.setValueAtTime(0, t + off);
         g.gain.linearRampToValueAtTime(peak, t + off + 0.001);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + off + (i === 2 ? 0.18 : 0.05));
+        g.gain.exponentialRampToValueAtTime(
+          0.0001,
+          t + off + (i === 2 ? 0.18 : 0.05),
+        );
         ns.connect(bp);
         bp.connect(g);
         g.connect(out);
@@ -2421,7 +2830,12 @@ class AudioEngine {
     };
     this._loopBufs[id] = buf;
     this.loops = [...this.loops, lane];
-    this.sequence.loops[id] = { on: true, level: 0.8, mute: false, solo: false };
+    this.sequence.loops[id] = {
+      on: true,
+      level: 0.8,
+      mute: false,
+      solo: false,
+    };
     this.refreshLoopGains(); // start it if a beat is already playing
     this.emit("clip");
     return id;
@@ -2527,7 +2941,8 @@ class AudioEngine {
       const node = this._loopNodes[l.id];
       const st = this.sequence.loops[l.id];
       if (node) {
-        if (st?.on) node.gain.gain.setTargetAtTime(this.loopGain(l.id), t, 0.02);
+        if (st?.on)
+          node.gain.gain.setTargetAtTime(this.loopGain(l.id), t, 0.02);
         else this.stopOneLoop(l.id); // turned off → stop it
       } else if (st?.on && this.beatMode && this.sequencePlaying) {
         this.startOneLoopAligned(l.id); // turned on mid-play → start at next bar
@@ -2559,11 +2974,15 @@ class AudioEngine {
     const raw = this._loopBufs[id];
     const l = this.loops.find((x) => x.id === id);
     if (!raw || !l) return;
-    const buf = this.sequence.loops[id]?.reverse ? this.reversedBuffer("loop:" + id, raw) : raw;
+    const buf = this.sequence.loops[id]?.reverse
+      ? this.reversedBuffer("loop:" + id, raw)
+      : raw;
     const barBeats = this.sequence.beatsPerBar;
     const beat = this.currentBeat();
     const nextBarBeat = Math.ceil((beat + 0.01) / barBeats) * barBeats;
-    const when = this._seqAnchorTime + (nextBarBeat - this._seqAnchorBeat) * this.beatDur();
+    const when =
+      this._seqAnchorTime +
+      (nextBarBeat - this._seqAnchorBeat) * this.beatDur();
     const gain = c.createGain();
     gain.gain.value = this.loopGain(id);
     const src = c.createBufferSource();
@@ -2619,7 +3038,12 @@ class AudioEngine {
     const l = this.loops.find((x) => x.id === id);
     if (l && st.sync && !l.rootKnown) l.rootBpm = Math.round(this.bpm);
     const node = this._loopNodes[id];
-    if (node && l && this.ctx) node.src.playbackRate.setTargetAtTime(this.loopRate(l), this.ctx.currentTime, 0.02);
+    if (node && l && this.ctx)
+      node.src.playbackRate.setTargetAtTime(
+        this.loopRate(l),
+        this.ctx.currentTime,
+        0.02,
+      );
     this.emit("clip");
   }
   // Reverse a loop's playback. Swapping the buffer can't be done on a live node, so
@@ -2671,7 +3095,12 @@ class AudioEngine {
     l.rootBpm = Math.min(300, Math.max(40, Math.round(bpm)));
     l.rootKnown = true;
     const node = this._loopNodes[id];
-    if (node && this.ctx) node.src.playbackRate.setTargetAtTime(this.loopRate(l), this.ctx.currentTime, 0.02);
+    if (node && this.ctx)
+      node.src.playbackRate.setTargetAtTime(
+        this.loopRate(l),
+        this.ctx.currentTime,
+        0.02,
+      );
     this.emit("clip");
   }
   // user-set the loop's detected key/chord label (free text; "" clears it)
@@ -2688,14 +3117,16 @@ class AudioEngine {
   loopPosition(id: string): number {
     const node = this._loopNodes[id];
     const buf = this._loopBufs[id];
-    if (!node || !buf || !this.ctx || this.ctx.currentTime < node.startCtx) return -1;
+    if (!node || !buf || !this.ctx || this.ctx.currentTime < node.startCtx)
+      return -1;
     const dur = buf.duration;
     const a = node.src.loopStart || 0;
     const b = node.src.loopEnd || dur;
     const region = Math.max(0.0001, b - a);
-    const elapsed = (this.ctx.currentTime - node.startCtx) * node.src.playbackRate.value;
+    const elapsed =
+      (this.ctx.currentTime - node.startCtx) * node.src.playbackRate.value;
     // first pass runs startOff→b, then loops a→b; normalise into the region
-    const within = ((node.startOff - a + elapsed) % region + region) % region;
+    const within = (((node.startOff - a + elapsed) % region) + region) % region;
     return (a + within) / dur;
   }
 
@@ -2741,7 +3172,16 @@ class AudioEngine {
   // ── imported audio clips (session-only file import) ──
   // Decode a user-picked File into a session buffer; returns its bufId + the filename-
   // detected meta (bpm/key/bars, same parser LoopLanes use), so a dropped clip auto-fills.
-  async importAudio(file: File): Promise<{ bufId: string; name: string; seconds: number; bpm?: number; bars?: number; key?: string } | null> {
+  async importAudio(
+    file: File,
+  ): Promise<{
+    bufId: string;
+    name: string;
+    seconds: number;
+    bpm?: number;
+    bars?: number;
+    key?: string;
+  } | null> {
     const c = this.ensureCtx();
     try {
       const ab = await file.arrayBuffer();
@@ -2754,7 +3194,14 @@ class AudioEngine {
       this.emit("arrange");
       const stem = file.name.replace(/\.[^.]+$/, ""); // drop the extension
       const meta = parseLoopMeta(stem);
-      return { bufId, name: meta.name || file.name, seconds: buf.duration, bpm: meta.bpm, bars: meta.bars, key: meta.key };
+      return {
+        bufId,
+        name: meta.name || file.name,
+        seconds: buf.duration,
+        bpm: meta.bpm,
+        bars: meta.bars,
+        key: meta.key,
+      };
     } catch {
       return null; // undecodable file
     }
@@ -2799,10 +3246,16 @@ class AudioEngine {
     }
     // prune imports no arrangement clip points at (frees evicted/orphaned entries)
     const referenced = new Set<string>();
-    for (const t of this.arrangement.tracks) for (const cl of t.clips) if (cl.content.kind === "audio" && cl.content.bufId) referenced.add(cl.content.bufId);
+    for (const t of this.arrangement.tracks)
+      for (const cl of t.clips)
+        if (cl.content.kind === "audio" && cl.content.bufId)
+          referenced.add(cl.content.bufId);
     void pruneAudio(referenced);
     // warm the live stretch nodes for restored COMPLEX clips (first play = no fallback)
-    for (const t of this.arrangement.tracks) for (const cl of t.clips) if (cl.content.kind === "audio" && warpModeOf(cl.content) === "complex") this.ensureStretchNode(cl);
+    for (const t of this.arrangement.tracks)
+      for (const cl of t.clips)
+        if (cl.content.kind === "audio" && warpModeOf(cl.content) === "complex")
+          this.ensureStretchNode(cl);
     this.emit("arrange");
   }
   // reverse an imported buffer (cached), for reverse playback. Returns a NEW buffer.
@@ -2811,7 +3264,11 @@ class AudioEngine {
     const hit = this._reverseBufs[bufId];
     if (hit) return hit;
     const c = this.ensureCtx();
-    const out = c.createBuffer(src.numberOfChannels, src.length, src.sampleRate);
+    const out = c.createBuffer(
+      src.numberOfChannels,
+      src.length,
+      src.sampleRate,
+    );
     for (let ch = 0; ch < src.numberOfChannels; ch++) {
       const inD = src.getChannelData(ch);
       const outD = out.getChannelData(ch);
@@ -2871,10 +3328,25 @@ class AudioEngine {
   // Peak envelope over a fraction range [from,to] of the zone buffer, binned to `bins`.
   // Range support lets the sample view zoom in and still resolve fine detail. Cached per
   // (preset, zone, bins, range); the common whole-buffer call reuses one entry.
-  presetPeaks(presetId: string, zoneIdx: number, bins: number, from = 0, to = 1): Float32Array | null {
+  presetPeaks(
+    presetId: string,
+    zoneIdx: number,
+    bins: number,
+    from = 0,
+    to = 1,
+  ): Float32Array | null {
     const buf = this._sampleBufs[presetId]?.[zoneIdx];
     if (!buf) return null;
-    const key = presetId + ":" + zoneIdx + ":" + bins + ":" + from.toFixed(4) + ":" + to.toFixed(4);
+    const key =
+      presetId +
+      ":" +
+      zoneIdx +
+      ":" +
+      bins +
+      ":" +
+      from.toFixed(4) +
+      ":" +
+      to.toFixed(4);
     const cached = this._presetPeaks[key];
     if (cached) return cached;
     const ch0 = buf.getChannelData(0);
@@ -2941,7 +3413,8 @@ class AudioEngine {
       const tt = this.ctx.currentTime;
       for (const l of this.loops) {
         const node = this._loopNodes[l.id];
-        if (node) node.src.playbackRate.setTargetAtTime(this.loopRate(l), tt, 0.02);
+        if (node)
+          node.src.playbackRate.setTargetAtTime(this.loopRate(l), tt, 0.02);
       }
       // synced audio clips re-rate live: playbackRate ∝ bpm, recomputed from the base
       // (drift-free across rapid drags). This is the real-time pitch rise/fall while
@@ -2958,12 +3431,16 @@ class AudioEngine {
           for (const clipId in this._stretch) {
             const e = this._stretch[clipId];
             if (!e.ready || !e.node) continue;
-            const wc = this.arrangement.tracks.flatMap((t2) => t2.clips).find((x) => x.id === clipId);
+            const wc = this.arrangement.tracks
+              .flatMap((t2) => t2.clips)
+              .find((x) => x.id === clipId);
             if (!wc || wc.content.kind !== "audio") continue;
-            const rootBpm = wc.content.rootBpm;
             // this schedule pops ANY queued change on the node (one-slot queue) —
             // the bookkeeping below re-establishes what got popped
-            e.node.schedule({ output: tt, rate: rootBpm && rootBpm > 0 ? bpm / rootBpm : 1 });
+            e.node.schedule({
+              output: tt,
+              rate: this.warpParams(wc.content).ratio, // bpm/rootBpm ÷ ⌥-stretch
+            });
             for (const key in this._stretchFired) {
               if (!key.startsWith(clipId + "@")) continue;
               const sb = parseFloat(key.slice(clipId.length + 1));
@@ -2981,13 +3458,22 @@ class AudioEngine {
         }
         for (const key in this._startedAudio) {
           const a = this._startedAudio[key];
-          if (a.synced && a.baseBpm > 0) a.src.playbackRate.setTargetAtTime(a.baseRate * (bpm / a.baseBpm), tt, 0.02);
+          if (a.synced && a.baseBpm > 0)
+            a.src.playbackRate.setTargetAtTime(
+              a.baseRate * (bpm / a.baseBpm),
+              tt,
+              0.02,
+            );
           else if (!a.synced) {
             // UNSYNCED clips are beat-anchored (content position ≡ clip-beats × sec/beat):
             // a tempo change moves every beat's wall time, so the live node no longer sits
             // where the timeline (and its drawn waveform) says. Stop it + drop the dedupe
             // key — the scheduler re-fires it this tick at the correct catch-up offset.
-            try { a.src.stop(); } catch { /* already stopped */ }
+            try {
+              a.src.stop();
+            } catch {
+              /* already stopped */
+            }
             delete this._startedAudio[key];
           }
         }
@@ -3018,7 +3504,8 @@ class AudioEngine {
     let total = seq.steps * STEP_BEATS; // drum grid
     for (const ch of seq.channels) total = Math.max(total, clipBeats(ch.clip));
     for (const l of this.loops) {
-      if (this.sequence.loops[l.id]?.on) total = Math.max(total, l.bars * seq.beatsPerBar);
+      if (this.sequence.loops[l.id]?.on)
+        total = Math.max(total, l.bars * seq.beatsPerBar);
     }
     return total;
   }
@@ -3030,10 +3517,11 @@ class AudioEngine {
     const elapsed = this.ctx.currentTime - this._seqAnchorTime;
     let beat = this._seqAnchorBeat + elapsed / this.beatDur();
     if (this.arrangeMode) {
-      const br = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
+      const br =
+        this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
       if (br) {
         const len = br.end - br.start;
-        beat = br.start + (((beat - br.start) % len) + len) % len;
+        beat = br.start + ((((beat - br.start) % len) + len) % len);
       }
       return Math.max(0, beat);
     }
@@ -3044,14 +3532,28 @@ class AudioEngine {
 
   // for the visual playhead (pure read — lint-safe in rAF). `step` is the current
   // drum step (0..steps-1) in beat mode, else -1.
-  getSequencePosition(): { beat: number; bars: number; playing: boolean; step: number } {
+  getSequencePosition(): {
+    beat: number;
+    bars: number;
+    playing: boolean;
+    step: number;
+  } {
     const total = this.activeTotalBeats();
     const beat = this.sequencePlaying ? this.currentBeat() : 0;
     return {
       beat,
-      bars: this.arrangeMode ? Math.max(1, total / this.arrangement.beatsPerBar) : this.beatMode ? Math.max(1, total / this.sequence.beatsPerBar) : this._clip ? this._clip.bars : 0,
+      bars: this.arrangeMode
+        ? Math.max(1, total / this.arrangement.beatsPerBar)
+        : this.beatMode
+          ? Math.max(1, total / this.sequence.beatsPerBar)
+          : this._clip
+            ? this._clip.bars
+            : 0,
       playing: this.sequencePlaying,
-      step: this.beatMode && !this.arrangeMode && this.sequencePlaying ? Math.floor(beat / STEP_BEATS) % this.sequence.steps : -1,
+      step:
+        this.beatMode && !this.arrangeMode && this.sequencePlaying
+          ? Math.floor(beat / STEP_BEATS) % this.sequence.steps
+          : -1,
     };
   }
 
@@ -3076,7 +3578,8 @@ class AudioEngine {
       const bpb = this.arrangement.beatsPerBar;
       const bd = 60 / this.arrangement.bpm;
       const beats = this.countInBars * bpb;
-      for (let i = 0; i < beats; i++) this.metroClick(start + i * bd, i % bpb === 0);
+      for (let i = 0; i < beats; i++)
+        this.metroClick(start + i * bd, i % bpb === 0);
       start += beats * bd;
     }
     this._seqAnchorTime = start;
@@ -3087,7 +3590,10 @@ class AudioEngine {
     this._scheduledThrough = start;
     this._metroThrough = this._seqAnchorBeat - 1; // so the first in-song beat clicks
     if (this._schedTimer) clearInterval(this._schedTimer);
-    this._schedTimer = window.setInterval(() => this.schedTick(), AudioEngine.SCHED_INTERVAL);
+    this._schedTimer = window.setInterval(
+      () => this.schedTick(),
+      AudioEngine.SCHED_INTERVAL,
+    );
     this.schedTick();
     this.emit("transport");
     this.emit("state");
@@ -3111,13 +3617,18 @@ class AudioEngine {
   // stop + forget any playing audio-clip sources (on stop/seek, so replay re-fires them)
   private stopAudioClips() {
     for (const key in this._startedAudio) {
-      try { this._startedAudio[key].src.stop(); } catch { /* already ended */ }
+      try {
+        this._startedAudio[key].src.stop();
+      } catch {
+        /* already ended */
+      }
     }
     this._startedAudio = {};
     // silence every live warp node + forget its passes (they re-fire on next play)
     for (const clipId in this._stretch) {
       const e = this._stretch[clipId];
-      if (e.ready && e.node && this.ctx) e.node.schedule({ output: this.ctx.currentTime, active: false }); // no outputTime: silence NOW + wipe the queued passes (intended)
+      if (e.ready && e.node && this.ctx)
+        e.node.schedule({ output: this.ctx.currentTime, active: false }); // no outputTime: silence NOW + wipe the queued passes (intended)
     }
     this._stretchFired = {};
   }
@@ -3128,14 +3639,20 @@ class AudioEngine {
   private stopAudioForClip(clipId: string) {
     for (const key in this._startedAudio) {
       if (!key.startsWith(clipId + "@")) continue;
-      try { this._startedAudio[key].src.stop(); } catch { /* already ended */ }
+      try {
+        this._startedAudio[key].src.stop();
+      } catch {
+        /* already ended */
+      }
       delete this._startedAudio[key];
     }
     // the live warp node (if any) goes silent + forgets its passes — it re-fires
     // next tick with fresh geometry
     const e = this._stretch[clipId];
-    if (e?.ready && e.node && this.ctx) e.node.schedule({ output: this.ctx.currentTime, active: false }); // no outputTime: silence NOW + wipe the queued passes (intended)
-    for (const key in this._stretchFired) if (key.startsWith(clipId + "@")) delete this._stretchFired[key];
+    if (e?.ready && e.node && this.ctx)
+      e.node.schedule({ output: this.ctx.currentTime, active: false }); // no outputTime: silence NOW + wipe the queued passes (intended)
+    for (const key in this._stretchFired)
+      if (key.startsWith(clipId + "@")) delete this._stretchFired[key];
   }
 
   // piano-roll transport (clears beat mode so the scheduler walks the note clip)
@@ -3181,7 +3698,8 @@ class AudioEngine {
   warmArrangement() {
     const warmedKits = new Set<string>();
     for (const t of this.arrangement.tracks) {
-      if (t.kind === "midi" && t.presetId) this.warmPatch(this.resolvePatch(t.presetId));
+      if (t.kind === "midi" && t.presetId)
+        this.warmPatch(this.resolvePatch(t.presetId));
       // decode each drum clip's kit one-shots so timeline drums play their samples
       for (const clip of t.clips) {
         if (clip.content.kind !== "drum") continue;
@@ -3229,7 +3747,10 @@ class AudioEngine {
   // stop: halt and return the playhead to the start (loop-brace start if looping, else 0).
   // Also parks the dotted insert marker back home — a full stop resets the page.
   stopArrangementToStart() {
-    const home = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop.start : 0;
+    const home =
+      this.loopOn && this.arrangement.loop?.on
+        ? this.arrangement.loop.start
+        : 0;
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
     this._pendingSeekBeat = home;
     this.setInsertBeat(home);
@@ -3237,7 +3758,10 @@ class AudioEngine {
   }
   // return-to-start without stopping playback (⏮): seek to home
   returnToStart() {
-    const home = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop.start : 0;
+    const home =
+      this.loopOn && this.arrangement.loop?.on
+        ? this.arrangement.loop.start
+        : 0;
     this.seekArrangement(home);
   }
   // time signature: beats per bar (drives the ruler grid + bar math everywhere)
@@ -3288,7 +3812,8 @@ class AudioEngine {
   primaryClip(): { trackId: string; clipId: string } | null {
     if (!this._primaryClipId) return null;
     for (const t of this.arrangement.tracks) {
-      if (t.clips.some((c) => c.id === this._primaryClipId)) return { trackId: t.id, clipId: this._primaryClipId };
+      if (t.clips.some((c) => c.id === this._primaryClipId))
+        return { trackId: t.id, clipId: this._primaryClipId };
     }
     return null;
   }
@@ -3307,7 +3832,8 @@ class AudioEngine {
   toggleClipInSel(clipId: string) {
     if (this.selClips.has(clipId)) {
       this.selClips.delete(clipId);
-      if (this._primaryClipId === clipId) this._primaryClipId = this.selClips.values().next().value ?? null;
+      if (this._primaryClipId === clipId)
+        this._primaryClipId = this.selClips.values().next().value ?? null;
     } else {
       this.selClips.add(clipId);
       this._primaryClipId = clipId;
@@ -3331,7 +3857,8 @@ class AudioEngine {
   }
   selectAllClips() {
     const ids: string[] = [];
-    for (const t of this.arrangement.tracks) for (const c of t.clips) ids.push(c.id);
+    for (const t of this.arrangement.tracks)
+      for (const c of t.clips) ids.push(c.id);
     this.setSelectedClips(ids);
   }
   // select every clip on one track (clicking its header) + a whole-track time selection
@@ -3345,7 +3872,9 @@ class AudioEngine {
     this.emit("select");
   }
   private _selTrackId: string | null = null;
-  get selTrackId() { return this._selTrackId; }
+  get selTrackId() {
+    return this._selTrackId;
+  }
   // a time range spanning tracks (the marquee / drag-select on empty lane space)
   setTimeSel(start: number, end: number, trackIds: string[]) {
     const s = Math.max(0, Math.min(start, end));
@@ -3353,10 +3882,17 @@ class AudioEngine {
     this.timeSel = e > s ? { start: s, end: e, trackIds } : null;
     this.emit("select");
   }
-  private _clipTimeRange(clipId: string): { start: number; end: number; trackIds: string[] } | null {
+  private _clipTimeRange(
+    clipId: string,
+  ): { start: number; end: number; trackIds: string[] } | null {
     for (const t of this.arrangement.tracks) {
       const c = t.clips.find((x) => x.id === clipId);
-      if (c) return { start: c.startBeat, end: c.startBeat + c.lengthBeats, trackIds: [t.id] };
+      if (c)
+        return {
+          start: c.startBeat,
+          end: c.startBeat + c.lengthBeats,
+          trackIds: [t.id],
+        };
     }
     return null;
   }
@@ -3366,7 +3902,11 @@ class AudioEngine {
     if (!ids.length) return;
     this.pushUndo();
     for (const t of this.arrangement.tracks) {
-      for (const c of t.clips) if (ids.includes(c.id)) { this.stopAudioForClip(c.id); this.disposeStretch(c.id); }
+      for (const c of t.clips)
+        if (ids.includes(c.id)) {
+          this.stopAudioForClip(c.id);
+          this.disposeStretch(c.id);
+        }
       t.clips = t.clips.filter((c) => !ids.includes(c.id));
     }
     this.clearSelection();
@@ -3392,7 +3932,8 @@ class AudioEngine {
   // helper: the (track, clip) pairs currently selected
   private selectedPairs(): { t: ArrTrack; c: ArrClip }[] {
     const out: { t: ArrTrack; c: ArrClip }[] = [];
-    for (const t of this.arrangement.tracks) for (const c of t.clips) if (this.selClips.has(c.id)) out.push({ t, c });
+    for (const t of this.arrangement.tracks)
+      for (const c of t.clips) if (this.selClips.has(c.id)) out.push({ t, c });
     return out;
   }
   // nudge every selected clip by `delta` beats (← / →). Clamped so none goes below 0.
@@ -3467,12 +4008,19 @@ class AudioEngine {
   }
   // reverse every selected AUDIO clip (R) — toggles its reverse flag
   reverseSelection() {
-    const audio = this.selectedPairs().filter((p) => p.c.content.kind === "audio");
+    const audio = this.selectedPairs().filter(
+      (p) => p.c.content.kind === "audio",
+    );
     if (!audio.length) return;
     this.pushUndo();
     for (const { t, c } of audio) {
       if (c.content.kind !== "audio") continue;
-      this.setClipContent(t.id, c.id, { ...c.content, reverse: !c.content.reverse }, false); // reverseSelection pushed its own undo frame
+      this.setClipContent(
+        t.id,
+        c.id,
+        { ...c.content, reverse: !c.content.reverse },
+        false,
+      ); // reverseSelection pushed its own undo frame
     }
     this.emit("select");
   }
@@ -3506,8 +4054,12 @@ class AudioEngine {
     this._coalesceKey = key;
     this._coalesceAt = now;
   }
-  canUndo() { return this._undo.length > 0; }
-  canRedo() { return this._redo.length > 0; }
+  canUndo() {
+    return this._undo.length > 0;
+  }
+  canRedo() {
+    return this._redo.length > 0;
+  }
   undo() {
     const prev = this._undo.pop();
     if (!prev) return;
@@ -3549,10 +4101,16 @@ class AudioEngine {
     // keep whatever selection still EXISTS in the restored state — undo must not
     // yank the editor out from under the user; only vanished ids are dropped
     const alive = new Set<string>();
-    for (const t of this.arrangement.tracks) for (const cl of t.clips) alive.add(cl.id);
+    for (const t of this.arrangement.tracks)
+      for (const cl of t.clips) alive.add(cl.id);
     this.selClips = new Set([...this.selClips].filter((id) => alive.has(id)));
-    if (this._primaryClipId && !alive.has(this._primaryClipId)) this._primaryClipId = this.selClips.values().next().value ?? null;
-    if (this._selTrackId && !this.arrangement.tracks.some((t) => t.id === this._selTrackId)) this._selTrackId = null;
+    if (this._primaryClipId && !alive.has(this._primaryClipId))
+      this._primaryClipId = this.selClips.values().next().value ?? null;
+    if (
+      this._selTrackId &&
+      !this.arrangement.tracks.some((t) => t.id === this._selTrackId)
+    )
+      this._selTrackId = null;
     this.timeSel = null; // a time range rarely survives a restore meaningfully
     this.undoStamp++;
     saveArrangement(this.arrangement);
@@ -3569,7 +4127,8 @@ class AudioEngine {
     const kinds: TrackKind[] = [];
     let origin = Infinity;
     for (const t of this.arrangement.tracks) {
-      for (const c of t.clips) if (this.selClips.has(c.id)) origin = Math.min(origin, c.startBeat);
+      for (const c of t.clips)
+        if (this.selClips.has(c.id)) origin = Math.min(origin, c.startBeat);
     }
     if (!isFinite(origin)) return;
     for (const t of this.arrangement.tracks) {
@@ -3599,11 +4158,17 @@ class AudioEngine {
     cb.clips.forEach((c, i) => {
       const kind = cb.trackKinds[i];
       // find the next track of this kind (round-robin so multi-track copies spread out)
-      const tracksOfKind = this.arrangement.tracks.filter((t) => t.kind === kind);
+      const tracksOfKind = this.arrangement.tracks.filter(
+        (t) => t.kind === kind,
+      );
       if (!tracksOfKind.length) return;
       const idx = usedByKind[kind] ?? 0;
       const t = tracksOfKind[Math.min(idx, tracksOfKind.length - 1)];
-      const clip: ArrClip = { ...structuredClone(c), id: newClipId(), startBeat: Math.max(0, at + c.startBeat) };
+      const clip: ArrClip = {
+        ...structuredClone(c),
+        id: newClipId(),
+        startBeat: Math.max(0, at + c.startBeat),
+      };
       t.clips.push(clip);
       this.resolveOverlaps(t, clip);
       newIds.push(clip.id);
@@ -3611,7 +4176,9 @@ class AudioEngine {
     if (newIds.length) this.setSelectedClips(newIds);
     this.saveArr();
   }
-  hasClipboard() { return !!this._clipboard?.clips.length; }
+  hasClipboard() {
+    return !!this._clipboard?.clips.length;
+  }
 
   // ── time-editing ops (insert marker + time selection) ──
   // Split every clip crossing the insert beat into two clips at that point (⌘E). If a
@@ -3625,12 +4192,28 @@ class AudioEngine {
     for (const t of this.arrangement.tracks) {
       const add: ArrClip[] = [];
       for (const c of t.clips) {
-        const crosses = c.startBeat < beat - 1e-6 && c.startBeat + c.lengthBeats > beat + 1e-6;
-        if (!crosses || (onlySel && !this.selClips.has(c.id))) { add.push(c); continue; }
+        const crosses =
+          c.startBeat < beat - 1e-6 &&
+          c.startBeat + c.lengthBeats > beat + 1e-6;
+        if (!crosses || (onlySel && !this.selClips.has(c.id))) {
+          add.push(c);
+          continue;
+        }
         const p = beat - c.startBeat; // local split beat
         const [lc, rc] = splitContent(c.content, p, c.lengthBeats);
-        const left: ArrClip = { ...c, id: newClipId(), lengthBeats: p, content: lc };
-        const right: ArrClip = { ...c, id: newClipId(), startBeat: beat, lengthBeats: c.lengthBeats - p, content: rc };
+        const left: ArrClip = {
+          ...c,
+          id: newClipId(),
+          lengthBeats: p,
+          content: lc,
+        };
+        const right: ArrClip = {
+          ...c,
+          id: newClipId(),
+          startBeat: beat,
+          lengthBeats: c.lengthBeats - p,
+          content: rc,
+        };
         this.stopAudioForClip(c.id);
         add.push(left, right);
         newIds.push(left.id, right.id);
@@ -3651,7 +4234,11 @@ class AudioEngine {
   // [startBeat, startBeat + lenBeats). Ableton-consolidate semantics: clip-level
   // gain/rate/trim/loop/reverse are printed; track FX / vol / pan are NOT (they keep
   // applying live to the bounced clip). Returns null when no clip has a decoded buffer.
-  private async renderAudioSpan(sel: ArrClip[], startBeat: number, lenBeats: number): Promise<AudioBuffer | null> {
+  private async renderAudioSpan(
+    sel: ArrClip[],
+    startBeat: number,
+    lenBeats: number,
+  ): Promise<AudioBuffer | null> {
     const c = this.ensureCtx();
     const bd = 60 / this.arrangement.bpm; // bounce at the ARRANGEMENT's tempo, playing or not
     const sr = c.sampleRate;
@@ -3671,7 +4258,12 @@ class AudioEngine {
       if (!this._warpCache.has(key)) {
         const { ratio, semis } = this.warpParams(cc);
         try {
-          this._warpCache.set(key, mode === "beats" ? this.beatsRender(src, ratio, semis, cc.rootBpm ?? 0) : await this.stretchRender(src, ratio, semis));
+          this._warpCache.set(
+            key,
+            mode === "beats"
+              ? this.beatsRender(src, ratio, semis, cc.rootBpm ?? 0)
+              : await this.stretchRender(src, ratio, semis),
+          );
           this._warpGen++;
         } catch {
           /* render failed → the bounce prints the varispeed fallback */
@@ -3716,7 +4308,9 @@ class AudioEngine {
     // an offline bounce, which is async); phase 2 applies synchronously under one undo.
     const plans: { t: ArrTrack; sel: ArrClip[]; merged: ArrClip }[] = [];
     for (const t of this.arrangement.tracks) {
-      const sel = t.clips.filter((c) => ids.includes(c.id)).sort((a, b) => a.startBeat - b.startBeat);
+      const sel = t.clips
+        .filter((c) => ids.includes(c.id))
+        .sort((a, b) => a.startBeat - b.startBeat);
       if (sel.length < 2) continue;
       const start = sel[0].startBeat;
       const end = Math.max(...sel.map((c) => c.startBeat + c.lengthBeats));
@@ -3724,13 +4318,19 @@ class AudioEngine {
       const bpb = this.arrangement.beatsPerBar;
       let merged: ArrClip;
       if (t.kind === "audio") {
-        const rendered = await this.renderAudioSpan(sel, start, len).catch(() => null);
+        const rendered = await this.renderAudioSpan(sel, start, len).catch(
+          () => null,
+        );
         if (rendered) {
           // a REAL bounce: new buffer in the import store (WAV bytes → IndexedDB), one
           // clean full-width clip. Tempo-tagged at the bounce bpm so sync re-rates it.
           const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
           this._importBufs[bufId] = rendered;
-          void putAudio(bufId, encodeWav(rendered), (sel[0].name || "bounce") + ".wav");
+          void putAudio(
+            bufId,
+            encodeWav(rendered),
+            (sel[0].name || "bounce") + ".wav",
+          );
           merged = {
             id: newClipId(),
             startBeat: start,
@@ -3745,9 +4345,14 @@ class AudioEngine {
               gain: 1,
               a: 0,
               b: 1,
-              // the bounce is already tempo-fitted at the bounce bpm; repitch keeps it
+              // the bounce is already tempo-fitted at the bounce bpm; varispeed keeps it
               // grid-locked across future tempo changes when any source clip was warped
-              warpMode: sel.some((c) => c.content.kind === "audio" && warpModeOf(c.content) !== "off") ? ("repitch" as const) : undefined,
+              warpMode: sel.some(
+                (c) =>
+                  c.content.kind === "audio" && warpModeOf(c.content) !== "off",
+              )
+                ? ("varispeed" as const)
+                : undefined,
               rootBpm: this.arrangement.bpm,
               bars: Math.max(1, Math.round(len / bpb)),
             },
@@ -3755,20 +4360,51 @@ class AudioEngine {
         } else {
           // no decoded buffers (nothing imported yet) → old behavior: keep the earliest
           // clip's source spanning the whole extent
-          merged = { ...sel[0], id: newClipId(), startBeat: start, lengthBeats: len };
+          merged = {
+            ...sel[0],
+            id: newClipId(),
+            startBeat: start,
+            lengthBeats: len,
+          };
         }
       } else {
         // merge notes at their timeline offset relative to `start`
         const notes: NoteClip["notes"] = [];
         for (const c of sel) {
-          const src = c.content.kind === "midi" ? c.content.clip.notes : c.content.kind === "drum" ? c.content.notes?.notes : undefined;
+          const src =
+            c.content.kind === "midi"
+              ? c.content.clip.notes
+              : c.content.kind === "drum"
+                ? c.content.notes?.notes
+                : undefined;
           if (!src) continue;
           const off = c.startBeat - start;
-          for (const n of src) notes.push({ ...n, id: newNoteId(), start: n.start + off });
+          for (const n of src)
+            notes.push({ ...n, id: newNoteId(), start: n.start + off });
         }
-        const clip: NoteClip = { bars: Math.max(1, Math.ceil(len / bpb)), beatsPerBar: bpb, notes };
-        const content: ArrClip["content"] = t.kind === "drum" ? { kind: "drum", pattern: { ...(sel[0].content as { pattern: SequenceClip }).pattern, steps: Math.max(16, Math.ceil(len / STEP_BEATS)) }, notes: clip } : { kind: "midi", clip };
-        merged = { ...sel[0], id: newClipId(), startBeat: start, lengthBeats: len, content };
+        const clip: NoteClip = {
+          bars: Math.max(1, Math.ceil(len / bpb)),
+          beatsPerBar: bpb,
+          notes,
+        };
+        const content: ArrClip["content"] =
+          t.kind === "drum"
+            ? {
+                kind: "drum",
+                pattern: {
+                  ...(sel[0].content as { pattern: SequenceClip }).pattern,
+                  steps: Math.max(16, Math.ceil(len / STEP_BEATS)),
+                },
+                notes: clip,
+              }
+            : { kind: "midi", clip };
+        merged = {
+          ...sel[0],
+          id: newClipId(),
+          startBeat: start,
+          lengthBeats: len,
+          content,
+        };
       }
       plans.push({ t, sel, merged });
     }
@@ -3788,7 +4424,11 @@ class AudioEngine {
   // insert beat later by `beats` (defaults to the time selection length, else one bar).
   insertSilence(beats?: number) {
     const at = this.insertBeat;
-    const span = beats ?? (this.timeSel ? this.timeSel.end - this.timeSel.start : this.arrangement.beatsPerBar);
+    const span =
+      beats ??
+      (this.timeSel
+        ? this.timeSel.end - this.timeSel.start
+        : this.arrangement.beatsPerBar);
     if (span <= 0) return;
     this.pushUndo();
     for (const t of this.arrangement.tracks) {
@@ -3802,7 +4442,13 @@ class AudioEngine {
           c.lengthBeats = p;
           c.content = lc;
           this.stopAudioForClip(c.id);
-          t.clips.push({ ...c, id: newClipId(), startBeat: at + span, lengthBeats: rightLen, content: rc });
+          t.clips.push({
+            ...c,
+            id: newClipId(),
+            startBeat: at + span,
+            lengthBeats: rightLen,
+            content: rc,
+          });
         }
       }
     }
@@ -3813,14 +4459,15 @@ class AudioEngine {
   // tap tempo: average the intervals between recent taps (drops stale/outlier taps)
   private _taps: number[] = [];
   tapTempo() {
-    const now = (this.ctx?.currentTime ?? performance.now() / 1000);
+    const now = this.ctx?.currentTime ?? performance.now() / 1000;
     const last = this._taps[this._taps.length - 1];
     if (last != null && now - last > 2.5) this._taps = []; // gap → start a new set
     this._taps.push(now);
     if (this._taps.length > 5) this._taps.shift();
     if (this._taps.length >= 2) {
       let sum = 0;
-      for (let i = 1; i < this._taps.length; i++) sum += this._taps[i] - this._taps[i - 1];
+      for (let i = 1; i < this._taps.length; i++)
+        sum += this._taps[i] - this._taps[i - 1];
       const avg = sum / (this._taps.length - 1);
       if (avg > 0) this.setArrangementBpm(Math.round(60 / avg));
     }
@@ -3854,7 +4501,9 @@ class AudioEngine {
 
   // toggle a single step on/off (or its accent) and emit so the grid re-renders
   toggleStep(laneId: string, step: number, accent = false) {
-    const arr = accent ? this.sequence.accent[laneId] : this.sequence.on[laneId];
+    const arr = accent
+      ? this.sequence.accent[laneId]
+      : this.sequence.on[laneId];
     if (!arr) return;
     arr[step] = !arr[step];
     this.emit("clip");
@@ -3874,13 +4523,27 @@ class AudioEngine {
     else this.emit("clip");
   }
 
-  // playbackRate for an audio clip in REPITCH (tape) mode: grid-fit (bpm/rootBpm) ×
+  // playbackRate for an audio clip in VARISPEED (tape) mode: grid-fit (bpm/rootBpm) ×
   // varispeed (semi+cents). The single source of truth for rate, shared by the
   // scheduler and live re-rating. Other warp modes bake their rate into renders/nodes.
-  private audioClipRate(cc: { warpMode?: WarpMode; warp?: boolean; sync?: boolean; rootBpm?: number; semi?: number; cents?: number }, bpm = this.bpm): number {
+  private audioClipRate(
+    cc: {
+      warpMode?: WarpMode;
+      warp?: boolean;
+      sync?: boolean;
+      rootBpm?: number;
+      semi?: number;
+      cents?: number;
+      stretch?: number;
+    },
+    bpm = this.bpm,
+  ): number {
     let rate = 1;
-    if (warpModeOf(cc) === "repitch" && cc.rootBpm && cc.rootBpm > 0) rate = bpm / cc.rootBpm;
+    if (warpModeOf(cc) === "varispeed" && cc.rootBpm && cc.rootBpm > 0)
+      rate = bpm / cc.rootBpm;
     rate *= Math.pow(2, (cc.semi ?? 0) / 12 + (cc.cents ?? 0) / 1200);
+    // ⌥-stretch: tape-style here (rate drops, pitch follows); beats/complex absorb it pitch-preserved
+    if (cc.stretch && cc.stretch > 0) rate /= cc.stretch;
     return rate;
   }
 
@@ -3890,12 +4553,20 @@ class AudioEngine {
   // improve the brief not-yet-ready fallback.
   private _warpCache = new Map<string, AudioBuffer>();
   private _warpGen = 0; // bumped when a render lands — wave-cache invalidation
-  private warpParams(cc: { rootBpm?: number; semi?: number; cents?: number }) {
-    const ratio = cc.rootBpm && cc.rootBpm > 0 ? this.arrangement.bpm / cc.rootBpm : 1;
+  private warpParams(cc: { rootBpm?: number; semi?: number; cents?: number; stretch?: number }) {
+    // ⌥-stretch divides the ratio: stretch 2 = content fills twice the beats,
+    // pitch-preserved (the render/node absorbs it)
+    const ratio =
+      (cc.rootBpm && cc.rootBpm > 0 ? this.arrangement.bpm / cc.rootBpm : 1) /
+      (cc.stretch && cc.stretch > 0 ? cc.stretch : 1);
     const semis = (cc.semi ?? 0) + (cc.cents ?? 0) / 100;
     return { ratio, semis };
   }
-  private warpKey(cc: { bufId?: string; rootBpm?: number; semi?: number; cents?: number }, rev: boolean, algo: "complex" | "beats") {
+  private warpKey(
+    cc: { bufId?: string; rootBpm?: number; semi?: number; cents?: number; stretch?: number },
+    rev: boolean,
+    algo: "complex" | "beats",
+  ) {
     const { ratio, semis } = this.warpParams(cc);
     return `${algo}|${cc.bufId}|${rev ? 1 : 0}|${ratio.toFixed(4)}|${semis.toFixed(2)}|${cc.rootBpm ?? 0}`;
   }
@@ -3904,11 +4575,21 @@ class AudioEngine {
   // rate (repitched by `semis` via per-slice resampling) but slice STARTS land on the
   // re-spaced output grid. Faster tempo → slices overlap (short crossfades); slower →
   // gated silence after each slice. Pure buffer math, rendered once per settled tempo.
-  private beatsRender(src: AudioBuffer, ratio: number, semis: number, rootBpm: number): AudioBuffer {
+  private beatsRender(
+    src: AudioBuffer,
+    ratio: number,
+    semis: number,
+    rootBpm: number,
+  ): AudioBuffer {
     const c = this.ensureCtx();
     const sr = src.sampleRate;
     const srcLen = src.length;
-    const sliceSrc = Math.max(32, Math.round(((60 / (rootBpm > 0 ? rootBpm : this.arrangement.bpm)) * 0.25) * sr)); // 1/16 in source frames
+    const sliceSrc = Math.max(
+      32,
+      Math.round(
+        (60 / (rootBpm > 0 ? rootBpm : this.arrangement.bpm)) * 0.25 * sr,
+      ),
+    ); // 1/16 in source frames
     const sliceOut = sliceSrc / ratio; // slice-start spacing in the output
     const outLen = Math.max(1, Math.ceil(srcLen / ratio));
     const out = c.createBuffer(src.numberOfChannels, outLen, sr);
@@ -3924,7 +4605,10 @@ class AudioEngine {
         const outStart = Math.round(i * sliceOut);
         // the slice plays until ITS OWN source material runs out (never bleeds into
         // the next slice's transient) or the render ends
-        const copyLen = Math.min(Math.floor(sliceSrc / pitch), outLen - outStart);
+        const copyLen = Math.min(
+          Math.floor(sliceSrc / pitch),
+          outLen - outStart,
+        );
         for (let j = 0; j < copyLen; j++) {
           const sp = srcStart + j * pitch;
           const si = Math.floor(sp);
@@ -3949,8 +4633,15 @@ class AudioEngine {
     this._beatsTimers[key] = setTimeout(() => {
       delete this._beatsTimers[key];
       if (this._warpCache.has(key)) return;
-      const wc = this.arrangement.tracks.flatMap((t) => t.clips).find((x) => x.id === clipId);
-      if (!wc || wc.content.kind !== "audio" || warpModeOf(wc.content) !== "beats") return;
+      const wc = this.arrangement.tracks
+        .flatMap((t) => t.clips)
+        .find((x) => x.id === clipId);
+      if (
+        !wc ||
+        wc.content.kind !== "audio" ||
+        warpModeOf(wc.content) !== "beats"
+      )
+        return;
       const cc = wc.content;
       const bufId = cc.bufId;
       if (!bufId) return;
@@ -3959,23 +4650,42 @@ class AudioEngine {
       if (!src) return;
       if (cc.reverse) src = this.reversedBuffer(bufId, src);
       const { ratio, semis } = this.warpParams(cc);
-      this._warpCache.set(key, this.beatsRender(src, ratio, semis, cc.rootBpm ?? 0));
-      if (this._warpCache.size > 12) this._warpCache.delete(this._warpCache.keys().next().value!);
+      this._warpCache.set(
+        key,
+        this.beatsRender(src, ratio, semis, cc.rootBpm ?? 0),
+      );
+      if (this._warpCache.size > 12)
+        this._warpCache.delete(this._warpCache.keys().next().value!);
       this._warpGen++;
       this.stopAudioForClip(clipId); // fallback node → re-fire sliced next tick
       this.emit("arrange");
     }, 200);
   }
 
-  private async stretchRender(src: AudioBuffer, ratio: number, semitones: number): Promise<AudioBuffer> {
+  private async stretchRender(
+    src: AudioBuffer,
+    ratio: number,
+    semitones: number,
+  ): Promise<AudioBuffer> {
     const frames = Math.max(1, Math.ceil(src.length / ratio));
-    const off = new OfflineAudioContext(src.numberOfChannels, frames, src.sampleRate);
+    const off = new OfflineAudioContext(
+      src.numberOfChannels,
+      frames,
+      src.sampleRate,
+    );
     const node = await SignalsmithStretch(off);
     node.connect(off.destination);
     const chans: Float32Array[] = [];
-    for (let ch = 0; ch < src.numberOfChannels; ch++) chans.push(src.getChannelData(ch));
+    for (let ch = 0; ch < src.numberOfChannels; ch++)
+      chans.push(src.getChannelData(ch));
     await node.addBuffers(chans);
-    node.schedule({ output: 0, active: true, input: 0, rate: ratio, semitones });
+    node.schedule({
+      output: 0,
+      active: true,
+      input: 0,
+      rate: ratio,
+      semitones,
+    });
     return await off.startRendering();
   }
   // ── LIVE warp playback: one persistent stretch node per warp clip ────────────
@@ -3985,14 +4695,26 @@ class AudioEngine {
   // `rate`: a warp clip consumes exactly 60/rootBpm input-seconds per BEAT at any
   // tempo, so with the re-anchored clock the input position stays continuous — no
   // stop/refire, no pitch snap. The tape fallback below covers only the async warm-up.
-  private _stretch: Record<string, { node: StretchNode | null; gain: GainNode; loadedKey: string; ready: boolean }> = {};
+  private _stretch: Record<
+    string,
+    {
+      node: StretchNode | null;
+      gain: GainNode;
+      loadedKey: string;
+      ready: boolean;
+    }
+  > = {};
   // per-pass bookkeeping. PROVEN worklet semantics (see the repro in warp-stretch memory):
   // the node's timeline keeps at most ONE queued future change — any schedule() call
   // pops every queued change at/after "now". So a pass's deactivate must be sent ONLY
   // after its start has taken effect; `stopSent` tracks that deferred send.
-  private _stretchFired: Record<string, { when: number; off: number; stopSent: boolean }> = {};
+  private _stretchFired: Record<
+    string,
+    { when: number; off: number; stopSent: boolean }
+  > = {};
   private ensureStretchNode(clip: ArrClip) {
-    if (clip.content.kind !== "audio" || warpModeOf(clip.content) !== "complex") return;
+    if (clip.content.kind !== "audio" || warpModeOf(clip.content) !== "complex")
+      return;
     const cc = clip.content;
     const bufId = cc.bufId;
     if (!bufId) return;
@@ -4004,12 +4726,21 @@ class AudioEngine {
     if (cur && cur.loadedKey === loadKey) return; // loaded (or loading) the right variant
     if (cur) this.disposeStretch(clip.id); // buffer/reverse changed → rebuild
     const c = this.ensureCtx();
-    const entry = { node: null as StretchNode | null, gain: c.createGain(), loadedKey: loadKey, ready: false };
+    const entry = {
+      node: null as StretchNode | null,
+      gain: c.createGain(),
+      loadedKey: loadKey,
+      ready: false,
+    };
     this._stretch[clip.id] = entry;
     void SignalsmithStretch(c)
       .then(async (node) => {
         if (this._stretch[clip.id] !== entry) {
-          try { node.disconnect(); } catch { /* fine */ }
+          try {
+            node.disconnect();
+          } catch {
+            /* fine */
+          }
           return; // superseded while loading
         }
         entry.node = node;
@@ -4018,13 +4749,18 @@ class AudioEngine {
         // a processor exception kills the node FOREVER while `ready` stays true —
         // make that audible (tape fallback) + visible instead of silent
         node.onprocessorerror = () => {
-          console.warn("[warp] stretch processor died for clip", clip.id, "— tape fallback engaged");
+          console.warn(
+            "[warp] stretch processor died for clip",
+            clip.id,
+            "— tape fallback engaged",
+          );
           this.disposeStretch(clip.id);
         };
         node.connect(entry.gain);
         const src = rev ? this.reversedBuffer(bufId, src0) : src0;
         const chans: Float32Array[] = [];
-        for (let ch = 0; ch < src.numberOfChannels; ch++) chans.push(src.getChannelData(ch).slice()); // copies — the worklet may transfer
+        for (let ch = 0; ch < src.numberOfChannels; ch++)
+          chans.push(src.getChannelData(ch).slice()); // copies — the worklet may transfer
         await node.addBuffers(chans);
         if (this._stretch[clip.id] !== entry) return;
         entry.ready = true;
@@ -4036,10 +4772,20 @@ class AudioEngine {
   private disposeStretch(clipId: string) {
     const e = this._stretch[clipId];
     if (!e) return;
-    try { e.node?.stop(); e.node?.disconnect(); } catch { /* fine */ }
-    try { e.gain.disconnect(); } catch { /* fine */ }
+    try {
+      e.node?.stop();
+      e.node?.disconnect();
+    } catch {
+      /* fine */
+    }
+    try {
+      e.gain.disconnect();
+    } catch {
+      /* fine */
+    }
     delete this._stretch[clipId];
-    for (const key in this._stretchFired) if (key.startsWith(clipId + "@")) delete this._stretchFired[key];
+    for (const key in this._stretchFired)
+      if (key.startsWith(clipId + "@")) delete this._stretchFired[key];
   }
 
   // dev console probe: `engine.debugStretch()` dumps live-warp state and plays a 1s
@@ -4049,23 +4795,46 @@ class AudioEngine {
   async debugStretch() {
     const c = this.ensureCtx();
     console.log("[warp] ctx", c.state, "t=", c.currentTime.toFixed(3));
-    console.log("[warp] nodes:", Object.entries(this._stretch).map(([id, e]) => ({ id, ready: e.ready, key: e.loadedKey })));
+    console.log(
+      "[warp] nodes:",
+      Object.entries(this._stretch).map(([id, e]) => ({
+        id,
+        ready: e.ready,
+        key: e.loadedKey,
+      })),
+    );
     console.log("[warp] fired:", Object.keys(this._stretchFired));
     const node = await SignalsmithStretch(c);
     node.onprocessorerror = () => console.warn("[warp] PROBE processor error");
     node.connect(c.destination);
     const n = Math.floor(c.sampleRate * 1);
     const sine = new Float32Array(n);
-    for (let i = 0; i < n; i++) sine[i] = Math.sin((i / c.sampleRate) * 2 * Math.PI * 440) * 0.2;
+    for (let i = 0; i < n; i++)
+      sine[i] = Math.sin((i / c.sampleRate) * 2 * Math.PI * 440) * 0.2;
     await node.addBuffers([sine]);
     const t0 = c.currentTime + 0.1;
     // proven pattern: start only (one-slot queue) — the stop is sent after it's playing
-    node.schedule({ output: t0, active: true, input: 0, rate: 1, semitones: 0 });
-    node.setUpdateInterval(0.25, () => console.log("[warp] probe inputTime", node.inputTime.toFixed(3)));
+    node.schedule({
+      output: t0,
+      active: true,
+      input: 0,
+      rate: 1,
+      semitones: 0,
+    });
+    node.setUpdateInterval(0.25, () =>
+      console.log("[warp] probe inputTime", node.inputTime.toFixed(3)),
+    );
     console.log("[warp] probe scheduled — you should hear a 1s beep");
-    setTimeout(() => node.schedule({ output: c.currentTime, active: false }), 1100);
+    setTimeout(
+      () => node.schedule({ output: c.currentTime, active: false }),
+      1100,
+    );
     setTimeout(() => {
-      try { node.disconnect(); } catch { /* fine */ }
+      try {
+        node.disconnect();
+      } catch {
+        /* fine */
+      }
     }, 2500);
   }
 
@@ -4091,16 +4860,27 @@ class AudioEngine {
   // loop-xfaded as needed), rate, trim seconds, loop points, per-clip gain (incl.
   // auto-normalize makeup). Shared by the live scheduler and the consolidate bounce
   // so both voice a clip IDENTICALLY.
-  private audioClipSource(clip: ArrClip, bd: number, bpm = this.bpm, opts?: { noWarpSwap?: boolean }) {
+  private audioClipSource(
+    clip: ArrClip,
+    bd: number,
+    bpm = this.bpm,
+    opts?: { noWarpSwap?: boolean },
+  ) {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
-    let srcBuf = cc.bufId ? this._importBufs[cc.bufId] : cc.loopId ? this._loopBufs[cc.loopId] : undefined;
+    let srcBuf = cc.bufId
+      ? this._importBufs[cc.bufId]
+      : cc.loopId
+        ? this._loopBufs[cc.loopId]
+        : undefined;
     if (!srcBuf) return null; // not imported yet
     // reverse: swap to the reversed buffer (imports only) and flip the trim/loop fractions
     // so a/b keep meaning "the region you selected on the forward waveform".
     const rev = !!cc.reverse && !!cc.bufId;
-    let ta = cc.a ?? 0, tb = cc.b ?? 1;
-    let tla = cc.loopA, tlb = cc.loopB;
+    let ta = cc.a ?? 0,
+      tb = cc.b ?? 1;
+    let tla = cc.loopA,
+      tlb = cc.loopB;
     if (rev) {
       srcBuf = this.reversedBuffer(cc.bufId!, srcBuf);
       [ta, tb] = [1 - tb, 1 - ta];
@@ -4114,7 +4894,11 @@ class AudioEngine {
     let bufKey = cc.bufId + (rev ? ":rev" : ""); // identity for the xfade-loop cache
     let warped = false;
     const mode = warpModeOf(cc);
-    if ((mode === "beats" || mode === "complex") && cc.bufId && !opts?.noWarpSwap) {
+    if (
+      (mode === "beats" || mode === "complex") &&
+      cc.bufId &&
+      !opts?.noWarpSwap
+    ) {
       const key = this.warpKey(cc, rev, mode);
       const hit = this._warpCache.get(key);
       if (hit) {
@@ -4132,9 +4916,13 @@ class AudioEngine {
     const trimmedSec = (b - a) * dur;
     // ── rate: warped buffers already sit on the grid (rate 1). A beats/complex clip
     //    whose render/node is pending plays the TAPE fallback tempo-fitted (bpm/rootBpm,
-    //    NO varispeed transpose — grid timing wins over provisional pitch). repitch/off:
+    //    NO varispeed transpose — grid timing wins over provisional pitch). varispeed/off:
     //    grid-fit × varispeed as before. ──
-    const rate = warped ? 1 : mode === "beats" || mode === "complex" ? (cc.rootBpm && cc.rootBpm > 0 ? bpm / cc.rootBpm : 1) : this.audioClipRate(cc, bpm);
+    const rate = warped
+      ? 1
+      : mode === "beats" || mode === "complex"
+        ? this.warpParams(cc).ratio // tempo-fit ÷ ⌥-stretch (transpose stays out of the fallback)
+        : this.audioClipRate(cc, bpm);
     // auto-normalize: scanned peak → makeup toward ≈ −1 dBFS (capped at +18 dB)
     let gain = cc.gain ?? 1;
     if (cc.norm) {
@@ -4148,7 +4936,8 @@ class AudioEngine {
     //    toggle (absent = on) turns this off: play once, silence to the clip's end. ──
     const clipLenSec = clip.lengthBeats * bd;
     const contentSec = rate > 0 ? trimmedSec / rate : trimmedSec;
-    const looping = clipLenSec > contentSec + 0.01 && !!cc.bufId && cc.loop !== false;
+    const looping =
+      clipLenSec > contentSec + 0.01 && !!cc.bufId && cc.loop !== false;
     let buf = rawBuf;
     let loopStartSec = a * dur;
     let loopEndSec = b * dur;
@@ -4166,7 +4955,17 @@ class AudioEngine {
       loopStartSec = ls * dur;
       loopEndSec = le * dur;
     }
-    return { buf, rate, gain, startSec: a * dur, endSec: b * dur, trimmedSec, looping, loopStartSec, loopEndSec };
+    return {
+      buf,
+      rate,
+      gain,
+      startSec: a * dur,
+      endSec: b * dur,
+      trimmedSec,
+      looping,
+      loopStartSec,
+      loopEndSec,
+    };
   }
 
   // ── timeline waveforms ──
@@ -4176,7 +4975,10 @@ class AudioEngine {
   private peaksOf(buf: AudioBuffer): Float32Array {
     const hit = this._peakCache.get(buf);
     if (hit) return hit;
-    const buckets = Math.min(4096, Math.max(256, Math.floor(buf.duration * 50))); // ~50/sec
+    const buckets = Math.min(
+      4096,
+      Math.max(256, Math.floor(buf.duration * 50)),
+    ); // ~50/sec
     const p = new Float32Array(buckets);
     for (let ch = 0; ch < buf.numberOfChannels; ch++) {
       const d = buf.getChannelData(ch);
@@ -4200,7 +5002,10 @@ class AudioEngine {
   // seconds. Recomputed when the clip's params or the tempo change (keyed cache), so
   // the picture tracks playback truthfully — an UNSYNCED clip's wave stretches across
   // more/fewer beats as the tempo moves, exactly like what you hear.
-  private _waveCache: Record<string, { key: string; wave: NonNullable<ReturnType<AudioEngine["buildClipWave"]>> }> = {};
+  private _waveCache: Record<
+    string,
+    { key: string; wave: NonNullable<ReturnType<AudioEngine["buildClipWave"]>> }
+  > = {};
   private buildClipWave(clip: ArrClip) {
     // the timeline is defined by the ARRANGEMENT's tempo — never the transport clock,
     // which other pages (lab/legacy sequencer) may have left at their own bpm
@@ -4224,7 +5029,27 @@ class AudioEngine {
     if (clip.content.kind !== "audio") return null;
     const cc = clip.content;
     const mode = warpModeOf(cc);
-    const key = [cc.bufId, cc.loopId, cc.a, cc.b, cc.semi, cc.cents, mode, cc.rootBpm, cc.loopA, cc.loopB, cc.xfade, cc.snap, cc.reverse, cc.loop, cc.norm, mode === "beats" || mode === "complex" ? this._warpGen : 0, this.arrangement.bpm, clip.lengthBeats].join("|");
+    const key = [
+      cc.bufId,
+      cc.loopId,
+      cc.a,
+      cc.b,
+      cc.semi,
+      cc.cents,
+      mode,
+      cc.rootBpm,
+      cc.loopA,
+      cc.loopB,
+      cc.xfade,
+      cc.snap,
+      cc.reverse,
+      cc.loop,
+      cc.norm,
+      cc.stretch,
+      mode === "beats" || mode === "complex" ? this._warpGen : 0,
+      this.arrangement.bpm,
+      clip.lengthBeats,
+    ].join("|");
     const hit = this._waveCache[clip.id];
     if (hit && hit.key === key) return hit.wave;
     const wave = this.buildClipWave(clip);
@@ -4272,17 +5097,27 @@ class AudioEngine {
         const input = s.startSec + catchUp * s.rate;
         // one-shot content may run out before the clip's edge (silence after)
         const contentOut = s.rate > 0 ? (s.endSec - input) / s.rate : 0;
-        const off = s.looping ? stopAt : Math.min(stopAt, when + Math.max(0, contentOut));
+        const off = s.looping
+          ? stopAt
+          : Math.min(stopAt, when + Math.max(0, contentOut));
         if (off <= when) return;
         this._stretchFired[key] = { when, off, stopSent: false };
         // the node takes over from any tape-fallback source still playing this pass
         const fb = this._startedAudio[key];
         if (fb) {
-          try { fb.src.stop(); } catch { /* already ended */ }
+          try {
+            fb.src.stop();
+          } catch {
+            /* already ended */
+          }
           delete this._startedAudio[key];
         }
         st.gain.gain.value = s.gain;
-        try { st.gain.disconnect(); } catch { /* not connected */ }
+        try {
+          st.gain.disconnect();
+        } catch {
+          /* not connected */
+        }
         st.gain.connect(this.trackStrip(t));
         // START only — never pass `outputTime`, and never queue the stop here: the
         // worklet holds ONE queued future change, so a second schedule() would pop
@@ -4330,16 +5165,29 @@ class AudioEngine {
         src.start(when, Math.min(offSec, s.endSec - 0.001), remain);
       }
       src.onended = () => {
-        try { g.disconnect(); } catch { /* fine */ }
+        try {
+          g.disconnect();
+        } catch {
+          /* fine */
+        }
       };
-      this._startedAudio[key] = { src, synced: warpModeOf(cc) === "repitch", baseRate: s.rate, baseBpm: this.bpm };
+      this._startedAudio[key] = {
+        src,
+        synced: warpModeOf(cc) === "varispeed",
+        baseRate: s.rate,
+        baseBpm: this.bpm,
+      };
     };
     // brace loop: an instance per pass whose start lands in the window. Without a brace,
     // fire once when startBeat enters the window (or immediately if we began mid-clip).
     const passStarts = brace
       ? (() => {
           const out: number[] = [];
-          for (let k = Math.floor((fromBeatAbs - clip.startBeat) / braceLen); ; k++) {
+          for (
+            let k = Math.floor((fromBeatAbs - clip.startBeat) / braceLen);
+            ;
+            k++
+          ) {
             const sb = clip.startBeat + k * braceLen;
             if (sb >= toBeatAbs) break;
             if (sb + clip.lengthBeats <= fromBeatAbs) continue;
@@ -4365,7 +5213,11 @@ class AudioEngine {
       for (const k in this._stretchFired) {
         if (!k.startsWith(clip.id + "@")) continue;
         const f = this._stretchFired[k];
-        if (!f.stopSent && nowT >= f.when && f.off <= nowT + AudioEngine.SCHED_AHEAD * 2) {
+        if (
+          !f.stopSent &&
+          nowT >= f.when &&
+          f.off <= nowT + AudioEngine.SCHED_AHEAD * 2
+        ) {
           st.node.schedule({ output: f.off, active: false });
           f.stopSent = true;
         }
@@ -4383,9 +5235,12 @@ class AudioEngine {
     if (total <= 0) return;
     const bd = this.beatDur();
     const horizon = c.currentTime + AudioEngine.SCHED_AHEAD;
-    const fromBeatAbs = this._seqAnchorBeat + (this._scheduledThrough - this._seqAnchorTime) / bd;
-    const toBeatAbs = this._seqAnchorBeat + (horizon - this._seqAnchorTime) / bd;
-    const whenOf = (absBeat: number) => this._seqAnchorTime + (absBeat - this._seqAnchorBeat) * bd;
+    const fromBeatAbs =
+      this._seqAnchorBeat + (this._scheduledThrough - this._seqAnchorTime) / bd;
+    const toBeatAbs =
+      this._seqAnchorBeat + (horizon - this._seqAnchorTime) / bd;
+    const whenOf = (absBeat: number) =>
+      this._seqAnchorTime + (absBeat - this._seqAnchorBeat) * bd;
 
     // ── linear arrangement branch ──
     // Walk placed clips; a clip's content sits at `clip.startBeat`. The global loop
@@ -4393,14 +5248,21 @@ class AudioEngine {
     // bounds — so we shift the lookahead window back into the brace and also probe
     // the previous wrap for clips straddling the brace start. Phase 1: MIDI clips.
     if (this.arrangeMode) {
-      const brace = this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
+      const brace =
+        this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
       const braceLen = brace ? brace.end - brace.start : 0;
       // Emit a voice for a run at its timeline beat, mapping into the lookahead
       // window. With the loop brace, an event only fires if it lives inside the
       // brace, and it repeats every braceLen — so we scan the wrap iterations `k`
       // that land in the window (mirrors the loop grid's k*total wrap).
-      const emitRun = (run: NoteRun, timelineBeat: number, sel: VoiceSel, vibLane?: AutoLane) => {
-        if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end)) return;
+      const emitRun = (
+        run: NoteRun,
+        timelineBeat: number,
+        sel: VoiceSel,
+        vibLane?: AutoLane,
+      ) => {
+        if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end))
+          return;
         let k = brace ? Math.floor((fromBeatAbs - timelineBeat) / braceLen) : 0;
         for (; ; k++) {
           const absBeat = timelineBeat + (brace ? k * braceLen : 0);
@@ -4412,18 +5274,44 @@ class AudioEngine {
           const when = whenOf(absBeat);
           const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
           const bends = run.bends.length
-            ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
+            ? run.bends.map((b) => ({
+                toMidi: b.toMidi,
+                from: when + (b.fromBeat - run.startBeat) * bd,
+                at: when + (b.atBeat - run.startBeat) * bd,
+              }))
             : undefined;
-          const autoVib = vibLane?.points.length ? { points: vibLane.points, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd, rate: vibLane.rate, intensity: vibLane.intensity } : undefined;
-          const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, autoVib);
+          const autoVib = vibLane?.points.length
+            ? {
+                points: vibLane.points,
+                startBeat: run.startBeat,
+                endBeat: run.endBeat,
+                whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd,
+                rate: vibLane.rate,
+                intensity: vibLane.intensity,
+              }
+            : undefined;
+          const h = this.startVoiceAt(
+            run.pitch,
+            run.vel,
+            when,
+            sel,
+            bends,
+            autoVib,
+          );
           this.releaseVoice(h, off);
           this._seqVoices.push(h);
           if (!brace) break;
         }
       };
       // one drum hit at a timeline beat, wrapped through the loop brace like emitRun
-      const emitDrum = (lane: DrumLane, timelineBeat: number, vel: number, dest: AudioNode) => {
-        if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end)) return;
+      const emitDrum = (
+        lane: DrumLane,
+        timelineBeat: number,
+        vel: number,
+        dest: AudioNode,
+      ) => {
+        if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end))
+          return;
         let k = brace ? Math.floor((fromBeatAbs - timelineBeat) / braceLen) : 0;
         for (; ; k++) {
           const absBeat = timelineBeat + (brace ? k * braceLen : 0);
@@ -4442,7 +5330,9 @@ class AudioEngine {
           if (clip.muted) continue; // deactivated clip — drawn dim, never scheduled
           if (clip.content.kind === "midi") {
             const sel = this.trackVoice(t);
-            const vibLane = clip.content.clip.autos?.find((a) => a.target === "vibrato");
+            const vibLane = clip.content.clip.autos?.find(
+              (a) => a.target === "vibrato",
+            );
             const runs = this.buildRuns(clip.content.clip.notes);
             const contentLen = Math.max(0.25, clipBeats(clip.content.clip));
             // song rule: content tiles to fill the clip length automatically (no loop flag)
@@ -4452,7 +5342,15 @@ class AudioEngine {
               for (const run of runs) {
                 if (run.startBeat + repOffset >= clip.lengthBeats) continue; // past the clip length
                 // swing delays the run's head; the run rides along rigidly (bends/length unwarped)
-                emitRun(run, clip.startBeat + run.startBeat + repOffset + swingDelay(run.startBeat + repOffset, clip.swing), sel, vibLane);
+                emitRun(
+                  run,
+                  clip.startBeat +
+                    run.startBeat +
+                    repOffset +
+                    swingDelay(run.startBeat + repOffset, clip.swing),
+                  sel,
+                  vibLane,
+                );
               }
             }
           } else if (clip.content.kind === "drum") {
@@ -4480,7 +5378,13 @@ class AudioEngine {
                   const beat = repOffset + nt.start;
                   if (beat >= clip.lengthBeats) continue;
                   const lane = kit.lanes[nt.pitch - DRUM_BASE];
-                  if (lane && audible(lane.id)) emitDrum(lane, clip.startBeat + beat + swingDelay(beat, clip.swing), nt.vel, dest);
+                  if (lane && audible(lane.id))
+                    emitDrum(
+                      lane,
+                      clip.startBeat + beat + swingDelay(beat, clip.swing),
+                      nt.vel,
+                      dest,
+                    );
                 }
               } else {
                 for (let s = 0; s < pat.steps; s++) {
@@ -4488,13 +5392,28 @@ class AudioEngine {
                   if (stepBeat >= clip.lengthBeats) continue;
                   for (const lane of kit.lanes) {
                     if (!pat.on[lane.id]?.[s] || !audible(lane.id)) continue;
-                    emitDrum(lane, clip.startBeat + stepBeat + swingDelay(stepBeat, clip.swing), pat.accent[lane.id]?.[s] ? 1 : 0.7, dest);
+                    emitDrum(
+                      lane,
+                      clip.startBeat +
+                        stepBeat +
+                        swingDelay(stepBeat, clip.swing),
+                      pat.accent[lane.id]?.[s] ? 1 : 0.7,
+                      dest,
+                    );
                   }
                 }
               }
             }
           } else if (clip.content.kind === "audio") {
-            this.scheduleAudioClip(t, clip, fromBeatAbs, toBeatAbs, whenOf, bd, brace);
+            this.scheduleAudioClip(
+              t,
+              clip,
+              fromBeatAbs,
+              toBeatAbs,
+              whenOf,
+              bd,
+              brace,
+            );
           }
         }
       }
@@ -4503,13 +5422,17 @@ class AudioEngine {
       // the lookahead window slides. Ignores the loop brace (counts absolute beats).
       if (this.metronome) {
         const bpb = this.arrangement.beatsPerBar;
-        const first = Math.max(Math.ceil(fromBeatAbs - 1e-6), Math.floor(this._metroThrough) + 1);
+        const first = Math.max(
+          Math.ceil(fromBeatAbs - 1e-6),
+          Math.floor(this._metroThrough) + 1,
+        );
         for (let beat = first; beat < toBeatAbs; beat++) {
           this.metroClick(whenOf(beat), ((beat % bpb) + bpb) % bpb === 0);
           this._metroThrough = beat;
         }
       }
-      if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
+      if (this._seqVoices.length > 256)
+        this._seqVoices = this._seqVoices.slice(-128);
       this._scheduledThrough = horizon;
       return;
     }
@@ -4534,7 +5457,8 @@ class AudioEngine {
           }
           const when = whenOf(absBeat);
           for (const lane of this.kit.lanes) {
-            if (seq.on[lane.id]?.[s]) this.triggerDrum(lane.id, when, !!seq.accent[lane.id]?.[s]);
+            if (seq.on[lane.id]?.[s])
+              this.triggerDrum(lane.id, when, !!seq.accent[lane.id]?.[s]);
           }
           if (!this.loopOn) break;
         }
@@ -4563,15 +5487,34 @@ class AudioEngine {
               continue;
             }
             const when = whenOf(absBeat);
-            const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
+            const off =
+              when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
             // bend points: each slide note's END maps to an absolute ctx time
             const bends = run.bends.length
-              ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
+              ? run.bends.map((b) => ({
+                  toMidi: b.toMidi,
+                  from: when + (b.fromBeat - run.startBeat) * bd,
+                  at: when + (b.atBeat - run.startBeat) * bd,
+                }))
               : undefined;
             const autoVib = vibLane?.points.length
-              ? { points: vibLane.points, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd, rate: vibLane.rate, intensity: vibLane.intensity }
+              ? {
+                  points: vibLane.points,
+                  startBeat: run.startBeat,
+                  endBeat: run.endBeat,
+                  whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd,
+                  rate: vibLane.rate,
+                  intensity: vibLane.intensity,
+                }
               : undefined;
-            const h = this.startVoiceAt(run.pitch, run.vel, when, sel, bends, autoVib);
+            const h = this.startVoiceAt(
+              run.pitch,
+              run.vel,
+              when,
+              sel,
+              bends,
+              autoVib,
+            );
             this.releaseVoice(h, off);
             this._seqVoices.push(h);
             if (!wrap) break;
@@ -4582,7 +5525,8 @@ class AudioEngine {
       // sub + noise + per-source gains + filter + amp + up to 2 LFOs); this prune
       // bounds total node accumulation across 8 channels × 64 steps. Upgrade path if
       // it ever bites: a per-channel polyphony cap before scheduling, not after.
-      if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
+      if (this._seqVoices.length > 256)
+        this._seqVoices = this._seqVoices.slice(-128);
       this._scheduledThrough = horizon;
       return;
     }
@@ -4607,18 +5551,37 @@ class AudioEngine {
         const when = whenOf(absBeat);
         const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
         const bends = run.bends.length
-          ? run.bends.map((b) => ({ toMidi: b.toMidi, from: when + (b.fromBeat - run.startBeat) * bd, at: when + (b.atBeat - run.startBeat) * bd }))
+          ? run.bends.map((b) => ({
+              toMidi: b.toMidi,
+              from: when + (b.fromBeat - run.startBeat) * bd,
+              at: when + (b.atBeat - run.startBeat) * bd,
+            }))
           : undefined;
         const autoVib = clipVibLane?.points.length
-          ? { points: clipVibLane.points, startBeat: run.startBeat, endBeat: run.endBeat, whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd, rate: clipVibLane.rate, intensity: clipVibLane.intensity }
+          ? {
+              points: clipVibLane.points,
+              startBeat: run.startBeat,
+              endBeat: run.endBeat,
+              whenOfBeat: (cb: number) => when + (cb - run.startBeat) * bd,
+              rate: clipVibLane.rate,
+              intensity: clipVibLane.intensity,
+            }
           : undefined;
-        const h = this.startVoiceAt(run.pitch, run.vel, when, undefined, bends, autoVib);
+        const h = this.startVoiceAt(
+          run.pitch,
+          run.vel,
+          when,
+          undefined,
+          bends,
+          autoVib,
+        );
         this.releaseVoice(h, off);
         this._seqVoices.push(h);
         if (!this.loopOn) break;
       }
     }
-    if (this._seqVoices.length > 256) this._seqVoices = this._seqVoices.slice(-128);
+    if (this._seqVoices.length > 256)
+      this._seqVoices = this._seqVoices.slice(-128);
     this._scheduledThrough = horizon;
   }
 
@@ -4636,9 +5599,18 @@ class AudioEngine {
         beatMode: this.beatMode,
         loopOn: this.loopOn,
         bpm: this.bpm,
-        position: c ? this._offset + (this.playing ? Math.max(0, c.currentTime - this._startCtx) : 0) : this._offset,
+        position: c
+          ? this._offset +
+            (this.playing ? Math.max(0, c.currentTime - this._startCtx) : 0)
+          : this._offset,
       },
-      track: { id: this.track?.id ?? null, ready: this.ready, loading: this.loading, error: this.error, duration: this.duration },
+      track: {
+        id: this.track?.id ?? null,
+        ready: this.ready,
+        loading: this.loading,
+        error: this.error,
+        duration: this.duration,
+      },
       graph: {
         ctxState: c?.state ?? "none",
         ctxTime: c?.currentTime ?? 0,
@@ -4666,4 +5638,5 @@ export const MAX_CHANNELS = AudioEngine.MAX_CHANNELS;
 
 // Dev-only console handle: `engine.debug()` in the browser. Statically false in
 // production builds, so it tree-shakes out. ponytail: drop if it ever ships.
-if (import.meta.env.DEV) (globalThis as { engine?: AudioEngine }).engine = engine;
+if (import.meta.env.DEV)
+  (globalThis as { engine?: AudioEngine }).engine = engine;

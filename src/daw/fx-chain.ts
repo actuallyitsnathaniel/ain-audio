@@ -63,7 +63,9 @@ export class FxChain {
   }
 
   addDevice(type: FxDeviceType): FxDeviceState {
-    const state: FxDeviceState = { id: newFxId(), type, params: FX_DEVICES[type].defaults() };
+    // an EXPLICITLY added device powers ON (defaults are bypassed for pre-seeded racks
+    // — adding an effect and hearing nothing was a support ticket)
+    const state: FxDeviceState = { id: newFxId(), type, params: { ...(FX_DEVICES[type].defaults() as object), on: true } };
     this.live.push({ state, nodes: FX_DEVICES[type].build(this.ctx) });
     this.wire();
     this.applyOne(this.live.length - 1, 120);

@@ -193,6 +193,16 @@ never cuts a sample short nor makes it re-loop — a clip that exactly fit its c
 fitting at every tempo. Deliberately no overlap resolution on rescale (trimming neighbors every
 tick of a tempo drag would be destructive); overlaps resolve on the next user edit.
 
+**⌥+edge-drag = STRETCH (all clip kinds).** Plain edge-resize tiles/cuts content (and the
+timeline previews now TILE at true beat scale — they used to draw content stretched across the
+block, which read as "resize stretches MIDI"). Holding ⌥ while dragging the edge stretches the
+CONTENT to the new length via `engine.stretchClipTo`: MIDI/drum scale their notes (lossless;
+the step grid hatches off-grid results; grid-only patterns convert to notes first) and
+`bars`/`steps` follow; audio stores a cumulative `stretch` factor (1/16×–16×) that divides the
+warp ratio — **pitch-preserved under beats/complex**, tape-style under off/varispeed
+(`audioClipRate` divides by it). The factor telescopes correctly across a drag (re-derived per
+move) and joins the wave cache key.
+
 **Multi-clip mouse drag.** Dragging a clip that's part of a multi-selection moves the whole
 selection: the Timeline snapshots every selected clip's start at pointer-down and each move calls
 `engine.dragSelectionTo(items, delta)` — a UNIFORM delta (clamped at beat 0, like
@@ -229,8 +239,19 @@ the piano roll's own keys (on its DOM-focused canvas) then act alone. Taking foc
 timeline blurs any focused canvas so keys can never double-fire. When the editor region closes,
 focus falls back to the timeline.
 
-**WARP — pitch-preserving tempo-fit + duration-preserving transpose (deferral #5/#6).**
-Per-clip `warp?: boolean` (mutually exclusive with tape-style `sync`). Powered by
+**WARP MODES — the per-clip algorithm dropdown (Ableton-style).** `warpMode?: "off" |
+"varispeed" | "beats" | "complex"` on audio content, resolved via `warpModeOf` (legacy
+`sync` → varispeed, `warp` → complex — old saves keep working; the dropdown clears the legacy
+flags on write). **off** = natural rate, time-true length. **varispeed** = tape re-rate to the
+grid (`bpm/rootBpm` × transpose varispeed; live warble on tempo change). **beats** = the DRUM
+warp: `beatsRender` slices the source at ITS OWN 1/16 grid (rootBpm) and plays each slice at
+natural rate (transients never stretched) on the re-spaced output grid — gated gaps when
+slower, edge-crossfaded overlaps when faster; transpose = per-slice resampled repitch; pure
+buffer math, rendered offline per settled tempo (armed-once debounce `requestBeats`, tape
+fallback meanwhile), cached in `_warpCache` keyed by algo. **complex** = the live
+signalsmith-stretch node below.
+
+**COMPLEX — pitch-preserving tempo-fit + duration-preserving transpose.** Powered by
 [signalsmith-stretch](https://signalsmith-audio.co.uk/code/stretch/) (WASM/AudioWorklet — see
 CREDITS.md). **Live playback = one persistent stretch node per warp clip** (`_stretch`,
 `ensureStretchNode`): input buffers load once per buffer/reverse variant (channel COPIES —
