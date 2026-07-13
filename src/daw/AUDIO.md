@@ -237,7 +237,18 @@ with the editor focused they walk the piano roll's OWN grid (`engine.rollSnapBea
 independent — editing notes at 1/32 shouldn't coarsen clip placement or vice versa.
 **Ruler scrubbing is grid-quantized**: a seek re-anchors the clock + restarts sources, so the
 scrub target rounds to the snap grid (whole beats when snap is off; ⌘ = free) and re-seeks only
-when it crosses onto a NEW gridline — never continuously with the mouse. The timeline GRID follows the snap setting:
+when it crosses onto a NEW gridline — never continuously with the mouse.
+
+**Launch quantize** (`engine.launchQuant`, beats, 0 = off; separate `launch` selector in the
+playback pane, persisted `ain-launch-quant`). While PLAYING, `seekArrangement` doesn't jump
+immediately — it QUEUES a `_pendingLaunch = { target, atBeat }` and lets the playhead keep
+rolling until it reaches the next quantum boundary (`nextQuantBoundary`, which respects an active
+loop brace: boundaries measured from the brace start, a boundary at/after the brace end wraps to
+the brace start). `schedTick` fires the queued launch at its boundary via `_doSeek` (the shared
+re-anchor jump). Re-aiming (a new seek before the boundary) replaces `target` but keeps the same
+`atBeat` — Ableton clip-launch feel. Cleared on stop. The timeline draws a dashed accent line +
+ruler triangle at the pending target (`engine.pendingLaunch()`). Launch-quant OFF or stopped =
+the old immediate seek. The timeline GRID follows the snap setting:
 sub-beat lines (faint) appear at the snap subdivisions when they have ≥6px of room, and
 bar-snap hides the beat lines between bars — the drawn grid always shows where things will land.
 Drum clips draw a mini hit preview on their timeline blocks (piano-roll notes = truth,

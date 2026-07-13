@@ -154,6 +154,18 @@ export function PlaybackPane() {
         </Select>
       </label>
 
+      {/* launch quantize — a seek while playing waits for the next boundary */}
+      <label className="flex items-center gap-[5px]">
+        <span className={cap}>launch</span>
+        <Select value={eng.launchQuant} onChange={(n) => engine.setLaunchQuant(n)} title="launch quantize: while playing, a jump waits for the next boundary so the phase never breaks">
+          <option value={0}>off</option>
+          <option value={0.5}>1/8</option>
+          <option value={1}>1/4</option>
+          <option value={bpb}>bar</option>
+          <option value={bpb * 2}>2 bar</option>
+        </Select>
+      </label>
+
       {/* follow playhead */}
       <button className={ctl + px + onOff(eng.followPlayhead)} onClick={() => engine.setFollowPlayhead(!eng.followPlayhead)} title="auto-scroll the timeline to follow the playhead">
         follow
