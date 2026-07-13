@@ -18,11 +18,12 @@ import { Instrument } from "../audio-lab/Instrument";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
 import { PlaybackPane } from "./PlaybackPane";
+import { TrackFader } from "./TrackFader";
 import { openContextMenu } from "../context-menu-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
 const HEAD_H = 22; // must match Timeline
-const ROW_H = 56;
+const ROW_H = 64; // must match Timeline ROW_H
 const chip = (active: boolean, danger?: boolean) =>
   "rounded-[3px] border px-[6px] py-[2px] font-mono text-[9px] tracking-[0.05em] transition-colors " +
   (active
@@ -37,12 +38,12 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
   const hasFx = !!t.devices?.length;
   return (
     <div
-      className={"flex flex-col justify-center gap-[3px] border-b border-line px-[8px] transition-colors " + (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")}
+      className={"flex flex-col justify-center gap-[4px] border-b border-line px-[8px] transition-colors " + (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")}
       style={{ height: ROW_H }}
       onPointerDown={(e) => {
-        // click the header background (not a button/input/knob) → select the whole track
+        // click the header background (not a button/input/knob/fader) → select the track
         const el = e.target as HTMLElement;
-        if (el.closest("button,input,select,svg")) return;
+        if (el.closest("button,input,select,svg,[data-fader]")) return;
         engine.selectTrack(t.id);
       }}
       onContextMenu={(e) => {
@@ -101,9 +102,10 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
           </button>
         </span>
       </div>
+      {/* fader + live meter (fills the row) */}
+      <TrackFader gain={t.vol} getLevel={() => engine.trackLevel(t.id)} onChange={(g) => engine.setTrackVol(t.id, g)} width={126} />
       <div className="flex items-center gap-[6px]">
-        <Knob value={t.vol} min={0} max={1} defaultValue={0.8} size={22} onChange={(v) => engine.setTrackVol(t.id, v)} label="" fmt={() => ""} />
-        <Knob value={t.pan} min={-1} max={1} defaultValue={0} size={22} bipolar onChange={(v) => engine.setTrackPan(t.id, v)} label="" fmt={() => ""} />
+        <Knob value={t.pan} min={-1} max={1} defaultValue={0} size={20} bipolar onChange={(v) => engine.setTrackPan(t.id, v)} label="" fmt={() => ""} />
         {/* glows ONLY while this track's fx pane is open (the glow = "keys/edits go here";
             a has-devices glow on every track made it easy to edit the wrong one) */}
         <button className={chip(fxOpen)} onClick={() => onFx(t.id)} title={hasFx ? "track fx (" + t.devices!.length + " device" + (t.devices!.length > 1 ? "s" : "") + ")" : "track fx"}>
@@ -137,17 +139,24 @@ const MASTER_ID = "__master__";
 function MasterHeader({ fxOpen, onFx }: { fxOpen: boolean; onFx: () => void }) {
   const eng = useEngine(["fx"]);
   return (
-    <div className="flex flex-col justify-center gap-[3px] px-[8px]" style={{ height: ROW_H }}>
+    <div className="flex flex-col justify-center gap-[4px] px-[8px]" style={{ height: ROW_H }}>
       <div className="flex items-center gap-[5px]">
-        <span className="min-w-[52px] font-mono text-[9.5px] tracking-[0.03em] text-accent">master</span>
-        <span className="ml-auto font-mono text-[8px] text-faint">bus</span>
-      </div>
-      <div className="flex items-center gap-[6px]">
-        <Knob value={eng.masterVol} min={0} max={1} defaultValue={0.95} size={22} onChange={(v) => engine.setMasterVol(v)} label="" fmt={() => ""} />
+        <span className="font-mono text-[9.5px] tracking-[0.03em] text-accent">master</span>
+        <span className="font-mono text-[8px] text-faint">bus</span>
+        {/* meter tap: pre = program level before the safety limiter; post = final output */}
+        <button
+          className={"ml-auto " + chip(false)}
+          onClick={() => engine.setMasterMeterPost(!eng.masterMeterPost)}
+          title="master meter tap — pre = before the safety limiter · post = final output"
+        >
+          {eng.masterMeterPost ? "post" : "pre"}
+        </button>
         <button className={chip(fxOpen)} onClick={onFx} title="master fx">
           fx
         </button>
       </div>
+      {/* same fader + meter treatment as a track, reading the master bus level */}
+      <TrackFader gain={eng.masterVol} getLevel={() => engine.masterLevel()} onChange={(g) => engine.setMasterVol(g)} width={126} />
     </div>
   );
 }

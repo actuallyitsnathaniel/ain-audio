@@ -16,7 +16,7 @@ import { DRUM_BASE } from "../../data/drum-midi";
 import { type ArrClip, type ArrTrack } from "../../data/arrangement";
 
 const HEAD_H = 22; // ruler height
-const ROW_H = 56; // track lane height
+const ROW_H = 64; // track lane height (must match ArrangementPage ROW_H)
 const KEY_W = 0; // no gutter (headers are a separate column)
 const MIN_PPB = 4;
 const MAX_PPB = 64;
