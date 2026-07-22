@@ -698,21 +698,6 @@ export function Timeline({
       });
     });
 
-    // insert marker (the shared cursor — where paste / create / split reference)
-    const ix = beatToX(engine.insertBeat);
-    if (ix >= KEY_W && ix <= w) {
-      g.strokeStyle = ac;
-      g.globalAlpha = 0.85;
-      g.setLineDash([2, 3]);
-      g.lineWidth = 1;
-      g.beginPath();
-      g.moveTo(ix, HEAD_H);
-      g.lineTo(ix, h);
-      g.stroke();
-      g.setLineDash([]);
-      g.globalAlpha = 1;
-    }
-
     // pending quantized launch: a dashed accent line at the queued TARGET beat +
     // a countdown bracket at the boundary the playhead is racing toward
     const pl = engine.pendingLaunch();
@@ -741,13 +726,38 @@ export function Timeline({
     }
 
     // playhead
+    // ── the ONE cursor (merged insert marker + playhead) ──
+    // Playing → a solid white playhead. Stopped → the dotted accent EDIT cursor (where
+    // split/paste/create anchor, and where play resumes from). Same beat either way.
     const pos = engine.arrangementPosition();
     const px = beatToX(pos);
-    if (px >= 0 && px <= w) {
-      g.fillStyle = "#ffffff";
-      g.globalAlpha = 0.9;
-      g.fillRect(px, 0, 1.5, h);
-      g.globalAlpha = 1;
+    if (px >= KEY_W && px <= w) {
+      const playing = engine.arrangeMode && engine.sequencePlaying;
+      if (playing) {
+        g.fillStyle = "#ffffff";
+        g.globalAlpha = 0.9;
+        g.fillRect(px, 0, 1.5, h);
+        g.globalAlpha = 1;
+      } else {
+        g.strokeStyle = ac;
+        g.globalAlpha = 0.9;
+        g.setLineDash([2, 3]);
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.moveTo(px + 0.5, 0);
+        g.lineTo(px + 0.5, h);
+        g.stroke();
+        g.setLineDash([]);
+        g.globalAlpha = 1;
+        // downward tag in the ruler so the stopped cursor reads as a marker
+        g.fillStyle = ac;
+        g.beginPath();
+        g.moveTo(px - 3.5, 0);
+        g.lineTo(px + 4.5, 0);
+        g.lineTo(px + 0.5, 5);
+        g.closePath();
+        g.fill();
+      }
     }
 
     // empty-state hint (no tracks → no lanes, so the bare grid looks broken)

@@ -2595,7 +2595,6 @@ class AudioEngine {
     this.arrangement = emptyArrangement();
     saveArrangement(this.arrangement);
     this.insertBeat = 0;
-    this._pendingSeekBeat = 0;
     this.clearSelection();
     this._undo = [];
     this._redo = [];
@@ -2905,10 +2904,11 @@ class AudioEngine {
     };
   }
 
-  // arrangement playhead beat for the timeline (or the pending seek when stopped)
+  // the arrangement CURSOR beat: the live playhead while playing, else the stopped
+  // cursor (= insertBeat, the merged marker/playhead). Drives the timeline's one line.
   arrangementPosition(): number {
     if (this.arrangeMode && this.sequencePlaying) return this.currentBeat();
-    return this._pendingSeekBeat;
+    return this.insertBeat;
   }
 
   playSequence(fromBeat = 0) {
@@ -2931,10 +2931,9 @@ class AudioEngine {
       start += beats * bd;
     }
     this._seqAnchorTime = start;
-    // arrange: start at the beat the caller passed (insert marker for bare Space, the
-    // pause point for Shift+Space). beat mode always starts at 0.
+    // arrange: start at the beat the caller passed (the cursor / insertBeat). beat
+    // mode (lab audition) always starts at 0.
     this._seqAnchorBeat = this.arrangeMode ? Math.max(0, fromBeat) : 0;
-    this._pendingSeekBeat = 0;
     this._scheduledThrough = start;
     this._metroThrough = this._seqAnchorBeat - 1; // so the first in-song beat clicks
     if (this._schedTimer) clearInterval(this._schedTimer);
@@ -3046,35 +3045,35 @@ class AudioEngine {
     this.stopSequence();
     this.arrangeMode = false;
   }
-  // bare Space: if playing → stop; if stopped → play FROM THE INSERT MARKER (Ableton).
-  // (Shift+Space = playArrangementFromCursor continues from the last stop point.)
+  // ── ONE cursor: the insert marker IS the stopped playhead (Ableton) ──
+  // Play starts from `insertBeat`; pause/stop write the position back to it. While
+  // playing, the live playhead is `currentBeat()`; when stopped, it's `insertBeat`.
+  // bare Space: if playing → stop; if stopped → play FROM the cursor.
   toggleArrangement() {
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
     else this.playArrangement(this.insertBeat);
   }
   // ── transport verbs (playback pane) ──
-  // play from the current playhead (a prior seek / where it was paused), not always 0
+  // play from the cursor (same as bare Space now that marker + playhead are merged)
   playArrangementFromCursor() {
     if (this.sequencePlaying && this.arrangeMode) return;
-    this.playArrangement(this._pendingSeekBeat);
+    this.playArrangement(this.insertBeat);
   }
-  // pause: stop the clock but REMEMBER the position (resume from here)
+  // pause: stop the clock and leave the cursor where playback stopped (resume from here)
   pauseArrangement() {
     if (!(this.sequencePlaying && this.arrangeMode)) return;
     const at = this.currentBeat();
     this.stopArrangement();
-    this._pendingSeekBeat = Math.max(0, at);
+    this.setInsertBeat(Math.max(0, at));
     this.emit("transport");
   }
-  // stop: halt and return the playhead to the start (loop-brace start if looping, else 0).
-  // Also parks the dotted insert marker back home — a full stop resets the page.
+  // stop: halt and return the cursor to the start (loop-brace start if looping, else 0)
   stopArrangementToStart() {
     const home =
       this.loopOn && this.arrangement.loop?.on
         ? this.arrangement.loop.start
         : 0;
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
-    this._pendingSeekBeat = home;
     this.setInsertBeat(home);
     this.emit("transport");
   }
@@ -3125,6 +3124,43 @@ class AudioEngine {
   setInsertBeat(beat: number) {
     this.insertBeat = Math.max(0, beat);
     this.emit("arrange");
+  }
+  // step the cursor one grid unit in the arrow direction (dir = ±1), snapping to the
+  // grid. `fine` (⌘) forces a 1/16 step regardless of the snap setting. When STOPPED
+  // it moves the marker; when PLAYING it seeks the transport (←/→ scrubs live too).
+  moveCursor(dir: -1 | 1, fine = false) {
+    const from = this.arrangeMode && this.sequencePlaying ? this.currentBeat() : this.insertBeat;
+    const g = fine ? 0.25 : this.snapBeats > 0 ? this.snapBeats : 1;
+    // from an off-grid position, one step lands on the near grid line in `dir`;
+    // from an on-grid position, it advances a full grid unit.
+    const onGrid = Math.abs(from / g - Math.round(from / g)) < 1e-6;
+    const target = Math.max(0, onGrid ? Math.round(from / g) * g + dir * g : dir > 0 ? Math.ceil(from / g) * g : Math.floor(from / g) * g);
+    if (this.arrangeMode && this.sequencePlaying) this.seekArrangement(target);
+    else this.setInsertBeat(target);
+  }
+  // jump the cursor to song start / end (Home / End)
+  cursorToStart() {
+    this.seekArrangement(0);
+  }
+  cursorToEnd() {
+    this.seekArrangement(arrangementBeats(this.arrangement));
+  }
+  // snap the cursor to the previous/next CLIP EDGE across all tracks (⌘⇧←/→) — the
+  // fast way to land exactly on a boundary. Considers every clip's start and end.
+  cursorToClipEdge(dir: -1 | 1) {
+    const from = this.arrangeMode && this.sequencePlaying ? this.currentBeat() : this.insertBeat;
+    const edges = new Set<number>([0]);
+    for (const t of this.arrangement.tracks)
+      for (const c of t.clips) {
+        edges.add(c.startBeat);
+        edges.add(c.startBeat + c.lengthBeats);
+      }
+    const sorted = [...edges].sort((a, b) => a - b);
+    const target = dir > 0 ? sorted.find((e) => e > from + 1e-6) : [...sorted].reverse().find((e) => e < from - 1e-6);
+    if (target != null) {
+      if (this.arrangeMode && this.sequencePlaying) this.seekArrangement(target);
+      else this.setInsertBeat(target);
+    }
   }
 
   // ── arrangement selection (clips + time range) ──
@@ -3857,11 +3893,10 @@ class AudioEngine {
       this._metroThrough = Math.ceil(beat) - 1; // re-align clicks to the new position
       this.schedTick();
     } else {
-      this._pendingSeekBeat = beat; // remembered until play (start from here)
+      this.setInsertBeat(beat); // stopped → the cursor moves there (play resumes from it)
     }
     this.emit("transport");
   }
-  private _pendingSeekBeat = 0;
 
   // playbackRate for an audio clip in VARISPEED (tape) mode: grid-fit (bpm/rootBpm) ×
   // varispeed (semi+cents). The single source of truth for rate, shared by the
