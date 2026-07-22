@@ -240,7 +240,8 @@ export function ArrangementPage() {
       const meta = e.metaKey || e.ctrlKey;
       // ── GLOBAL: transport + undo, whatever pane is focused ──
       if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
-      if (e.code === "Home") { e.preventDefault(); engine.returnToStart(); return; }
+      if (e.code === "Home") { e.preventDefault(); engine.cursorToStart(); return; }
+      if (e.code === "End") { e.preventDefault(); engine.cursorToEnd(); return; }
       if (e.key.toLowerCase() === "l" && !meta) {
         e.preventDefault();
         const l = engine.arrangement.loop;
@@ -301,7 +302,8 @@ export function ArrangementPage() {
       if (meta && e.key.toLowerCase() === "c") { if (engine.selClips.size) { e.preventDefault(); engine.copySelection(); } return; }
       if (meta && e.key.toLowerCase() === "x") { if (engine.selClips.size) { e.preventDefault(); engine.cutSelection(); setEditSel(null); } return; }
       if (meta && e.key.toLowerCase() === "v") { if (engine.hasClipboard()) { e.preventDefault(); engine.pasteClipboard(); } return; }
-      // arrow keys on the selection (need a selection to matter)
+      // arrow keys — SELECTION WINS (nudge/resize/track-hop); with nothing selected
+      // they move the merged cursor instead (Ableton's context model).
       if (engine.selClips.size) {
         // "0" — deactivate/reactivate the selected clips (Ableton)
         if (e.key === "0" && !meta) { e.preventDefault(); engine.toggleMuteSelection(); return; }
@@ -311,6 +313,11 @@ export function ArrangementPage() {
         if (e.key === "ArrowUp") { e.preventDefault(); engine.moveSelectionTracks(-1); return; }
         if (e.key === "ArrowDown") { e.preventDefault(); engine.moveSelectionTracks(1); return; }
         if (e.key.toLowerCase() === "r" && !meta) { e.preventDefault(); engine.reverseSelection(); return; }
+      } else {
+        // no selection → arrows move the merged cursor. ⌘⇧←/→ jumps to the prev/next
+        // clip edge; ⌘←/→ steps fine (1/16); plain ←/→ steps the grid.
+        if (e.key === "ArrowLeft") { e.preventDefault(); if (meta && e.shiftKey) engine.cursorToClipEdge(-1); else engine.moveCursor(-1, meta); return; }
+        if (e.key === "ArrowRight") { e.preventDefault(); if (meta && e.shiftKey) engine.cursorToClipEdge(1); else engine.moveCursor(1, meta); return; }
       }
       if (e.key === "Escape") { engine.clearSelection(); setEditSel(null); return; }
     };
@@ -428,7 +435,7 @@ export function ArrangementPage() {
           <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = insert marker · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize (⌥ = stretch content) · shift-click = multi-select · drag empty = marquee · space play · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
+          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = move cursor · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize (⌥ = stretch content) · shift-click = multi-select · drag empty = marquee · space play (from cursor) · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · <b>no selection:</b> ←→ move cursor (⌘ fine · ⌘⇧ clip edge) · Home/End · <b>selection:</b> ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
         </div>
       </TrackSection>
     </main>

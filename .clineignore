@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output (Vite/React-style)
+build/
+dist/
+coverage/
+
+# Maps, minified, and generated bundles
+_.map
+_.min.js
+_.min.css
+_.generated.\*
+_.bundle._
+
+# Logs and cache
+\*.log
+.cache/
+.tmp/
+
+# Binary/media you don’t need Claude to read
+_.png
+_.jpg
+_.jpeg
+_.gif
+_.webp
+_.svg
+_.ico
+_.mp3
+_.m4a
+_.wav
+_.mp4
+_.mov
+
+# Misc large / auto-generated web stuff
+sitemap.xml
+robots.txt
+site.webmanifest
+browserconfig.xml
+
+# Lockfiles (if you don’t care about them in conversations)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml

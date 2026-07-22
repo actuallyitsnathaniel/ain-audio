@@ -22,10 +22,10 @@ Built once in `buildGraph()` on first user gesture (`ensureCtx`). Top-to-bottom 
 
 - **`sum`** is the junction everything feeds: the two track branches AND every synth/sampler
   voice (`voiceGain.connect(n.sum)`). Anything connected to `sum` runs through the whole rack.
-- **Phase-lock invariant (do not break):** the A/B pair starts both buffer sources on the *same*
+- **Phase-lock invariant (do not break):** the A/B pair starts both buffer sources on the _same_
   context sample (`startSources`). The reorderable rack is strictly the `sum → … → anOut`
   segment — it never touches the track-source plumbing or the source-start timing.
-- **`anOut`** is the output analyser (spectrum, meters). It sits *before* the safety limiter, so
+- **`anOut`** is the output analyser (spectrum, meters). It sits _before_ the safety limiter, so
   meters read the program signal, not the limited signal.
 
 ## Modular FX device system
@@ -39,13 +39,13 @@ every arrangement track.
 graph between one input GainNode and one output node; `apply(params, ctx, bpm)` pushes a params
 blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = one registry entry.
 
-| Type | Node(s) | Notes |
-|-----|---------|-------|
-| `filter` | BiquadFilter | bipolar morph: <0.5 lowpass, >0.5 highpass, ~0.5 off |
-| `comp` | DynamicsCompressor + makeup gain | *creative* dynamics; manual makeup. Off ⇒ threshold 0/ratio 1 (neutral) |
-| `space` | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the tempo: the `div` knob steps the straight divisions (`DELAY_DIVS`, 1/16→1/1); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies every chain. Off = free ms (`time`). |
-| `crush` | WaveShaper (tanh) + auto-gain | see loudness safety below |
-| `reverb` | Convolver (internal dry/wet) | synth IR, regenerated from the decay knob (device-owned `makeReverbIR`) |
+| Type     | Node(s)                             | Notes                                                                                                                                                                                                                                                                                                                                  |
+| -------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filter` | BiquadFilter                        | bipolar morph: <0.5 lowpass, >0.5 highpass, ~0.5 off                                                                                                                                                                                                                                                                                   |
+| `comp`   | DynamicsCompressor + makeup gain    | _creative_ dynamics; manual makeup. Off ⇒ threshold 0/ratio 1 (neutral)                                                                                                                                                                                                                                                                |
+| `space`  | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the tempo: the `div` knob steps the straight divisions (`DELAY_DIVS`, 1/16→1/1); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies every chain. Off = free ms (`time`). |
+| `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
+| `reverb` | Convolver (internal dry/wet)        | synth IR, regenerated from the decay knob (device-owned `makeReverbIR`)                                                                                                                                                                                                                                                                |
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
 `input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/
@@ -112,9 +112,9 @@ chain the peak is unpredictable. Two guards, deliberately separate:
 
 1. **Crush auto-gain** (the crush device's `autoGain` param, default on) — the device's `apply`
    trims its makeup gain by `1/sqrt(1 + drive·3.5)` as drive rises, so driving the waveshaper
-   changes *grit*, not *loudness*. Toggleable per the "auto" button on the CRUSH device.
+   changes _grit_, not _loudness_. Toggleable per the "auto" button on the CRUSH device.
 2. **Safety limiter** (`engine.limiter`, default on) — a brickwall `DynamicsCompressorNode`
-   (ratio 20:1, fast attack, ceiling ≈ −1.5 dBFS) in the **fixed tail after `anOut`**, *outside*
+   (ratio 20:1, fast attack, ceiling ≈ −1.5 dBFS) in the **fixed tail after `anOut`**, _outside_
    the master chain so it can never be moved, removed, or bypassed by reordering. Catches any
    peak regardless of device order. User-toggleable (off = audition raw output, at their own risk).
    `engine.getReduction()` returns its live gain reduction (dB) — the LIMIT device's "peak" LED
@@ -132,7 +132,7 @@ mid-cycle → a click. The engine avoids this everywhere a source starts/stops:
   that; ~10 ms, kept ≤15 ms so the stop stays tight/performative). Applied via `AudioEngine.DECLICK`:
   `startSources` fades the track tap gains 0→1 on start; `stopSources` fades 1→0 then stops just after;
   `stopLoops`/`stopOneLoop` fade each loop's gain to 0 then stop. Gain-only ramps don't touch source
-  *timing*, so the A/B **phase-lock invariant** is preserved.
+  _timing_, so the A/B **phase-lock invariant** is preserved.
 - **Synth drums** already use `exponentialRampToValueAtTime(0.0001)`; every **FxChain rewire**
   (add/remove/reorder) ducks the chain's own output gain around the reconnect.
 
@@ -141,7 +141,7 @@ reverb) already ramp via `setTargetAtTime` with time constants (zipper-free); ad
 be redundant. And native-DSP hygiene (denormals, lock-free, block processing) is the **browser's** job —
 Web Audio nodes run in its C++ audio thread; we only schedule `AudioParam` goals ahead of time (the
 control-rate/audio-rate "two-speed" split, done via the lookahead scheduler). Zero-crossing snapping is
-an *editing* technique, not a real-time transport one, so it doesn't apply here.
+an _editing_ technique, not a real-time transport one, so it doesn't apply here.
 
 ## Sequencer scheduler + piano roll
 
@@ -238,6 +238,24 @@ independent — editing notes at 1/32 shouldn't coarsen clip placement or vice v
 **Ruler scrubbing is grid-quantized**: a seek re-anchors the clock + restarts sources, so the
 scrub target rounds to the snap grid (whole beats when snap is off; ⌘ = free) and re-seeks only
 when it crosses onto a NEW gridline — never continuously with the mouse.
+
+**ONE cursor (merged insert-marker + playhead, Ableton-style).** There is a single arrangement
+cursor: `engine.insertBeat` is the stopped position (paste/create/split anchor AND where play
+starts), and while playing the live playhead `currentBeat()` takes over.
+`engine.arrangementPosition()` resolves whichever applies — the Timeline draws exactly ONE line
+from it: **solid white while playing**, else a **dotted accent line with a downward ruler
+triangle tag** (the old separate dashed insert-marker is gone; `_pendingSeekBeat` was deleted —
+`insertBeat` is the single stopped-cursor value written by `_doSeek`'s stopped branch,
+`pauseArrangement`, `stopArrangementToStart`, and `playArrangementFromCursor`). Cursor keys
+(timeline pane, NO clip selection): **←/→** step the cursor by the snap grid
+(`moveCursor(dir, fine)` — on-grid steps a full grid unit, off-grid snaps to the near line,
+clamped ≥ 0; self-checked in the scratchpad `cursor-check.mjs`); **⌘←/→** fine-steps 1/16;
+**⌘⇧←/→** jumps to the previous/next CLIP EDGE across all tracks (`cursorToClipEdge` — the
+sorted set of every clip start/end plus 0); **Home/End** = `cursorToStart`/`cursorToEnd`
+(beat 0 / arrangement end). While STOPPED these move the marker; while PLAYING they route
+through `seekArrangement`, so arrow-scrub honors launch quantize below (deliberate — queued,
+Ableton clip-launch feel; confirmed by the user). With clips selected, ←/→ keep their
+nudge/resize meaning (unchanged).
 
 **Launch quantize** (`engine.launchQuant`, beats, 0 = off; separate `launch` selector in the
 playback pane, persisted `ain-launch-quant`). While PLAYING, `seekArrangement` doesn't jump
@@ -338,16 +356,18 @@ live mixer: master gain, strip gains/pans, and each strip's FX chain when the re
 list differs. Legacy beat-mode keeps its separate `sequence.swing`.
 
 **Playback pane** ([components/arrangement/PlaybackPane.tsx](components/arrangement/PlaybackPane.tsx))
-— the arrangement transport. Verbs: `toggleArrangement` (play/stop), `playArrangementFromCursor`,
-`pauseArrangement` (hold position in `_pendingSeekBeat`), `stopArrangementToStart`/`returnToStart`
+— the arrangement transport. Verbs: `toggleArrangement` (play/stop; play starts FROM the cursor),
+`playArrangementFromCursor`, `pauseArrangement` (writes the stop position back to `insertBeat` —
+the ONE cursor; resume plays from there), `stopArrangementToStart`/`returnToStart`
 (home = loop-brace start if looping else 0). `setBeatsPerBar` (time sig), `setArrangementBpm` +
 `tapTempo` (averages recent tap intervals), `setArrangementLoop` (numeric bar range or shift-drag),
 `setSnapBeats` (Timeline clip snap grid; 0/⌘ = free), `setFollowPlayhead` (Timeline auto-scrolls to
 keep the playhead in a band). **Metronome**: `metronome`/`metronomeVol` → `metroClick` (square blip,
 2 kHz accent on the bar downbeat / 1.4 kHz else) fired per integer beat in the arrangement branch,
 deduped via `_metroThrough`. **Count-in**: `countInBars` (0–2) pre-schedules that many bars of click
-before the anchor, pushing `_seqAnchorTime` forward. Keyboard: Space = play/stop, Home = return, L =
-loop.
+before the anchor, pushing `_seqAnchorTime` forward. Keyboard: Space = play/stop (from the cursor),
+Home = `cursorToStart`, End = `cursorToEnd`, L = loop; ←/→ move the cursor when nothing is
+selected (⌘ fine, ⌘⇧ clip edges — see the ONE-cursor section).
 
 **The editor** ([components/piano-roll/PianoRoll.tsx](components/piano-roll/PianoRoll.tsx)). One
 `<canvas>` over the full MIDI range (C0–C8) with a **scroll-aware single coordinate system** for
@@ -357,6 +377,7 @@ gutter on top). The working clip lives in a **ref** (mutated during drag for per
 `engine.setActiveClip` on change.
 A **selection model** (`sel: Set<note id>`) underlies the gesture set, which models Ableton Live's
 MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyboard editing works.
+
 - **Select:** click a note · shift+click add/remove · drag empty → marquee (shift adds) ·
   shift+click a gutter key → toggle the whole pitch row · esc clears. Selected notes get a white
   outline; the HUD (top-right) shows live `sel / note / vel / len`.
@@ -429,10 +450,10 @@ drum mute/solo) is gone. Drums now live **only** as arrangement drum clips
 - **Kits** ([data/kits.ts](data/kits.ts)): `DrumKit` = named `DrumLane`s (kick/snare/hat/clap/tom);
   one-shots **auto-discovered** from `src/assets/kits/<kitId>/<laneId>.m4a` — see
   [../assets/kits/README.md](../assets/kits/README.md). `loadKit(kit)` decodes them; `voiceDrum(lane,
-  when, vel, dest)` plays the one-shot if present, else the **engine-synthesized** `synthDrum()`
+when, vel, dest)` plays the one-shot if present, else the **engine-synthesized** `synthDrum()`
   (pitched-sine kick, filtered-noise snare/hat/clap, tom, rim). Zero assets required.
 - **The pattern model** — `SequenceClip = { steps, beatsPerBar, kitId?, bpm, swing, on, accent,
-  laneMix }` is the DRUM CLIP's data (edited in `DrumClipGrid` + the kit-labeled piano roll; see
+laneMix }` is the DRUM CLIP's data (edited in `DrumClipGrid` + the kit-labeled piano roll; see
   [[drum-midi-bridge]]). The scheduler's arrangement drum branch voices it via `voiceDrum` into the
   track strip, honoring the clip's own `laneMix` (per-clip mute/solo) and swing. `STEP_BEATS = 0.25`
   (a step = 1/16). `defaultSequence()` still ships a starter groove used as the new-drum-clip seed.
@@ -440,7 +461,7 @@ drum mute/solo) is gone. Drums now live **only** as arrangement drum clips
 **Not yet wired to UI** (engine seams exist, no callers): `loadReverbIR`/`useSynthReverbIR`
 (real IR files).
 
-## Preset sampler (the sample *catalog* — how zones decode)
+## Preset sampler (the sample _catalog_ — how zones decode)
 
 `SampledPreset`s are the **source catalog** for the sample voice source (not a parallel current-instrument
 selector). Each is seeded into `engine.patches` as an editable patch at boot (see the unified-instrument
@@ -503,7 +524,7 @@ stops oscs + sub + noise + **sampleSrc** + all LFOs. A voice is ≤ ~14 nodes (b
   handles**). Subscribes to `["patch","synth","preset","midi"]`.
 - **Alignment** — the arrangement track picker (`ArrangementPage`) lists `synthPatches`;
   `setTrackPreset` stores a patch key and `warmPatch`es it. `trackVoice` → `{ patch:
-  resolvePatch(presetId), dest }`. Legacy arrangement `presetId`s (raw preset ids) are migrated to
+resolvePatch(presetId), dest }`. Legacy arrangement `presetId`s (raw preset ids) are migrated to
   patch-key names at boot.
 
 ## Reverb impulse response
@@ -522,8 +543,8 @@ preset assets and be loaded on demand (no fixed convention wired yet — add one
 
 ## Gotchas
 
-- **esbuild build does not typecheck.** Run `npx tsc --noEmit` (a few *pre-existing* errors live
+- **esbuild build does not typecheck.** Run `npx tsc --noEmit` (a few _pre-existing_ errors live
   in the surviving old `src/components/*` files; lint + build are the real gates).
-- **react-hooks v7 purity** — no `ref.current = x` or `performance.now()` *during render*. All
+- **react-hooks v7 purity** — no `ref.current = x` or `performance.now()` _during render_. All
   imperative meter/LED drawing happens inside `useRafLoop` callbacks (see `LimitLed`, `LevelMeter`).
 - **Canvas/SVG read `--accent` at runtime** via `getComputedStyle`, so theme changes are live.
