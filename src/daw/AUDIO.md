@@ -105,6 +105,24 @@ right, insert-before when dragging left, so a 2-device chain swaps both ways). T
 separate target from the knobs, so knob-dragging is unaffected; `touch-none` on it stops the
 page scrolling mid-drag.
 
+## Architecture principle — native nodes as the engine, WASM per-device
+
+The engine deliberately **inverts** the standard "pro web DAW" blueprint (a monolithic
+C++/Rust→WASM mixer inside one AudioWorklet, SharedArrayBuffer messaging). Native Web Audio
+nodes ARE the browser's optimized real-time C++ path — a WASM reimplementation of a gain,
+biquad, compressor, or convolver is equal at best, and forfeits free denormal handling, block
+scheduling, and zipper-free `AudioParam` ramps. SharedArrayBuffer would also impose the
+COOP/COEP cross-origin-isolation deployment tax for meter data that `AnalyserNode`s already
+deliver fine at rAF rate.
+
+**WASM is used exactly where native nodes can't go, one device at a time.** The FxChain device
+contract (`build(ctx) → { in, out, apply }`) hosts an AudioWorklet(+WASM)-backed device
+identically to a native one — signalsmith-stretch (the COMPLEX warp) already proves the
+pattern. Future candidates: transient-preserving clip limiter, RTA EQ. Never a monolith engine
+rewrite. Related: the first **lookahead** device we ship introduces latency → that's the moment
+to add a `latencySamples` field to `FxDeviceDef` and compensate parallel paths (mini-ADC); all
+current devices are effectively zero-latency, so none exists yet.
+
 ## Loudness safety (two independent safeguards, both default ON)
 
 Saturation, resonance, and stacked delay feedback can all spike level — and with a reorderable
