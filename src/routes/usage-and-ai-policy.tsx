@@ -1,12 +1,10 @@
-import VideoBG from "../components/video-background";
-import Footer from "../components/footer";
-import { NavBar } from "../components/navbar";
+import { DawShell } from "../daw/DawShell";
 import SEO from "../components/seo";
 
 const CONTACT_EMAIL = "nathanielrbowman@gmail.com";
 
 const linkClass =
-  "italic underline underline-offset-2 text-purple-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-white";
+  "italic underline underline-offset-2 text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-daw-text";
 
 // All policy copy lives here so wording can be tweaked without touching layout.
 type Section = { heading: string; body?: string; list?: string[] };
@@ -48,71 +46,63 @@ const sections: Section[] = [
 
 const UsageAndAiPolicy = () => {
   return (
-    <>
+    <DawShell>
       <SEO
         title="Usage & AI Policy"
         description="The music of actually-its-nathaniel (Nathaniel Riley Bowman) is not licensed for AI or machine learning training. Read the full usage and AI policy."
         url="https://audio.actuallyitsnathaniel.com/usage-and-ai-policy"
       />
-      <div
-        id="root"
-        className="flex flex-col min-h-screen w-full text-center font-light *:text-white"
-      >
-        <VideoBG />
-        <main className="flex-grow flex items-center justify-center px-6 pt-24 pb-16">
-          <article className="max-w-3xl w-full bg-black/60 backdrop-blur-md rounded-xl p-8 md:p-10 text-left">
-            <header className="text-center pb-6 mb-6 border-b border-white/20">
-              <h1 className="text-4xl md:text-5xl font-light lowercase">
-                usage &amp; ai policy
-              </h1>
-              <p className="mt-3 text-white/70">
-                Nathaniel Riley Bowman, professionally known as
-                &nbsp;&ldquo;actually-its-nathaniel&rdquo;
-              </p>
-            </header>
+      <main className="relative z-[1] flex justify-center px-6 pt-24 pb-16">
+        <article className="max-w-3xl w-full rounded-[4px] border border-line bg-panel p-8 md:p-10 text-left">
+          <header className="text-center pb-6 mb-6 border-b border-line">
+            <h1 className="text-4xl md:text-5xl font-extrabold tracking-[-0.02em]">
+              usage &amp; ai policy
+            </h1>
+            <p className="mt-3 text-dim">
+              Nathaniel Riley Bowman, professionally known as
+              &nbsp;&ldquo;actually-its-nathaniel&rdquo;
+            </p>
+          </header>
 
-            <div className="md:columns-2 md:gap-8">
-              {sections.map(({ heading, body, list }) => (
-                <section
-                  key={heading}
-                  className="mb-6 break-inside-avoid"
-                >
-                  <h2 className="text-cyan-500 uppercase tracking-widest text-sm mb-2">
-                    {heading}
-                  </h2>
-                  {body && (
-                    <p className="text-white/80 leading-relaxed">{body}</p>
-                  )}
-                  {list && (
-                    <ul className="list-disc list-inside text-white/80 leading-relaxed space-y-1">
-                      {list.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
-              ))}
-
-              <section className="mb-6 break-inside-avoid">
-                <h2 className="text-cyan-500 uppercase tracking-widest text-sm mb-2">
-                  Inquiries
+          <div className="md:columns-2 md:gap-8">
+            {sections.map(({ heading, body, list }) => (
+              <section
+                key={heading}
+                className="mb-6 break-inside-avoid"
+              >
+                <h2 className="font-mono text-accent uppercase tracking-widest text-[12px] mb-2">
+                  {heading}
                 </h2>
-                <p className="text-white/80 leading-relaxed">
-                  Research, licensing, or technology inquiries require written
-                  approval. Direct all inquiries to the Artist at&nbsp;
-                  <a className={linkClass} href={`mailto:${CONTACT_EMAIL}`}>
-                    {CONTACT_EMAIL}
-                  </a>
-                  .
-                </p>
+                {body && (
+                  <p className="text-daw-text leading-relaxed">{body}</p>
+                )}
+                {list && (
+                  <ul className="list-disc list-inside text-daw-text leading-relaxed space-y-1">
+                    {list.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                )}
               </section>
-            </div>
-          </article>
-        </main>
-        <Footer />
-        <NavBar />
-      </div>
-    </>
+            ))}
+
+            <section className="mb-6 break-inside-avoid">
+              <h2 className="font-mono text-accent uppercase tracking-widest text-[12px] mb-2">
+                Inquiries
+              </h2>
+              <p className="text-daw-text leading-relaxed">
+                Research, licensing, or technology inquiries require written
+                approval. Direct all inquiries to the Artist at&nbsp;
+                <a className={linkClass} href={`mailto:${CONTACT_EMAIL}`}>
+                  {CONTACT_EMAIL}
+                </a>
+                .
+              </p>
+            </section>
+          </div>
+        </article>
+      </main>
+    </DawShell>
   );
 };
 

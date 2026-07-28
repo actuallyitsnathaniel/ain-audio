@@ -6,10 +6,11 @@ import { useEngine } from "./hooks/useEngine";
 import { useRafLoop } from "./hooks/useRafLoop";
 import { scrollToId } from "./lab-utils";
 
-const NAV = [
+const NAV: { id?: string; path?: string; label: string; num: string }[] = [
   { id: "projects", label: "projects", num: "01" },
   { id: "press", label: "press", num: "02" },
   { id: "contact", label: "contact", num: "03" },
+  { path: "/events", label: "events", num: "04" },
 ];
 
 // Top-bar play/pause + time readout, with a hover tooltip showing the current
@@ -139,9 +140,9 @@ export function TransportBar() {
       <nav className="ml-auto flex gap-0.5 max-[760px]:gap-0">
         {NAV.map((n) => (
           <button
-            key={n.id}
+            key={n.path ?? n.id}
             className="rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap text-dim transition-[color,background] duration-150 hover:bg-panel2 hover:text-daw-text max-[760px]:px-[7px]"
-            onClick={() => goToSection(n.id)}
+            onClick={() => (n.path ? navigate(n.path) : goToSection(n.id!))}
           >
             <span className="mr-0.5 text-faint">{n.num}</span> {n.label}
           </button>
