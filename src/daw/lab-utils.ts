@@ -1,17 +1,8 @@
-import { engine } from "./engine";
-import type { Track } from "./data/tracks";
-
 // Smooth-scroll to a section by id, accounting for the fixed transport bar.
 export function scrollToId(id: string) {
   const el = document.getElementById(id);
   if (!el) return;
   window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 64, behavior: "smooth" });
-}
-
-// Load any track into the global lab (from project pages / detail panel).
-export function loadLabEntry(track: Track, jump = true) {
-  void engine.loadTrack(track, { autoplay: true });
-  if (jump) scrollToId("audiolab");
 }
 
 // Shared button styles translated from the prototype's .ab-snap.

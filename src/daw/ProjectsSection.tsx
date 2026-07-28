@@ -2,12 +2,10 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Project } from "./data/projects";
 import { projects } from "./data/projects";
-import { trackForProject } from "./data/tracks";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { RoleChip } from "./components/RoleChip";
 import { SectionHead } from "./components/SectionHead";
 import { TrackSection } from "./components/TrackSection";
-import { loadLabEntry } from "./lab-utils";
 
 function ClipCard({ p, active, onClick }: { p: Project; active: boolean; onClick: () => void }) {
   return (
@@ -38,8 +36,6 @@ function ClipCard({ p, active, onClick }: { p: Project; active: boolean; onClick
 
 const accentBtn =
   "inline-flex items-center gap-[9px] rounded-[3px] border border-accent bg-accent px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap text-[#111] transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--accent)_85%,white)]";
-const ghostBtn =
-  "inline-flex items-center gap-[9px] rounded-[3px] border border-line2 bg-panel px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap transition-[border-color,background] duration-150 hover:border-dim hover:bg-panel2";
 
 // Shared inner content for both the desktop inline panel and the mobile sheet.
 function DetailBody({ p, onAction }: { p: Project; onAction?: () => void }) {
@@ -65,15 +61,6 @@ function DetailBody({ p, onAction }: { p: Project; onAction?: () => void }) {
           }}
         >
           open project page ▸
-        </button>
-        <button
-          className={ghostBtn}
-          onClick={() => {
-            onAction?.();
-            loadLabEntry(trackForProject(p));
-          }}
-        >
-          ▹ send preview to lab
         </button>
       </div>
     </>

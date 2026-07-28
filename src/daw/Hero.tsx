@@ -26,12 +26,6 @@ export function Hero() {
           <div className="flex flex-wrap gap-[10px]">
             <button
               className="inline-flex items-center gap-[9px] rounded-[3px] border border-accent bg-accent px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap text-[#111] transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--accent)_85%,white)]"
-              onClick={() => scrollToId("audiolab")}
-            >
-              <span className="icon-play tiny" /> hear the audio lab
-            </button>
-            <button
-              className="inline-flex items-center gap-[9px] rounded-[3px] border border-line2 bg-panel px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap transition-[border-color,background] duration-150 hover:border-dim hover:bg-panel2"
               onClick={() => scrollToId("projects")}
             >
               browse projects

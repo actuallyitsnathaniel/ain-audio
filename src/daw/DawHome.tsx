@@ -1,6 +1,5 @@
 import { Hero } from "./Hero";
 import { ProjectsSection } from "./ProjectsSection";
-import { AudioLabSection } from "./AudioLabSection";
 import { PressSection } from "./PressSection";
 import { ContactSection } from "./ContactSection";
 
@@ -10,7 +9,6 @@ export function DawHome() {
     <main className="relative z-[1]">
       <Hero />
       <ProjectsSection />
-      <AudioLabSection />
       <PressSection />
       <ContactSection />
     </main>

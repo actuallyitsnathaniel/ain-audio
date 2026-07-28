@@ -9,8 +9,8 @@ const ctaAccent =
 
 export function ContactSection() {
   return (
-    <TrackSection id="contact" label="contact" rail="04">
-      <SectionHead num="04" title="contact" />
+    <TrackSection id="contact" label="contact" rail="03">
+      <SectionHead num="03" title="contact" />
       <div className="flex flex-col items-start gap-[18px] rounded-[4px] border border-line bg-panel p-8">
         <p className="m-0 text-[22px] font-bold">got a record that needs finishing?</p>
         <div className="flex flex-wrap gap-[10px]">
@@ -28,7 +28,10 @@ export function ContactSection() {
           </a>
         </div>
         <p className="m-0 mt-[10px] font-mono text-[11px] text-faint">
-          © {new Date().getFullYear()} nathaniel bowman · audio.actuallyitsnathaniel.com
+          © {new Date().getFullYear()} nathaniel bowman · audio.actuallyitsnathaniel.com ·{" "}
+          <a className="underline underline-offset-2 hover:text-dim" href="/usage-and-ai-policy">
+            usage &amp; ai policy
+          </a>
         </p>
       </div>
     </TrackSection>
