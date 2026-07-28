@@ -31,7 +31,7 @@ function ProjectLab({ p }: { p: Project }) {
             onClick={() => engine.loadTrack(track, { autoplay: true })}
           >
             <span className="icon-play tiny" />{" "}
-            {isPairTrack ? "load mix ↔ master A/B into the lab" : "load preview into the lab"}
+            {isPairTrack ? "load mix ↔ master A/B" : "load preview"}
           </button>
           <span className="font-mono text-[11px] text-faint">
             {isPairTrack

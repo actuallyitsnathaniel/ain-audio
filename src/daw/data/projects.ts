@@ -38,7 +38,7 @@ export const projects: Project[] = [
     roles: ["mastered"],
     art: jlmArt,
     color: "#8E7DE0",
-    desc: "Produced by Day Wave and sounding fantastic before I ever touched it — lots of guitar, sampled drums, and synths. My mastering: specific-band dynamic saturation to bring up highs that were missing from the source, plus very modest punch from classic compression practices. Load it in the lab and A/B the mix against my master — phase-locked, with honest meters.",
+    desc: "Produced by Day Wave and sounding fantastic before I ever touched it — lots of guitar, sampled drums, and synths. My mastering: specific-band dynamic saturation to bring up highs that were missing from the source, plus very modest punch from classic compression practices. Load it up and A/B the mix against my master — phase-locked, with honest meters.",
   },
   {
     id: "riley",
