@@ -1,10 +1,7 @@
-import { useMemo } from "react";
+import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import type { Project } from "./data/projects";
-import { engine } from "./engine";
-import { trackForProject } from "./data/tracks";
 import { discographyFor } from "./data/discography";
-import { useEngine } from "./hooks/useEngine";
 import { RoleChip } from "./components/RoleChip";
 import { PlayButton } from "./components/PlayButton";
 import { TimeReadout } from "./components/TimeReadout";
@@ -15,46 +12,18 @@ import { ABDial } from "./components/audio-lab/ABDial";
 import { LabErrorBanner } from "./components/audio-lab/LabErrorBanner";
 import { lockChip } from "./lab-utils";
 
-// Compact lab player wired to the global engine; loads this project's preview.
+// JLM's phase-locked mix ↔ master A/B player, wired to the global engine.
 function ProjectLab({ p }: { p: Project }) {
-  const eng = useEngine(["state", "track"]);
-  const isCurrent = eng.track && eng.track.id === p.id;
-  const track = useMemo(() => trackForProject(p), [p]);
-  const isPairTrack = track.kind === "pair";
-
-  if (!isCurrent) {
-    return (
-      <div className="mb-5 flex flex-col gap-3 rounded-[4px] border border-line bg-panel p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <button
-            className="inline-flex items-center gap-[9px] rounded-[3px] border border-accent bg-accent px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap text-[#111] transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--accent)_85%,white)]"
-            onClick={() => engine.loadTrack(track, { autoplay: true })}
-          >
-            <span className="icon-play tiny" />{" "}
-            {isPairTrack ? "load mix ↔ master A/B" : "load preview"}
-          </button>
-          <span className="font-mono text-[11px] text-faint">
-            {isPairTrack
-              ? "full record · phase-locked A/B · plays through the global master chain"
-              : "20–30s preview · plays through the global master chain"}
-          </span>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="mb-5 flex flex-col gap-3 rounded-[4px] border border-line bg-panel p-4">
       <div className="flex flex-wrap items-center gap-[14px]">
         <PlayButton />
         <TimeReadout />
-        <span className={lockChip}>
-          ▸ {p.artist} {track.kind === "pair" ? "· mix ↔ master" : "preview"}
-        </span>
+        <span className={lockChip}>▸ {p.artist} · mix ↔ master</span>
       </div>
       <LabErrorBanner />
       <Waveform height={84} />
-      {track.kind === "pair" ? <ABDial /> : null}
+      <ABDial />
       <Spectrum height={64} />
     </div>
   );
@@ -72,7 +41,7 @@ export function DawProjectPage({ project }: { project: Project }) {
     <section
       data-screen-label={"project: " + p.artist}
       className="mx-auto grid max-w-[1280px] grid-cols-[56px_1fr] px-6 pt-[72px] pb-9 max-[760px]:grid-cols-1 max-[760px]:px-4 max-[760px]:pt-14 max-[760px]:pb-6"
-      style={{ "--clip": p.color } as React.CSSProperties}
+      style={{ "--clip": p.color } as CSSProperties}
     >
       <div className="mr-6 border-r border-line pt-2 font-mono text-[11px] tracking-[0.1em] text-faint max-[760px]:hidden">
         ▸
@@ -107,7 +76,7 @@ export function DawProjectPage({ project }: { project: Project }) {
           </div>
         </div>
 
-        <ProjectLab p={p} />
+        {p.id === "jlm" ? <ProjectLab p={p} /> : null}
 
         {p.vimeo ? (
           <div className="mb-5">

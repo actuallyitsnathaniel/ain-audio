@@ -27,7 +27,6 @@ export interface Project {
   color: string;
   desc: string;
   vimeo?: VimeoEmbed[];
-  labNotes?: string;
 }
 
 export const projects: Project[] = [

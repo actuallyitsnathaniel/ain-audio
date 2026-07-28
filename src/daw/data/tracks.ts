@@ -1,9 +1,7 @@
-// ── Lab track descriptors ────────────────────────────────────────────────
-// The Lab is one global "master track" — any entry can be loaded into it.
-// A 'pair' (mix + master) gets the phase-locked A/B dry/wet dial; a 'single'
-// preview plays straight through with metering. Ported from AINTRACKS.
-
-import type { Project } from "./projects";
+// ── Track descriptors ─────────────────────────────────────────────────────
+// The engine plays one global "master track" at a time. A 'pair' (mix + master)
+// gets the phase-locked A/B dry/wet dial; a 'single' plays straight through with
+// metering. Ported from AINTRACKS.
 
 export interface PairTrack {
   id: string;
@@ -53,20 +51,3 @@ export const jlmTrack: PairTrack = {
   art: "/src/assets/images/daw-art/jlm.webp",
   durationHint: 250.2,
 };
-
-export function trackForProject(p: Project): Track {
-  if (p.id === "jlm") return jlmTrack;
-  return {
-    id: p.id,
-    kind: "single",
-    src: "/audio/previews/" + p.id + ".m4a",
-    title: p.artist,
-    subtitle: p.subtitle + " · preview",
-    notes:
-      p.labNotes ||
-      "notes coming soon — this is where i'll share thoughts on this one.",
-    art: p.art,
-    color: p.color,
-    durationHint: 30,
-  };
-}

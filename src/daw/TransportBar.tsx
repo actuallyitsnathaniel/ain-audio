@@ -25,6 +25,9 @@ function MiniTransport() {
       cs = Math.floor((p % 1) * 10);
     ref.current.textContent = m + ":" + String(s).padStart(2, "0") + "." + cs;
   });
+  // Only surface the global transport once JLM is actually engaged (loaded/playing);
+  // it's the only audio, so before that there's nothing to transport.
+  if (!eng.ready) return null;
   const cur = eng.track || jlmTrack;
   return (
     <div className="group relative flex h-8 items-center gap-2.5 rounded-[3px] border border-line bg-inset px-3">
