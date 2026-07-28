@@ -1,20 +1,34 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 
-import { NavBar } from "../components/navbar";
-import Footer from "../components/footer";
-import VideoBG from "../components/video-background";
+import { DawShell } from "../daw/DawShell";
+import { TrackSection } from "../daw/components/TrackSection";
+import { SectionHead } from "../daw/components/SectionHead";
 import SEO from "../components/seo";
 import heroPhoto from "../assets/images/event-photos/ryland-21.jpg";
 import actionPhoto from "../assets/images/event-photos/6-29-19-6.jpg";
 import { fadeUp, stagger } from "../lib/animation";
 
+const ctaAccent =
+  "px-8 py-3 rounded-[3px] border border-accent bg-accent text-[#111] text-lg font-semibold " +
+  "transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--accent)_85%,white)] " +
+  "focus:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+const ctaBtn =
+  "px-8 py-3 rounded-[3px] border border-line2 bg-panel text-dim text-lg font-semibold " +
+  "transition-colors duration-150 hover:border-dim hover:bg-panel2 hover:text-daw-text " +
+  "focus:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+
 // ─── Hero ────────────────────────────────────────────────────────────────────
 
 const Hero = () => (
-  <section className="flex items-center justify-center min-h-screen px-6 pt-24 pb-16">
+  <TrackSection
+    id="hero"
+    label="hero"
+    rail="00"
+    className="min-h-[calc(100vh-52px)] content-start pt-30"
+  >
     <motion.div
-      className="flex flex-col md:flex-row items-center gap-12 max-w-5xl w-full"
+      className="mx-auto flex flex-col md:flex-row items-center gap-12 max-w-5xl w-full"
       initial="hidden"
       animate="visible"
       variants={stagger}
@@ -22,21 +36,22 @@ const Hero = () => (
       {/* Text */}
       <div className="flex flex-col items-center md:items-start gap-6 text-center md:text-left flex-1">
         <motion.p
-          className="text-sm uppercase tracking-widest text-cyan-500 font-light"
+          className="font-mono text-[12px] tracking-[0.08em] text-accent"
           variants={fadeUp}
         >
           DJ · MC · Event Audio Professional
         </motion.p>
         <motion.h1
-          className="text-5xl md:text-7xl font-light lowercase leading-tight"
+          className="text-5xl md:text-7xl font-extrabold tracking-[-0.03em] leading-none"
           variants={fadeUp}
         >
           your event,
           <br />
           perfectly scored.
+          <span className="cursor-blink font-normal text-accent">_</span>
         </motion.h1>
         <motion.p
-          className="text-lg md:text-xl text-white/70 font-light max-w-lg"
+          className="text-lg md:text-xl text-dim max-w-lg"
           variants={fadeUp}
         >
           professional DJ and MC services for weddings, corporate events, and
@@ -44,9 +59,7 @@ const Hero = () => (
         </motion.p>
         <motion.a
           href="mailto:nathanielrbowman@gmail.com?subject=DJ%20%2F%20MC%20Booking%20Inquiry"
-          className="mt-4 px-8 py-3 border border-white/30 text-white text-lg font-light lowercase
-            hover:bg-white hover:text-black transition-colors duration-200
-            focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          className={"mt-4 " + ctaAccent}
           variants={fadeUp}
         >
           book nathaniel
@@ -54,17 +67,17 @@ const Hero = () => (
       </div>
       {/* Photo */}
       <motion.div
-        className="flex-1 w-full max-w-sm md:max-w-none"
+        className="flex-1 w-full max-w-sm md:max-w-none rounded-sm border border-line2 bg-panel p-2"
         variants={fadeUp}
       >
         <img
           src={heroPhoto}
           alt="Nathaniel Bowman running audio at a live event"
-          className="w-full h-120 object-cover object-top grayscale-20"
+          className="w-full h-120 object-cover object-top grayscale-20 rounded-xs"
         />
       </motion.div>
     </motion.div>
-  </section>
+  </TrackSection>
 );
 
 // ─── Services ────────────────────────────────────────────────────────────────
@@ -109,43 +122,38 @@ const services = [
 ];
 
 const Services = () => (
-  <section className="min-h-screen flex flex-col justify-center px-6 py-20 max-w-5xl mx-auto w-full">
+  <TrackSection id="services" label="services" rail="01">
     <motion.div
       initial="hidden"
       whileInView="visible"
       viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
-      className="flex flex-col gap-12"
+      className="flex flex-col gap-8"
     >
-      <motion.h2
-        className="text-5xl font-light lowercase text-center underline"
-        variants={fadeUp}
-      >
-        what i do
-      </motion.h2>
+      <motion.div variants={fadeUp}>
+        <SectionHead num="01" title="what i do" />
+      </motion.div>
       <motion.div
-        className="grid grid-cols-1 md:grid-cols-3 gap-8"
+        className="grid grid-cols-1 md:grid-cols-3 gap-6"
         variants={stagger}
       >
         {services.map((s) => (
           <motion.div
             key={s.title}
-            className="flex flex-col gap-4 border border-white/10 p-8 text-left
-              hover:border-white/30 transition-colors duration-200"
+            className="flex flex-col gap-4 rounded-sm border border-line bg-panel p-8 text-left
+              transition-[border-color,transform] duration-150 hover:-translate-y-0.5 hover:border-line2"
             variants={fadeUp}
           >
-            <span className="text-3xl">{s.icon}</span>
-            <h3 className="text-2xl font-light lowercase">{s.title}</h3>
-            <p className="text-white/70 font-light text-sm leading-relaxed">
-              {s.description}
-            </p>
+            <span className="text-3xl text-accent">{s.icon}</span>
+            <h3 className="text-2xl font-bold">{s.title}</h3>
+            <p className="text-dim text-sm leading-relaxed">{s.description}</p>
             <ul className="mt-2 flex flex-col gap-2">
               {s.details.map((d) => (
                 <li
                   key={d}
-                  className="text-sm font-light text-white/50 flex items-center gap-2"
+                  className="text-sm text-faint flex items-center gap-2"
                 >
-                  <span className="text-cyan-500">—</span> {d}
+                  <span className="text-accent">—</span> {d}
                 </li>
               ))}
             </ul>
@@ -153,14 +161,14 @@ const Services = () => (
         ))}
       </motion.div>
     </motion.div>
-  </section>
+  </TrackSection>
 );
 
 // ─── Photo Divider ───────────────────────────────────────────────────────────
 
 const PhotoDivider = () => (
   <motion.div
-    className="w-full mx-auto min-h-screen"
+    className="w-full mx-auto min-h-screen border-y border-line"
     initial={{ opacity: 0 }}
     whileInView={{ opacity: 1 }}
     exit={{ opacity: 0 }}
@@ -204,45 +212,39 @@ const steps = [
 ];
 
 const HowItWorks = () => (
-  <section className="min-h-screen flex flex-col justify-center px-6 py-20 w-full bg-white/2">
+  <TrackSection id="how-it-works" label="how it works" rail="02">
     <motion.div
       initial="hidden"
       whileInView="visible"
       viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
-      className="flex flex-col gap-12 max-w-4xl mx-auto"
+      className="flex flex-col gap-8"
     >
-      <motion.h2
-        className="text-5xl font-light lowercase text-center underline"
-        variants={fadeUp}
-      >
-        how it works
-      </motion.h2>
+      <motion.div variants={fadeUp}>
+        <SectionHead num="02" title="how it works" />
+      </motion.div>
       <motion.div
-        className="flex flex-col md:flex-row gap-8 md:gap-4"
+        className="flex flex-col md:flex-row gap-4"
         variants={stagger}
       >
-        {steps.map((step, i) => (
+        {steps.map((step) => (
           <motion.div
             key={step.number}
-            className="flex-1 flex flex-col gap-3 text-center px-4"
+            className="flex-1 flex flex-col gap-3 text-center rounded-sm border border-line bg-panel p-6"
             variants={fadeUp}
           >
-            <span className="text-5xl font-light text-white/20">
+            <span className="font-mono text-4xl font-bold text-faint">
               {step.number}
             </span>
-            <h3 className="text-xl font-light lowercase">{step.title}</h3>
-            <p className="text-white/60 font-light text-sm leading-relaxed">
+            <h3 className="text-xl font-bold">{step.title}</h3>
+            <p className="text-dim text-sm leading-relaxed">
               {step.description}
             </p>
-            {i < steps.length - 1 && (
-              <div className="hidden md:block absolute" />
-            )}
           </motion.div>
         ))}
       </motion.div>
     </motion.div>
-  </section>
+  </TrackSection>
 );
 
 // ─── Reviews ─────────────────────────────────────────────────────────────────
@@ -260,7 +262,7 @@ const reviews = [
 
 const Stars = () => (
   <span
-    className="text-cyan-500 text-lg tracking-wider"
+    className="text-accent text-lg tracking-wider"
     aria-label="5 out of 5 stars"
   >
     ★★★★★
@@ -268,22 +270,16 @@ const Stars = () => (
 );
 
 const Reviews = () => (
-  <section className="min-h-screen flex flex-col justify-center px-6 py-20 max-w-5xl mx-auto w-full">
+  <TrackSection id="reviews" label="reviews" rail="03">
     <motion.div
       initial="hidden"
       whileInView="visible"
       viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
-      className="flex flex-col gap-12"
+      className="flex flex-col gap-8"
     >
-      <motion.div
-        className="flex flex-col items-center gap-2"
-        variants={fadeUp}
-      >
-        <h2 className="text-5xl font-light lowercase text-center underline">
-          what clients say
-        </h2>
-        <p className="text-white/50 font-light text-sm">5.0 · 4 reviews</p>
+      <motion.div variants={fadeUp}>
+        <SectionHead num="03" title="what clients say" sub="5.0 · 1 review" />
       </motion.div>
       <motion.div
         className="grid grid-cols-1 md:grid-cols-2 gap-6"
@@ -292,30 +288,32 @@ const Reviews = () => (
         {reviews.map((r, i) => (
           <motion.div
             key={i}
-            className="flex flex-col gap-4 border border-white/10 p-8 text-left"
+            className="flex flex-col gap-4 rounded-sm border border-line bg-panel p-8 text-left"
             variants={fadeUp}
           >
             <Stars />
-            <p className="text-white/80 font-light text-sm leading-relaxed italic">
+            <p className="text-daw-text text-sm leading-relaxed italic">
               &ldquo;{r.quote}&rdquo;
             </p>
-            <div className="mt-auto pt-4 border-t border-white/10 flex justify-between items-end">
+            <div className="mt-auto pt-4 border-t border-line flex justify-between items-end">
               <div className="flex flex-col gap-0.5">
-                <span className="text-sm font-light">{r.name}</span>
-                <span className="text-xs text-white/50 lowercase">
+                <span className="text-sm font-semibold">{r.name}</span>
+                <span className="font-mono text-xs text-faint">
                   {r.eventType}
                 </span>
               </div>
               <div className="flex flex-col items-end gap-0.5">
-                <span className="text-xs text-white/40">{r.date}</span>
-                <span className="text-xs text-cyan-500/80">{r.platform}</span>
+                <span className="font-mono text-xs text-faint">{r.date}</span>
+                <span className="font-mono text-xs text-accent">
+                  {r.platform}
+                </span>
               </div>
             </div>
           </motion.div>
         ))}
       </motion.div>
     </motion.div>
-  </section>
+  </TrackSection>
 );
 
 // ─── FAQ ─────────────────────────────────────────────────────────────────────
@@ -351,17 +349,17 @@ const FAQItem = ({ q, a }: { q: string; a: string }) => {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="border-b border-white/10">
+    <div className="border-b border-line">
       <button
         className="w-full flex justify-between items-center py-5 text-left gap-4
-          hover:text-white/80 transition-colors duration-150
-          focus:outline-none focus-visible:underline focus-visible:decoration-white focus-visible:underline-offset-4"
+          hover:text-dim transition-colors duration-150
+          focus:outline-none focus-visible:underline focus-visible:decoration-daw-text focus-visible:underline-offset-4"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >
-        <span className="text-base font-light lowercase">{q}</span>
+        <span className="text-base font-semibold">{q}</span>
         <span
-          className={`text-cyan-500 text-xl leading-none transition-transform duration-200 ${
+          className={`text-accent text-xl leading-none transition-transform duration-200 ${
             open ? "rotate-45" : "rotate-0"
           }`}
         >
@@ -370,7 +368,7 @@ const FAQItem = ({ q, a }: { q: string; a: string }) => {
       </button>
       {open && (
         <motion.p
-          className="pb-5 text-sm text-white/60 font-light leading-relaxed"
+          className="pb-5 text-sm text-dim leading-relaxed"
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.2 }}
@@ -383,44 +381,44 @@ const FAQItem = ({ q, a }: { q: string; a: string }) => {
 };
 
 const FAQ = () => (
-  <section className="min-h-screen flex flex-col justify-center px-6 py-20 w-full bg-white/2">
+  <TrackSection id="faq" label="faq" rail="04">
     <motion.div
       initial="hidden"
       whileInView="visible"
       viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
-      className="flex flex-col gap-10 max-w-2xl mx-auto"
+      className="flex flex-col gap-6 max-w-2xl mx-auto"
     >
-      <motion.h2
-        className="text-5xl font-light lowercase text-center underline"
-        variants={fadeUp}
-      >
-        faq
-      </motion.h2>
+      <motion.div variants={fadeUp}>
+        <SectionHead num="04" title="faq" />
+      </motion.div>
       <motion.div variants={fadeUp}>
         {faqs.map((item) => (
           <FAQItem key={item.q} {...item} />
         ))}
       </motion.div>
     </motion.div>
-  </section>
+  </TrackSection>
 );
 
 // ─── Booking CTA ─────────────────────────────────────────────────────────────
 
 const BookingCTA = () => (
-  <section className="min-h-screen flex flex-col items-center justify-center text-center px-6 py-24 gap-8">
+  <TrackSection id="booking" label="book" rail="05">
     <motion.div
       initial="hidden"
       whileInView="visible"
       viewport={{ once: false, margin: "-80px" }}
       variants={stagger}
-      className="flex flex-col items-center gap-6 max-w-xl"
+      className="flex flex-col items-center text-center gap-6 max-w-xl mx-auto py-16"
     >
-      <motion.h2 className="text-5xl font-light lowercase" variants={fadeUp}>
+      <motion.h2
+        className="text-4xl md:text-5xl font-extrabold tracking-[-0.02em]"
+        variants={fadeUp}
+      >
         ready to book?
       </motion.h2>
-      <motion.p className="text-white/60 font-light" variants={fadeUp}>
+      <motion.p className="text-dim" variants={fadeUp}>
         reach out with your event date, venue, and any details you have — i'll
         get back to you within 24 hours.
       </motion.p>
@@ -430,9 +428,7 @@ const BookingCTA = () => (
       >
         <a
           href="mailto:nathanielrbowman@gmail.com?subject=DJ%20%2F%20MC%20Booking%20Inquiry"
-          className="px-8 py-3 border border-white/30 text-white text-lg font-light lowercase
-            hover:bg-white hover:text-black transition-colors duration-200
-            focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          className={ctaAccent}
         >
           email me
         </a>
@@ -440,22 +436,27 @@ const BookingCTA = () => (
           href="https://instagram.com/actuallyitsnathaniel"
           target="_blank"
           rel="noopener noreferrer"
-          className="px-8 py-3 border border-white/10 text-white/70 text-lg font-light lowercase
-            hover:border-white/30 hover:text-white transition-colors duration-200
-            focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          className={ctaBtn}
         >
           instagram
         </a>
       </motion.div>
+      <motion.p
+        variants={fadeUp}
+        className="font-mono text-[11px] text-faint mt-2"
+      >
+        © {new Date().getFullYear()} nathaniel bowman ·
+        audio.actuallyitsnathaniel.com/events
+      </motion.p>
     </motion.div>
-  </section>
+  </TrackSection>
 );
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 const Events = () => {
   return (
-    <>
+    <DawShell>
       <SEO
         title="DJ & MC Services — Weddings & Events | actuallyitsnathaniel"
         description="Professional DJ and MC services for weddings, corporate events, and private parties in Los Angeles and Southern California. 5-star reviews, fully insured, custom playlists."
@@ -501,8 +502,7 @@ const Events = () => {
           },
         }}
       />
-      <div className="flex flex-col w-full text-center font-light *:text-white">
-        <VideoBG />
+      <main className="relative z-1">
         <Hero />
         <Services />
         <PhotoDivider />
@@ -510,10 +510,8 @@ const Events = () => {
         <Reviews />
         <FAQ />
         <BookingCTA />
-        <Footer />
-        <NavBar />
-      </div>
-    </>
+      </main>
+    </DawShell>
   );
 };
 
