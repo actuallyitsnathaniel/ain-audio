@@ -136,7 +136,7 @@ function DetailSheet({ p, onClose }: { p: Project; onClose: () => void }) {
       >
         {/* accent strip + grab handle */}
         <div className="h-[5px] bg-[var(--clip)]" />
-        <div className="sticky top-0 z-[1] flex items-center justify-between bg-panel/95 px-4 pt-3 pb-2 backdrop-blur">
+        <div className="sticky top-0 z-[1] flex items-center justify-between bg-panel/95 px-4 pt-3 pb-2 backdrop-blur-sm">
           <span className="mx-auto h-1 w-10 rounded-full bg-line2" />
           <button
             className="absolute top-2 right-3 flex h-8 w-8 items-center justify-center rounded-[4px] border border-line2 text-dim transition-colors hover:border-dim hover:text-daw-text"

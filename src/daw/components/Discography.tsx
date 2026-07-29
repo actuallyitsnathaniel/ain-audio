@@ -102,7 +102,7 @@ function ReleaseLightbox({ d, onClose }: { d: DiscoEntry; onClose: () => void })
       />
       <div className="relative max-h-[90vh] w-full max-w-[420px] overflow-y-auto rounded-[8px] border border-line2 bg-panel motion-safe:animate-[fade-in_.2s_ease]">
         <button
-          className="absolute top-2 right-2 z-[1] flex h-8 w-8 items-center justify-center rounded-[4px] border border-line2 bg-panel/80 text-dim backdrop-blur transition-colors hover:border-dim hover:text-daw-text"
+          className="absolute top-2 right-2 z-[1] flex h-8 w-8 items-center justify-center rounded-[4px] border border-line2 bg-panel/80 text-dim backdrop-blur-sm transition-colors hover:border-dim hover:text-daw-text"
           aria-label="close"
           onClick={onClose}
         >

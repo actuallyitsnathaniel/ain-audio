@@ -30,8 +30,27 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true },
       ],
-      // catches dead/unknown classes like the v3 `bg-opacity-50` that broke discography
-      "better-tailwindcss/no-unknown-classes": "error",
+      // catches dead/unknown classes like the v3 `bg-opacity-50` that broke discography.
+      // `ignore` allowlists the plain-CSS escape-hatch classes hand-authored in index.css
+      // (see DESIGN.md) — the plugin only knows Tailwind's own utilities, not these.
+      "better-tailwindcss/no-unknown-classes": [
+        "error",
+        {
+          ignore: [
+            "^animate-appear$",
+            "^animate-appear-slow$",
+            "^cursor-blink$",
+            "^fx-scroll$",
+            "^icon-pause$",
+            "^icon-play$",
+            "^play-spinner$",
+            "^scrollbar-hide$",
+            "^small$",
+            "^tiny$",
+            "^tbar-bg$",
+          ],
+        },
+      ],
       "better-tailwindcss/no-deprecated-classes": "error",
     },
   }
