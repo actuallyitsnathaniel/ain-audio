@@ -10,9 +10,9 @@ export function SectionHead({
   sub?: string;
 }) {
   return (
-    <div className="mb-[22px] flex items-baseline gap-3">
+    <div className="mb-5.5 flex items-baseline gap-3">
       <span
-        className="h-[10px] w-[10px] flex-none self-center rounded-[2px]"
+        className="size-2.5  flex-none self-center rounded-xs"
         style={{ background: color || "var(--accent)" }}
       />
       <span className="font-mono text-[11px] tracking-[0.12em] whitespace-nowrap text-faint">{num}</span>

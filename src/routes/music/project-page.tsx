@@ -13,7 +13,7 @@ const ProjectPage = () => {
   if (!project) {
     return (
       <DawShell>
-        <main className="relative z-[1] flex min-h-screen flex-col items-center justify-center text-daw-text">
+        <main className="relative z-1 flex min-h-screen flex-col items-center justify-center text-daw-text">
           <h1 className="mb-4 text-4xl font-bold">Project Not Found</h1>
           <Link to="/" className="font-mono text-accent hover:underline">
             ◂ back to session
@@ -38,7 +38,7 @@ const ProjectPage = () => {
           url: `${SITE}/projects/${project.id}`,
         }}
       />
-      <main className="relative z-[1]">
+      <main className="relative z-1">
         <DawProjectPage project={project} />
       </main>
     </DawShell>

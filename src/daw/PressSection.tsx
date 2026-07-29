@@ -10,7 +10,7 @@ export function PressSection() {
         {press.map((pr) => (
           <a
             key={pr.href}
-            className="flex flex-col gap-[6px] rounded-[4px] border border-line bg-panel px-[22px] py-5 no-underline transition-[border-color,transform] duration-150 hover:-translate-y-[2px] hover:border-line2"
+            className="flex flex-col gap-1.5 rounded-sm border border-line bg-panel px-5.5 py-5 no-underline transition-[border-color,transform] duration-150 hover:-translate-y-0.5 hover:border-line2"
             href={pr.href}
             target="_blank"
             rel="noopener noreferrer"

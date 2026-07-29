@@ -31,17 +31,17 @@ export function LevelMeter({
 
   return (
     <div className="flex flex-col items-center gap-1">
-      <div className="relative h-[130px] w-4 overflow-hidden rounded-[2px] border border-line bg-[#0e0e11]">
+      <div className="relative h-32.5 w-4 overflow-hidden rounded-xs border border-line bg-[#0e0e11]">
         <div
           ref={rmsRef}
-          className="absolute right-0 bottom-0 left-0 h-0 bg-gradient-to-t from-accent to-[color-mix(in_srgb,var(--accent)_55%,white)] transition-[height] duration-[60ms] ease-linear"
+          className="absolute inset-x-0 bottom-0  h-0 bg-linear-to-t from-accent to-[color-mix(in_srgb,var(--accent)_55%,white)] transition-[height] duration-60 ease-linear"
         />
-        <div ref={peakRef} className="absolute right-0 bottom-0 left-0 h-[1.5px] bg-white/85" />
+        <div ref={peakRef} className="absolute inset-x-0 bottom-0  h-[1.5px] bg-white/85" />
       </div>
       <div ref={readRef} className="font-mono text-[10.5px] text-daw-text">
         −∞
       </div>
-      <div className="font-mono text-[9.5px] tracking-[0.1em] text-dim">{label}</div>
+      <div className="font-mono text-[9.5px] tracking-widest text-dim">{label}</div>
     </div>
   );
 }

@@ -57,7 +57,7 @@ export function Hero() {
             alt="Nathaniel Bowman"
             className="aspect-square w-full rounded-xs object-cover saturate-[0.85]"
           />
-          {/* <div className="absolute bottom-4 left-4 rounded-[2px] border border-line2 bg-[rgba(8,8,10,0.85)] px-2 py-[3px] font-mono text-[10px] tracking-[0.08em] text-dim">
+          {/* <div className="absolute bottom-4 left-4 rounded-xs border border-line2 bg-[rgba(8,8,10,0.85)] px-2 py-0.75 font-mono text-[10px] tracking-[0.08em] text-dim">
             input 01 · me
           </div> */}
         </div>

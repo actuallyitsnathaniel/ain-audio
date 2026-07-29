@@ -23,7 +23,7 @@ function PlayStop() {
   const playing = engine.sequencePlaying;
   return (
     <button
-      className={(playing ? abSnapActive : abSnap) + " flex items-center gap-2 px-[12px] py-[6px] text-[11px]"}
+      className={(playing ? abSnapActive : abSnap) + " flex items-center gap-2 px-3 py-1.5 text-[11px]"}
       onClick={() => engine.toggleSequence()}
     >
       <span className={playing ? "icon-pause small" : "icon-play small"} aria-hidden />
@@ -76,13 +76,13 @@ export function RollLab() {
           —
         </span>
         <button
-          className={(eng.loopOn ? abSnapActive : abSnap) + " px-[10px] py-[5px] text-[10.5px]"}
+          className={(eng.loopOn ? abSnapActive : abSnap) + " px-2.5 py-1.25 text-[10.5px]"}
           onClick={() => engine.setLoop(!eng.loopOn)}
           title="loop the phrase"
         >
           loop
         </button>
-        <button className={abSnap + " px-[10px] py-[5px] text-[10.5px]"} onClick={resetPhrase} title="restore the preset's default phrase">
+        <button className={abSnap + " px-2.5 py-1.25 text-[10.5px]"} onClick={resetPhrase} title="restore the preset's default phrase">
           reset
         </button>
         <span className="ml-auto flex items-center gap-2">
@@ -102,9 +102,9 @@ export function RollLab() {
 
   return (
     <LabPanel title="PIANO ROLL" controls={controls}>
-      <div ref={wrapRef} className="flex flex-col gap-[10px]">
+      <div ref={wrapRef} className="flex flex-col gap-2.5">
       <PianoRoll />
-      <div className="flex flex-col gap-[3px] font-mono text-[10.5px] leading-[1.55] tracking-[0.03em] text-faint">
+      <div className="flex flex-col gap-0.75 font-mono text-[10.5px] leading-[1.55] tracking-[0.03em] text-faint">
         <span>
           <span className="text-dim">draw / select</span> · click empty to draw · click a note to select · shift+click
           to add · drag empty for a marquee · double-click / right-click to delete · tap left keys to hear

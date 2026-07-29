@@ -65,14 +65,14 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
   const tab = (v: "seq" | "roll", label: string) => (
     <button
       onClick={() => setView(v)}
-      className={"rounded-[3px] px-[9px] py-[3px] font-mono text-[9px] tracking-[0.08em] transition-colors " + (view === v ? "bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] text-accent" : "text-faint hover:text-dim")}
+      className={"rounded-[3px] px-2.25 py-0.75 font-mono text-[9px] tracking-[0.08em] transition-colors " + (view === v ? "bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] text-accent" : "text-faint hover:text-dim")}
     >
       {label}
     </button>
   );
   return (
-    <div className="flex flex-col gap-[8px] rounded-[4px] border border-line bg-[#0e0e12] p-[10px]">
-      <div className="flex items-center gap-[8px]">
+    <div className="flex flex-col gap-2 rounded-sm border border-line bg-[#0e0e12] p-2.5">
+      <div className="flex items-center gap-2">
         <span className="font-mono text-[10px] tracking-[0.08em] text-faint">DRUMS</span>
         {/* per-clip kit picker — switching kits re-voices the same pattern (lane ids match) */}
         <span className="relative inline-flex items-center">
@@ -80,21 +80,21 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
             value={pat.kitId || engine.kit.id}
             onChange={(e) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: { ...pat, kitId: e.target.value }, notes })}
             aria-label="kit"
-            className="cursor-pointer appearance-none rounded-[2px] border border-line2 bg-panel2 py-[2px] pr-[16px] pl-[6px] font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
+            className="cursor-pointer appearance-none rounded-xs border border-line2 bg-panel2 py-0.5 pr-4 pl-1.5 font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
           >
             {KITS.map((k) => (
               <option key={k.id} value={k.id} className="bg-panel2">{k.name}</option>
             ))}
           </select>
-          <span className="pointer-events-none absolute right-[4px] text-[7px] text-faint">▼</span>
+          <span className="pointer-events-none absolute right-1 text-[7px] text-faint">▼</span>
         </span>
         {/* pattern length — the grid scrolls, so any bar count stays editable */}
-        <label className="flex items-center gap-[4px] font-mono text-[9px] text-faint">
+        <label className="flex items-center gap-1 font-mono text-[9px] text-faint">
           <select
             value={patBars}
             onChange={(e) => setBars(Number(e.target.value))}
             aria-label="pattern length (bars)"
-            className="cursor-pointer appearance-none rounded-[2px] border border-line2 bg-panel2 px-[6px] py-[2px] font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
+            className="cursor-pointer appearance-none rounded-xs border border-line2 bg-panel2 px-1.5 py-0.5 font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
           >
             {barOpts.map((b) => (
               <option key={b} value={b} className="bg-panel2">{b}</option>
@@ -103,7 +103,7 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
           bars
         </label>
         <SwingKnob trackId={trackId} clipId={clipId} value={swing} />
-        <span className="ml-auto flex items-center gap-[3px] rounded-[3px] border border-line p-[2px]">
+        <span className="ml-auto flex items-center gap-0.75 rounded-[3px] border border-line p-0.5">
           {tab("seq", "sequence")}
           {tab("roll", "piano roll")}
         </span>
@@ -135,7 +135,7 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
   if (clip.content.kind === "midi") {
     const midi = clip.content; // narrow
     return (
-      <div className="flex flex-col gap-[8px] rounded-[4px] border border-line bg-[#0e0e12] p-[10px]">
+      <div className="flex flex-col gap-2 rounded-sm border border-line bg-[#0e0e12] p-2.5">
         <div className="flex items-center justify-between">
           <span className="font-mono text-[10px] tracking-[0.08em] text-faint">CLIP · {clip.name || "midi"}</span>
           <SwingKnob trackId={trackId} clipId={clipId} value={clip.swing} />
@@ -158,7 +158,7 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
   // audio: import a file, trim it, set its level
   const audio = clip.content; // narrow (kind === "audio")
   return (
-    <div className="flex flex-col gap-[8px] rounded-[4px] border border-line bg-[#0e0e12] p-[10px]">
+    <div className="flex flex-col gap-2 rounded-sm border border-line bg-[#0e0e12] p-2.5">
       <span className="font-mono text-[10px] tracking-[0.08em] text-faint">CLIP · {clip.name || "audio"}</span>
       <AudioClipEditor content={audio} looping={engine.audioClipLoops(clip)} onCommit={(c) => engine.setClipContent(trackId, clipId, c)} />
     </div>

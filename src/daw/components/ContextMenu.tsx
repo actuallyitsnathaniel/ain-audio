@@ -62,14 +62,16 @@ export function ContextMenu() {
       ref={ref}
       onContextMenu={(e) => e.preventDefault()}
       style={{ left: pos.x, top: pos.y }}
-      className="fixed z-[70] min-w-[176px] overflow-hidden rounded-[5px] border border-line2 bg-panel py-[4px] shadow-[0_14px_44px_rgba(0,0,0,0.55)]"
+      className="fixed z-70 min-w-44 overflow-hidden rounded-[5px] border border-line2 bg-panel py-1 shadow-[0_14px_44px_rgba(0,0,0,0.55)]"
     >
       {req.title && (
-        <div className="px-[11px] pt-[3px] pb-[5px] font-mono text-[9px] tracking-[0.1em] text-faint uppercase">{req.title}</div>
+        <div className="px-2.75 pt-0.75 pb-1.25 font-mono text-[9px] tracking-widest text-faint uppercase">
+          {req.title}
+        </div>
       )}
       {req.items.map((it, i) =>
         it.separator ? (
-          <div key={i} className="my-[3px] h-px bg-line" />
+          <div key={i} className="my-0.75 h-px bg-line" />
         ) : (
           <button
             key={i}
@@ -79,7 +81,7 @@ export function ContextMenu() {
               it.onClick?.();
             }}
             className={
-              "flex w-full items-center justify-between gap-[14px] px-[11px] py-[5px] text-left font-mono text-[11px] tracking-[0.02em] transition-colors " +
+              "flex w-full items-center justify-between gap-3.5 px-2.75 py-1.25 text-left font-mono text-[11px] tracking-[0.02em] transition-colors " +
               (it.disabled
                 ? "text-faint opacity-40"
                 : it.danger
@@ -88,7 +90,9 @@ export function ContextMenu() {
             }
           >
             <span>{it.label}</span>
-            {it.hint && <span className="text-[9px] text-faint">{it.hint}</span>}
+            {it.hint && (
+              <span className="text-[9px] text-faint">{it.hint}</span>
+            )}
           </button>
         ),
       )}

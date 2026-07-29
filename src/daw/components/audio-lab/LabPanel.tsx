@@ -26,7 +26,7 @@ export function LabPanel({
       <button
         onClick={() => !floating && setOpen((o) => !o)}
         aria-label={(open ? "collapse " : "expand ") + title}
-        className="flex items-center gap-[7px] font-mono text-[10.5px] tracking-[0.1em] whitespace-nowrap text-daw-text transition-colors hover:text-accent"
+        className="flex items-center gap-1.75 font-mono text-[10.5px] tracking-widest whitespace-nowrap text-daw-text transition-colors hover:text-accent"
       >
         {!floating && <span className="text-[27px] leading-none text-faint">{open ? "▾" : "▸"}</span>}
         {title}
@@ -37,7 +37,7 @@ export function LabPanel({
           onClick={() => setFloating(true)}
           title="pop out into a floating window"
           aria-label={"pop out " + title}
-          className="ml-auto rounded-[3px] border border-line px-[7px] py-[3px] font-mono text-[10px] text-faint transition-colors hover:border-accent hover:text-accent"
+          className="ml-auto rounded-[3px] border border-line px-1.75 py-0.75 font-mono text-[10px] text-faint transition-colors hover:border-accent hover:text-accent"
         >
           ▱
         </button>
@@ -46,7 +46,7 @@ export function LabPanel({
   );
 
   return (
-    <div className="flex flex-col gap-[10px] border-t border-line pt-[14px]">
+    <div className="flex flex-col gap-2.5 border-t border-line pt-3.5">
       {header}
       {floating ? (
         <span className="font-mono text-[10px] tracking-[0.03em] text-faint">
@@ -60,7 +60,7 @@ export function LabPanel({
       )}
       {floating && (
         <FloatingWindow id={title} title={title} onDock={() => setFloating(false)}>
-          {controls && <div className="mb-[10px] flex flex-wrap items-center gap-3">{controls}</div>}
+          {controls && <div className="mb-2.5 flex flex-wrap items-center gap-3">{controls}</div>}
           {children}
         </FloatingWindow>
       )}

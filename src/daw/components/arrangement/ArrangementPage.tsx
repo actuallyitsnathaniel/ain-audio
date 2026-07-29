@@ -25,7 +25,7 @@ import type { ArrTrack, TrackKind } from "../../data/arrangement";
 const HEAD_H = 22; // must match Timeline
 const ROW_H = 64; // must match Timeline ROW_H
 const chip = (active: boolean, danger?: boolean) =>
-  "rounded-[3px] border px-[6px] py-[2px] font-mono text-[9px] tracking-[0.05em] transition-colors " +
+  "rounded-[3px] border px-1.5 py-0.5 font-mono text-[9px] tracking-[0.05em] transition-colors " +
   (active
     ? danger
       ? "border-[color-mix(in_srgb,#e0654f_60%,transparent)] bg-[color-mix(in_srgb,#e0654f_22%,transparent)] text-[#e98c79]"
@@ -38,7 +38,7 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
   const hasFx = !!t.devices?.length;
   return (
     <div
-      className={"flex flex-col justify-center gap-[4px] border-b border-line px-[8px] transition-colors " + (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")}
+      className={"flex flex-col justify-center gap-1 border-b border-line px-2 transition-colors " + (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")}
       style={{ height: ROW_H }}
       onPointerDown={(e) => {
         // click the header background (not a button/input/knob/fader) → select the track
@@ -65,7 +65,7 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
         });
       }}
     >
-      <div className="flex items-center gap-[5px]">
+      <div className="flex items-center gap-1.25">
         {editing ? (
           <input
             autoFocus
@@ -78,10 +78,10 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
               if (e.key === "Enter") e.currentTarget.blur();
               if (e.key === "Escape") setEditing(false);
             }}
-            className="w-[80px] rounded-[2px] border border-accent bg-panel2 px-[4px] py-[1px] font-mono text-[9px] text-daw-text focus:outline-none"
+            className="w-20 rounded-xs border border-accent bg-panel2 px-1 py-px font-mono text-[9px] text-daw-text focus:outline-none"
           />
         ) : (
-          <button onClick={() => setEditing(true)} className="min-w-[52px] truncate text-left font-mono text-[9.5px] tracking-[0.03em] text-dim transition-colors hover:text-daw-text" title="rename">
+          <button onClick={() => setEditing(true)} className="min-w-13 truncate text-left font-mono text-[9.5px] tracking-[0.03em] text-dim transition-colors hover:text-daw-text" title="rename">
             {t.name}
           </button>
         )}
@@ -90,21 +90,21 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
             arm
           </button>
         )}
-        <span className="ml-auto flex items-center gap-[3px]">
+        <span className="ml-auto flex items-center gap-0.75">
           <button className={chip(t.mute, true)} onClick={() => engine.toggleTrackMute(t.id)} title="mute">
             M
           </button>
           <button className={chip(t.solo)} onClick={() => engine.toggleTrackSolo(t.id)} title="solo">
             S
           </button>
-          <button className="rounded-[3px] border border-line px-[5px] py-[2px] font-mono text-[9px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]" onClick={() => engine.removeTrack(t.id)} title="remove track">
+          <button className="rounded-[3px] border border-line px-1.25 py-0.5 font-mono text-[9px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]" onClick={() => engine.removeTrack(t.id)} title="remove track">
             ✕
           </button>
         </span>
       </div>
       {/* fader + live meter (fills the row) */}
       <TrackFader gain={t.vol} getLevel={() => engine.trackLevel(t.id)} onChange={(g) => engine.setTrackVol(t.id, g)} width={126} />
-      <div className="flex items-center gap-[6px]">
+      <div className="flex items-center gap-1.5">
         <Knob value={t.pan} min={-1} max={1} defaultValue={0} size={20} bipolar onChange={(v) => engine.setTrackPan(t.id, v)} label="" fmt={() => ""} />
         {/* glows ONLY while this track's fx pane is open (the glow = "keys/edits go here";
             a has-devices glow on every track made it easy to edit the wrong one) */}
@@ -115,7 +115,7 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
           <select
             value={t.presetId}
             onChange={(e) => engine.setTrackPreset(t.id, e.target.value)}
-            className="min-w-0 flex-1 cursor-pointer appearance-none rounded-[2px] border border-line2 bg-panel2 px-[4px] py-[1px] font-mono text-[8.5px] text-daw-text hover:border-accent focus:outline-none"
+            className="min-w-0 flex-1 cursor-pointer appearance-none rounded-xs border border-line2 bg-panel2 px-1 py-px font-mono text-[8.5px] text-daw-text hover:border-accent focus:outline-none"
             aria-label="instrument"
           >
             {engine.synthPatches.map((key) => (
@@ -139,8 +139,8 @@ const MASTER_ID = "__master__";
 function MasterHeader({ fxOpen, onFx }: { fxOpen: boolean; onFx: () => void }) {
   const eng = useEngine(["fx"]);
   return (
-    <div className="flex flex-col justify-center gap-[4px] px-[8px]" style={{ height: ROW_H }}>
-      <div className="flex items-center gap-[5px]">
+    <div className="flex flex-col justify-center gap-1 px-2" style={{ height: ROW_H }}>
+      <div className="flex items-center gap-1.25">
         <span className="font-mono text-[9.5px] tracking-[0.03em] text-accent">master</span>
         <span className="font-mono text-[8px] text-faint">bus</span>
         {/* meter tap: pre = program level before the safety limiter; post = final output */}
@@ -165,8 +165,8 @@ function MasterHeader({ fxOpen, onFx }: { fxOpen: boolean; onFx: () => void }) {
 function TrackFxPanel({ t }: { t: ArrTrack }) {
   useEngine(["fx"]);
   return (
-    <div className="border-t border-line pt-[14px]">
-      <div className="mb-[10px] font-mono text-[10.5px] tracking-[0.06em] text-faint">
+    <div className="border-t border-line pt-3.5">
+      <div className="mb-2.5 font-mono text-[10.5px] tracking-[0.06em] text-faint">
         track fx — <span className="text-dim">{t.name}</span> · inserted between the track's volume and pan
       </div>
       <FxChainRack
@@ -352,27 +352,27 @@ export function ArrangementPage() {
   const focusRing = " ring-1 ring-[color-mix(in_srgb,var(--accent)_30%,transparent)]";
 
   return (
-    <main className="relative z-[1] pt-[64px]">
+    <main className="relative z-1 pt-16">
       <TrackSection id="studio" label="studio" rail="05">
         <SectionHead num="05" title="studio" sub="linear timeline · place midi, drum + audio clips on tracks · runs through the fx rack" />
 
-        <div className="flex flex-col gap-[12px] rounded-[5px] border border-line bg-panel p-[16px] max-[767px]:p-[12px]" onPointerDownCapture={() => focusPane("timeline")}>
+        <div className="flex flex-col gap-3 rounded-[5px] border border-line bg-panel p-4 max-[767px]:p-3" onPointerDownCapture={() => focusPane("timeline")}>
           <PlaybackPane />
 
           {/* add-track toolbar (kept OUT of the ruler-aligned strip below) */}
-          <div className="flex flex-wrap items-center gap-[6px]">
-            <span className="font-mono text-[9px] tracking-[0.1em] text-faint">TRACKS</span>
-            <button className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("midi")}>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[9px] tracking-widest text-faint">TRACKS</span>
+            <button className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("midi")}>
               + midi
             </button>
-            <button className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("drum")}>
+            <button className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("drum")}>
               + drum
             </button>
-            <button className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("audio")}>
+            <button className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("audio")}>
               + audio
             </button>
             <button
-              className="ml-auto rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]"
+              className="ml-auto rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]"
               onClick={() => {
                 if (window.confirm("New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?")) {
                   void engine.newProject();
@@ -386,15 +386,15 @@ export function ArrangementPage() {
           </div>
 
           {/* track headers (left) + timeline (right), with the MASTER row pinned below */}
-          <div className={"overflow-hidden rounded-[4px] border border-line" + (editorOpen && paneShown === "timeline" ? focusRing : "")}>
+          <div className={"overflow-hidden rounded-sm border border-line" + (editorOpen && paneShown === "timeline" ? focusRing : "")}>
             <div className="flex">
-              <div className="w-[220px] shrink-0 border-r border-line bg-[#0e0e12]">
+              <div className="w-55 shrink-0 border-r border-line bg-[#0e0e12]">
                 {/* spacer strip aligns the header column with the timeline's ruler */}
                 <div className="border-b border-line" style={{ height: HEAD_H }} />
                 {tracks.map((t) => (
                   <TrackHeader key={t.id} t={t} armed={eng.armedChannel === t.id} selected={eng.selTrackId === t.id} fxOpen={fxTrackId === t.id} onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)} onFx={toggleFx} />
                 ))}
-                {tracks.length === 0 && <div className="p-[10px] font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
+                {tracks.length === 0 && <div className="p-2.5 font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
               </div>
               <div className="min-w-0 flex-1">
                 <Timeline
@@ -409,7 +409,7 @@ export function ArrangementPage() {
             </div>
             {/* MASTER — the mix bus as its own pinned track row (Ableton-style) */}
             <div className="flex border-t border-line">
-              <div className="w-[220px] shrink-0 border-r border-line bg-[color-mix(in_srgb,var(--accent)_7%,#0e0e12)]">
+              <div className="w-55 shrink-0 border-r border-line bg-[color-mix(in_srgb,var(--accent)_7%,#0e0e12)]">
                 <MasterHeader fxOpen={fxTrackId === MASTER_ID} onFx={() => toggleFx(MASTER_ID)} />
               </div>
               <div className="min-w-0 flex-1 bg-[#0c0c10]" />
@@ -419,7 +419,7 @@ export function ArrangementPage() {
           {/* ── EDITOR pane (instrument · clip editor · fx) — clicking here takes key
               focus away from the timeline, so piano-roll keys never move clips ── */}
           {editorOpen && (
-            <div className={"flex flex-col gap-[12px] rounded-[4px]" + (paneShown === "editor" ? focusRing : "")} onPointerDownCapture={() => focusPane("editor")}>
+            <div className={"flex flex-col gap-3 rounded-sm" + (paneShown === "editor" ? focusRing : "")} onPointerDownCapture={() => focusPane("editor")}>
               {/* selected-clip editor (piano roll) sits directly under the timeline */}
               {sel && <ClipEditor trackId={sel.trackId} clipId={sel.clipId} />}
               {/* selected MIDI track's instrument designer (edits that track's patch) */}
@@ -431,8 +431,8 @@ export function ArrangementPage() {
           )}
         </div>
 
-        <div className="mt-[14px] flex items-center gap-3 font-mono text-[10.5px] tracking-[0.03em] text-faint">
-          <Link to="/" className="rounded-[3px] border border-line px-[10px] py-[5px] text-dim transition-colors hover:border-accent hover:text-accent">
+        <div className="mt-3.5 flex items-center gap-3 font-mono text-[10.5px] tracking-[0.03em] text-faint">
+          <Link to="/" className="rounded-[3px] border border-line px-2.5 py-1.25 text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
           <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = move cursor · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize (⌥ = stretch content) · shift-click = multi-select · drag empty = marquee · space play (from cursor) · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · <b>no selection:</b> ←→ move cursor (⌘ fine · ⌘⇧ clip edge) · Home/End · <b>selection:</b> ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>

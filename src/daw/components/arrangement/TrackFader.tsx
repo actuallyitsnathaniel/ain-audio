@@ -97,19 +97,19 @@ export function TrackFader({
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
           onDoubleClick={() => onChange(1)}
-          className="relative h-[14px] cursor-ew-resize touch-none overflow-hidden rounded-[3px] border border-line bg-[#0c0c10]"
+          className="relative h-3.5 cursor-ew-resize touch-none overflow-hidden rounded-[3px] border border-line bg-[#0c0c10]"
           title="drag = level · shift = fine · double-click = unity (0 dB)"
         >
           {/* post-fader RMS meter fill */}
-          <div ref={rmsRef} className="absolute inset-y-0 left-0 w-0 bg-gradient-to-r from-[color-mix(in_srgb,var(--accent)_45%,#0c0c10)] to-accent transition-[width] duration-[50ms] ease-linear" />
+          <div ref={rmsRef} className="absolute inset-y-0 left-0 w-0 bg-linear-to-r from-[color-mix(in_srgb,var(--accent)_45%,#0c0c10)] to-accent transition-[width] duration-50 ease-linear" />
           {/* peak-hold tick */}
           <div ref={peakRef} className="absolute inset-y-0 w-[1.5px] bg-white/80" style={{ left: 0 }} />
           {/* unity gridline */}
           <div className="absolute inset-y-0 w-px bg-white/20" style={{ left: unityPct + "%" }} />
           {/* clip latch (right edge) */}
-          <div ref={clipRef} className="absolute inset-y-0 right-0 w-[3px] bg-[#e0654f] opacity-0 transition-opacity" />
+          <div ref={clipRef} className="absolute inset-y-0 right-0 w-0.75 bg-[#e0654f] opacity-0 transition-opacity" />
           {/* the handle */}
-          <div className="pointer-events-none absolute top-1/2 h-[18px] w-[4px] -translate-x-1/2 -translate-y-1/2 rounded-[1.5px] bg-daw-text shadow-[0_0_3px_rgba(0,0,0,0.6)]" style={{ left: pos * 100 + "%" }} />
+          <div className="pointer-events-none absolute top-1/2 h-4.5 w-1 -translate-1/2  rounded-[1.5px] bg-daw-text shadow-[0_0_3px_rgba(0,0,0,0.6)]" style={{ left: pos * 100 + "%" }} />
         </div>
       </div>
       {/* dB readout — click to type */}
@@ -124,7 +124,7 @@ export function TrackFader({
             if (e.key === "Enter") commitEdit();
             else if (e.key === "Escape") setEditing(false);
           }}
-          className="w-[34px] rounded-[2px] border border-accent bg-inset text-center font-mono text-[8.5px] text-accent outline-none"
+          className="w-8.5 rounded-xs border border-accent bg-inset text-center font-mono text-[8.5px] text-accent outline-none"
           aria-label="level dB"
         />
       ) : (
@@ -134,7 +134,7 @@ export function TrackFader({
             setDraft(fmtDb(lin2db(gain)).replace("−", "-"));
             setEditing(true);
           }}
-          className="w-[34px] cursor-text text-right font-mono text-[8.5px] text-dim tabular-nums"
+          className="w-8.5 cursor-text text-right font-mono text-[8.5px] text-dim tabular-nums"
           title="click to type dB"
         >
           −∞

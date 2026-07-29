@@ -68,14 +68,14 @@ export function PresetKeyboard({ octave, vel }: { octave: number; vel: number })
 
   const ww = 100 / layout.whites;
   return (
-    <div className="relative flex h-[108px] touch-none overflow-hidden rounded-[3px] border border-line bg-inset select-none">
+    <div className="relative flex h-27 touch-none overflow-hidden rounded-[3px] border border-line bg-inset select-none">
       {layout.keys
         .filter((k) => !k.black)
         .map((k) => (
           <div
             key={k.midi}
             className={
-              "relative flex flex-1 cursor-pointer items-end justify-center border-r border-[#1a1a20] pb-[5px] transition-colors duration-[50ms] last:border-r-0 " +
+              "relative flex flex-1 cursor-pointer items-end justify-center border-r border-panel2 pb-1.25 transition-colors duration-50 last:border-r-0 " +
               (active.indexOf(k.midi) >= 0 ? "bg-accent" : "bg-[#d4d4d8]")
             }
             {...keyProps(k.midi)}
@@ -91,7 +91,7 @@ export function PresetKeyboard({ octave, vel }: { octave: number; vel: number })
           <div
             key={k.midi}
             className={
-              "absolute top-0 z-[2] h-[60%] cursor-pointer rounded-b-[2px] border border-t-0 border-black transition-colors duration-[50ms] " +
+              "absolute top-0 z-2 h-[60%] cursor-pointer rounded-b-xs border border-t-0 border-black transition-colors duration-50 " +
               (active.indexOf(k.midi) >= 0 ? "bg-accent" : "bg-[#121215]")
             }
             style={{ left: (k.whiteIdx + 1) * ww - ww * 0.31 + "%", width: ww * 0.62 + "%" }}

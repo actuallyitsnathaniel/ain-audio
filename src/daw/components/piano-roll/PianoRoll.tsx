@@ -1073,7 +1073,7 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
   // lane tab buttons (real DOM, overlaid on the canvas) — sit at the lane's top-left.
   // `bottom` = lane height minus a hair, so they hug the top edge of the lane band.
   const tabBtn = (active: boolean) =>
-    "rounded-[3px] border px-[7px] py-[2px] font-mono text-[10px] leading-none transition-colors " +
+    "rounded-[3px] border px-1.75 py-0.5 font-mono text-[10px] leading-none transition-colors " +
     (active ? "border-accent bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent" : "border-line bg-panel text-faint hover:text-dim");
 
   return (
@@ -1091,7 +1091,7 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
         onKeyDown={onKeyDown}
         onContextMenu={onContextMenu}
       />
-      <div className="pointer-events-none absolute right-[6px] left-[4px] flex items-center gap-[4px]" style={{ bottom: (lane.open ? VEL_H : LANE_TAB_H) - 15 }}>
+      <div className="pointer-events-none absolute right-1.5 left-1 flex items-center gap-1" style={{ bottom: (lane.open ? VEL_H : LANE_TAB_H) - 15 }}>
         <button className={"pointer-events-auto " + tabBtn(lane.mode === "vel")} onClick={() => setLane((l) => ({ ...l, mode: "vel", open: true }))} title="velocity lane">
           vel
         </button>
@@ -1102,7 +1102,7 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
         <select
           value={String(engine.rollSnapBeats)}
           onChange={(e) => engine.setRollSnapBeats(Number(e.target.value))}
-          className="pointer-events-auto ml-[2px] cursor-pointer appearance-none rounded-[3px] border border-line bg-panel px-[5px] py-[2px] font-mono text-[9px] leading-none text-faint transition-colors hover:text-accent focus:outline-none"
+          className="pointer-events-auto ml-0.5 cursor-pointer appearance-none rounded-[3px] border border-line bg-panel px-1.25 py-0.5 font-mono text-[9px] leading-none text-faint transition-colors hover:text-accent focus:outline-none"
           title="note grid (⌘1 finer · ⌘2 coarser while the editor pane is focused)"
           aria-label="note grid"
         >
@@ -1112,7 +1112,7 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
           <option value="0.125">1/32</option>
         </select>
         <button
-          className="pointer-events-auto ml-auto rounded-[3px] border border-line bg-panel px-[6px] py-[2px] font-mono text-[10px] leading-none text-faint transition-colors hover:text-accent"
+          className="pointer-events-auto ml-auto rounded-[3px] border border-line bg-panel px-1.5 py-0.5 font-mono text-[10px] leading-none text-faint transition-colors hover:text-accent"
           onClick={() => setLane((l) => ({ ...l, open: !l.open }))}
           title={lane.open ? "collapse lane" : "expand lane"}
         >
@@ -1123,7 +1123,7 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
           the left so they never cover the automation curve. */}
       {lane.mode === "vib" && lane.open && (
         <div
-          className="pointer-events-auto absolute flex flex-col items-center gap-[6px] rounded-[3px] border border-line bg-panel px-[6px] py-[5px]"
+          className="pointer-events-auto absolute flex flex-col items-center gap-1.5 rounded-[3px] border border-line bg-panel px-1.5 py-1.25"
           style={{ right: "calc(100% + 6px)", bottom: 0 }}
         >
           <Knob size={30} label="speed" value={vibLane()?.rate ?? 5.5} min={0.5} max={12} defaultValue={5.5} onChange={(v) => setVibField("rate", v)} fmt={(v) => v.toFixed(1) + "Hz"} />

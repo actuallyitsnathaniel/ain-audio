@@ -146,7 +146,7 @@ const Services = () => (
           >
             <span className="text-3xl text-accent">{s.icon}</span>
             <h3 className="text-2xl font-bold">{s.title}</h3>
-            <p className="text-dim text-sm leading-relaxed">{s.description}</p>
+            <p className="text-dim text-sm/relaxed ">{s.description}</p>
             <ul className="mt-2 flex flex-col gap-2">
               {s.details.map((d) => (
                 <li
@@ -182,7 +182,7 @@ const PhotoDivider = () => (
     <img
       src={actionPhoto}
       alt="Nathaniel Bowman mixing audio at a live event"
-      className="w-full h-full object-cover grayscale-20"
+      className="size-full  object-cover grayscale-20"
       style={{ objectPosition: "center 75%" }}
     />
   </motion.div>
@@ -237,7 +237,7 @@ const HowItWorks = () => (
               {step.number}
             </span>
             <h3 className="text-xl font-bold">{step.title}</h3>
-            <p className="text-dim text-sm leading-relaxed">
+            <p className="text-dim text-sm/relaxed ">
               {step.description}
             </p>
           </motion.div>
@@ -292,7 +292,7 @@ const Reviews = () => (
             variants={fadeUp}
           >
             <Stars />
-            <p className="text-daw-text text-sm leading-relaxed italic">
+            <p className="text-daw-text text-sm/relaxed  italic">
               &ldquo;{r.quote}&rdquo;
             </p>
             <div className="mt-auto pt-4 border-t border-line flex justify-between items-end">
@@ -368,7 +368,7 @@ const FAQItem = ({ q, a }: { q: string; a: string }) => {
       </button>
       {open && (
         <motion.p
-          className="pb-5 text-sm text-dim leading-relaxed"
+          className="pb-5 text-sm/relaxed text-dim "
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.2 }}

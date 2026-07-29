@@ -15,14 +15,14 @@ export function DeviceShell({
   return (
     <div
       className={
-        "min-w-[136px] rounded-[4px] border bg-panel2 transition-[opacity,border-color] duration-150 " +
+        "min-w-34 rounded-sm border bg-panel2 transition-[opacity,border-color] duration-150 " +
         (on ? "border-line2 opacity-100" : "border-line opacity-[0.78]")
       }
     >
-      <div className="flex items-center gap-2 border-b border-line px-[10px] py-[7px]">
+      <div className="flex items-center gap-2 border-b border-line px-2.5 py-1.75">
         <button
           className={
-            "flex h-4 w-4 items-center justify-center rounded-full border " +
+            "flex size-4 items-center justify-center rounded-full border " +
             (on ? "border-line2" : "border-line2")
           }
           onClick={() => onToggle(!on)}
@@ -30,16 +30,21 @@ export function DeviceShell({
         >
           <span
             className={
-              "h-[6px] w-[6px] rounded-full transition-[background,box-shadow] duration-150 " +
+              "size-1.5 rounded-full transition-[background,box-shadow] duration-150 " +
               (on ? "bg-accent shadow-[0_0_6px_var(--accent)]" : "bg-faint")
             }
           />
         </button>
-        <span className={"font-mono text-[10.5px] tracking-[0.1em] " + (on ? "text-daw-text" : "text-dim")}>
+        <span
+          className={
+            "font-mono text-[10.5px] tracking-widest " +
+            (on ? "text-daw-text" : "text-dim")
+          }
+        >
           {name}
         </span>
       </div>
-      <div className="flex justify-center gap-[10px] px-[10px] py-[12px]">{children}</div>
+      <div className="flex justify-center gap-2.5 px-2.5 py-3">{children}</div>
     </div>
   );
 }

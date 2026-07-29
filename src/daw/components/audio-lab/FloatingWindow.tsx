@@ -87,35 +87,35 @@ export function FloatingWindow({ id, title, onDock, children }: { id: string; ti
   return (
     <div
       style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
-      className="fixed z-[55] flex flex-col overflow-hidden rounded-[6px] border border-line2 bg-panel shadow-[0_18px_56px_rgba(0,0,0,0.55)]"
+      className="fixed z-55 flex flex-col overflow-hidden rounded-md border border-line2 bg-panel shadow-[0_18px_56px_rgba(0,0,0,0.55)]"
     >
       <div
         onPointerDown={onDown("move")}
         onPointerMove={onMove}
         onPointerUp={onUp}
-        className="flex cursor-grab items-center gap-2 border-b border-line bg-panel2 px-[11px] py-[7px] active:cursor-grabbing"
+        className="flex cursor-grab items-center gap-2 border-b border-line bg-panel2 px-2.75 py-1.75 active:cursor-grabbing"
       >
         <span className="text-[9px] text-faint">⠿</span>
-        <span className="font-mono text-[10.5px] tracking-[0.1em] text-daw-text">{title}</span>
+        <span className="font-mono text-[10.5px] tracking-widest text-daw-text">{title}</span>
         <button
           // stop the title-bar drag handler from capturing this press (it would
           // swallow the button's click via pointer capture)
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onDock}
           title="dock back inline"
-          className="ml-auto rounded-[3px] border border-line px-[7px] py-[2px] font-mono text-[9px] text-faint transition-colors hover:border-accent hover:text-accent"
+          className="ml-auto rounded-[3px] border border-line px-1.75 py-0.5 font-mono text-[9px] text-faint transition-colors hover:border-accent hover:text-accent"
         >
           dock
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-[12px]">{children}</div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">{children}</div>
       {/* resize grip (bottom-right) */}
       <div
         onPointerDown={onDown("resize")}
         onPointerMove={onMove}
         onPointerUp={onUp}
         title="resize"
-        className="absolute right-0 bottom-0 h-[16px] w-[16px] cursor-nwse-resize"
+        className="absolute right-0 bottom-0 size-4  cursor-nwse-resize"
         style={{ background: "linear-gradient(135deg, transparent 50%, color-mix(in srgb, var(--accent) 45%, transparent) 50%)" }}
       />
     </div>

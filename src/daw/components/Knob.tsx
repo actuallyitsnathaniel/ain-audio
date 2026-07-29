@@ -88,7 +88,7 @@ export function Knob({
 
   return (
     <div
-      className={"flex flex-col items-center gap-[2px] " + (disabled ? "opacity-[0.38]" : "")}
+      className={"flex flex-col items-center gap-0.5 " + (disabled ? "opacity-[0.38]" : "")}
       style={{ width: size + 16 }}
     >
       <svg
@@ -125,7 +125,7 @@ export function Knob({
             if (e.key === "Enter") commitEdit();
             else if (e.key === "Escape") setEditing(false);
           }}
-          className="w-[52px] rounded-[2px] border border-accent bg-inset text-center font-mono text-[10.5px] text-accent outline-none"
+          className="w-13 rounded-xs border border-accent bg-inset text-center font-mono text-[10.5px] text-accent outline-none"
           aria-label={label + " value"}
         />
       ) : (

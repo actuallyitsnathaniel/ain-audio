@@ -19,14 +19,14 @@ const SIGS: [number, string][] = [
 
 // ── one uniform control system: every button/select/input is 28px tall, same radius,
 //    border, font. `ctl` is the shared base; state helpers only change color. ──
-const ctl = "flex h-[28px] items-center justify-center rounded-[4px] border font-mono text-[10px] transition-colors ";
+const ctl = "flex h-7 items-center justify-center rounded-sm border font-mono text-[10px] transition-colors ";
 const idle = "border-line2 text-dim hover:border-accent hover:text-accent";
 const activeCls = "border-accent bg-accent text-[#111]";
 const onOff = (on: boolean) => (on ? "border-accent text-accent" : "border-line2 text-faint hover:border-accent hover:text-dim");
-const iconBtn = ctl + "w-[30px] "; // square transport buttons
-const px = "px-[10px] "; // standard horizontal padding for text controls
-const fieldSel = ctl + "cursor-pointer appearance-none border-line2 bg-panel2 pl-[8px] pr-[20px] text-daw-text hover:border-accent focus:border-accent focus:outline-none";
-const numIn = "h-[28px] w-[38px] rounded-[4px] border border-line2 bg-panel2 text-center font-mono text-[10px] text-daw-text focus:border-accent focus:outline-none";
+const iconBtn = ctl + "w-7.5 "; // square transport buttons
+const px = "px-2.5 "; // standard horizontal padding for text controls
+const fieldSel = ctl + "cursor-pointer appearance-none border-line2 bg-panel2 pl-2 pr-5 text-daw-text hover:border-accent focus:border-accent focus:outline-none";
+const numIn = "h-7 w-9.5 rounded-sm border border-line2 bg-panel2 text-center font-mono text-[10px] text-daw-text focus:border-accent focus:outline-none";
 const cap = "font-mono text-[9px] tracking-[0.06em] text-faint"; // small caption label
 
 // a select styled to the shared control height, with an aligned caret
@@ -36,7 +36,7 @@ function Select({ value, onChange, title, children }: { value: number; onChange:
       <select value={value} onChange={(e) => onChange(Number(e.target.value))} title={title} className={fieldSel}>
         {children}
       </select>
-      <span className="pointer-events-none absolute top-1/2 right-[7px] -translate-y-1/2 text-[7px] text-faint">▼</span>
+      <span className="pointer-events-none absolute top-1/2 right-1.75 -translate-y-1/2 text-[7px] text-faint">▼</span>
     </span>
   );
 }
@@ -86,9 +86,9 @@ export function PlaybackPane() {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-x-[12px] gap-y-[8px] rounded-[4px] border border-line bg-[#0e0e12] px-[12px] py-[8px]">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-sm border border-line bg-[#0e0e12] px-3 py-2">
       {/* transport buttons */}
-      <div className="flex items-center gap-[4px]">
+      <div className="flex items-center gap-1">
         <button className={iconBtn + idle} onClick={() => engine.returnToStart()} title="return to start (Home)">⏮</button>
         <button className={iconBtn + (playing ? activeCls : idle)} onClick={() => engine.toggleArrangement()} title="play / stop (Space)">
           <span className={playing ? "icon-pause small" : "icon-play small"} aria-hidden />
@@ -97,18 +97,18 @@ export function PlaybackPane() {
       </div>
 
       {/* dual readout */}
-      <div className="flex h-[28px] flex-col justify-center leading-none">
+      <div className="flex h-7 flex-col justify-center leading-none">
         <span ref={barBeat} className="font-mono text-[13px] tabular-nums text-accent">1.1.1</span>
-        <span ref={timeStr} className="mt-[2px] font-mono text-[9px] tabular-nums text-faint">0:00.000</span>
+        <span ref={timeStr} className="mt-0.5 font-mono text-[9px] tabular-nums text-faint">0:00.000</span>
       </div>
 
       {/* loop: toggle + numeric range (bars) */}
-      <div className="flex items-center gap-[5px]">
+      <div className="flex items-center gap-1.25">
         <button className={ctl + px + onOff(!!loop?.on)} onClick={toggleLoop} title="toggle the loop brace (L · or shift+drag the ruler)">
           loop
         </button>
         {loop && (
-          <span className="flex items-center gap-[3px] font-mono text-[9px] text-faint">
+          <span className="flex items-center gap-0.75 font-mono text-[9px] text-faint">
             <input type="number" min={1} value={loopBar(loop.start)} onChange={(e) => setLoopBar("start", Number(e.target.value))} className={numIn} title="loop start (bar)" />
             <span>–</span>
             <input type="number" min={1} value={loopBar(loop.end)} onChange={(e) => setLoopBar("end", Number(e.target.value))} className={numIn} title="loop end (bar)" />
@@ -117,7 +117,7 @@ export function PlaybackPane() {
       </div>
 
       {/* time signature */}
-      <label className="flex items-center gap-[5px]">
+      <label className="flex items-center gap-1.25">
         <span className={cap}>sig</span>
         <Select value={bpb} onChange={(n) => engine.setBeatsPerBar(n)} title="time signature (beats per bar)">
           {SIGS.map(([n, label]) => (
@@ -127,11 +127,11 @@ export function PlaybackPane() {
       </label>
 
       {/* metronome + count-in */}
-      <div className="flex items-center gap-[6px]">
+      <div className="flex items-center gap-1.5">
         <button className={ctl + px + onOff(eng.metronome)} onClick={() => engine.setMetronome(!eng.metronome)} title="metronome click">
           ♩ click
         </button>
-        <label className="flex items-center gap-[5px]">
+        <label className="flex items-center gap-1.25">
           <span className={cap}>count</span>
           <Select value={eng.countInBars} onChange={(n) => engine.setCountInBars(n)} title="count-in bars before playback rolls">
             <option value={0}>off</option>
@@ -142,7 +142,7 @@ export function PlaybackPane() {
       </div>
 
       {/* snap grid */}
-      <label className="flex items-center gap-[5px]">
+      <label className="flex items-center gap-1.25">
         <span className={cap}>snap</span>
         <Select value={eng.snapBeats} onChange={(n) => engine.setSnapBeats(n)} title="clip snap grid (⌘1 finer · ⌘2 coarser)">
           <option value={bpb}>bar</option>
@@ -155,7 +155,7 @@ export function PlaybackPane() {
       </label>
 
       {/* launch quantize — a seek while playing waits for the next boundary */}
-      <label className="flex items-center gap-[5px]">
+      <label className="flex items-center gap-1.25">
         <span className={cap}>launch</span>
         <Select value={eng.launchQuant} onChange={(n) => engine.setLaunchQuant(n)} title="launch quantize: while playing, a jump waits for the next boundary so the phase never breaks">
           <option value={0}>off</option>
@@ -172,7 +172,7 @@ export function PlaybackPane() {
       </button>
 
       {/* tempo + tap */}
-      <span className="ml-auto flex items-center gap-[10px]">
+      <span className="ml-auto flex items-center gap-2.5">
         <button className={ctl + px + idle} onClick={() => engine.tapTempo()} title="tap tempo — hit repeatedly to set the BPM">
           tap
         </button>

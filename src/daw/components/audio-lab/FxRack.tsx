@@ -23,15 +23,15 @@ function LimitLed() {
       dot.current.style.boxShadow = active ? "0 0 6px var(--accent)" : "none";
     }
   });
-  return <span ref={dot} className="h-[6px] w-[6px] rounded-full bg-faint" aria-hidden />;
+  return <span ref={dot} className="size-1.5  rounded-full bg-faint" aria-hidden />;
 }
 
 export function FxRack({ hint }: { hint?: string }) {
   const eng = useEngine(["fx"]);
   const limiter = eng.limiter;
   return (
-    <div className="border-t border-line pt-[14px]">
-      <div className="mb-[10px] font-mono text-[10.5px] tracking-[0.06em] text-faint">
+    <div className="border-t border-line pt-3.5">
+      <div className="mb-2.5 font-mono text-[10.5px] tracking-[0.06em] text-faint">
         {hint ?? "visitor fx — mangle it, i don't mind · the master chain: add devices, drag ⠿ to reorder"}
       </div>
       <FxChainRack
@@ -43,13 +43,13 @@ export function FxRack({ hint }: { hint?: string }) {
         tail={
           <>
             {/* fixed master-bus safety limiter — never reordered, lives after the chain */}
-            <div className="flex shrink-0 items-center px-[2px] font-mono text-[14px] text-faint" aria-hidden>
+            <div className="flex shrink-0 items-center px-0.5 font-mono text-[14px] text-faint" aria-hidden>
               ▸
             </div>
             <div className="shrink-0">
               <DeviceShell name="LIMIT" on={limiter.on} onToggle={(v) => engine.setLimiter({ on: v })}>
                 <Knob value={limiter.ceiling} min={-12} max={0} defaultValue={-1.5} onChange={(v) => engine.setLimiter({ ceiling: v })} label="ceiling" disabled={!limiter.on} fmt={(v) => v.toFixed(1) + "dB"} />
-                <span className="flex flex-col items-center justify-center gap-[3px] font-mono text-[8.5px] tracking-[0.05em] text-faint">
+                <span className="flex flex-col items-center justify-center gap-0.75 font-mono text-[8.5px] tracking-[0.05em] text-faint">
                   <LimitLed />
                   peak
                 </span>

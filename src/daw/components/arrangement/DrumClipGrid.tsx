@@ -42,7 +42,7 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
     onCommit({ ...pattern, laneMix });
   };
   const msBtn = (on: boolean, danger?: boolean) =>
-    "w-[16px] rounded-[2px] border py-[1px] font-mono text-[8px] leading-none transition-colors " +
+    "w-4 rounded-xs border py-0.25 font-mono text-[8px] leading-none transition-colors " +
     (on ? (danger ? "border-[color-mix(in_srgb,#e0654f_60%,transparent)] bg-[color-mix(in_srgb,#e0654f_22%,transparent)] text-[#e98c79]" : "border-accent bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent") : "border-line text-faint hover:text-dim");
 
   // imperative playhead highlight (no per-frame React render)
@@ -67,14 +67,14 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
   // patterns (any bar count) scroll while lane names / M/S stay put. Cells are
   // FIXED-width (no more squeezing the pattern into the panel width).
   return (
-    <div ref={gridRef} className="flex gap-[8px]">
-      <div className="flex shrink-0 flex-col gap-[5px]">
+    <div ref={gridRef} className="flex gap-2">
+      <div className="flex shrink-0 flex-col gap-1.25">
         {kit.lanes.map((lane) => {
           const mix = pattern.laneMix?.[lane.id];
           return (
-            <div key={lane.id} className="flex h-[24px] items-center gap-[8px]">
-              <span className="w-[44px] shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
-              <span className="flex shrink-0 gap-[2px]">
+            <div key={lane.id} className="flex h-6 items-center gap-2">
+              <span className="w-11 shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
+              <span className="flex shrink-0 gap-0.5">
                 <button className={msBtn(!!mix?.mute, true)} onClick={() => toggleMix(lane.id, "mute")} title="mute lane">M</button>
                 <button className={msBtn(!!mix?.solo)} onClick={() => toggleMix(lane.id, "solo")} title="solo lane">S</button>
               </span>
@@ -82,15 +82,15 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
           );
         })}
       </div>
-      <div className="fx-scroll min-w-0 flex-1 overflow-x-auto pb-[4px]">
-        <div className="flex w-max flex-col gap-[5px]">
+      <div className="fx-scroll min-w-0 flex-1 overflow-x-auto pb-1">
+        <div className="flex w-max flex-col gap-1.25">
           {kit.lanes.map((lane) => {
             const on = pattern.on[lane.id] || [];
             const accent = pattern.accent[lane.id] || [];
             return (
-              <div key={lane.id} className="flex gap-[8px]">
+              <div key={lane.id} className="flex gap-2">
                 {Array.from({ length: bars }).map((_, b) => (
-                  <div key={b} className="flex gap-[3px]">
+                  <div key={b} className="flex gap-0.75">
                     {Array.from({ length: BAR_STEPS }).map((_, i) => {
                       const s = b * BAR_STEPS + i;
                       if (s >= pattern.steps) return null;
@@ -112,14 +112,14 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
                               : undefined
                           }
                           className={
-                            "h-[24px] w-[22px] shrink-0 rounded-[3px] border transition-colors " +
+                            "h-6 w-5.5 shrink-0 rounded-[3px] border transition-colors " +
                             (isOn
                               ? isAccent
                                 ? "border-accent bg-accent"
                                 : "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_55%,transparent)]"
                               : beatStart
                                 ? "border-line2 bg-panel2 hover:bg-[#202028]"
-                                : "border-line bg-[#141418] hover:bg-panel2")
+                                : "border-line bg-panel hover:bg-panel2")
                           }
                         />
                       );

@@ -8,7 +8,7 @@ export function ABDial() {
   const eng = useEngine(["wet"]);
   const wet = eng.wet;
   return (
-    <div className="flex items-center justify-center gap-[22px] px-0 pt-2 pb-[2px]">
+    <div className="flex items-center justify-center gap-5.5 px-0 pt-2 pb-0.5">
       <button className={wet < 0.02 ? abSnapActive : abSnap} onClick={() => engine.setWet(0)}>
         A · MIX
       </button>

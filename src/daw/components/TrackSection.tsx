@@ -20,11 +20,11 @@ export function TrackSection({
       id={id}
       data-screen-label={label}
       className={
-        "mx-auto grid max-w-[1280px] grid-cols-[56px_1fr] px-6 pt-[72px] pb-9 max-[760px]:grid-cols-1 max-[760px]:px-4 max-[760px]:pt-14 max-[760px]:pb-6 " +
+        "mx-auto grid max-w-7xl grid-cols-[56px_1fr] px-6 pt-18 pb-9 max-[760px]:grid-cols-1 max-[760px]:px-4 max-[760px]:pt-14 max-[760px]:pb-6 " +
         className
       }
     >
-      <div className="mr-6 border-r border-line pt-2 font-mono text-[11px] tracking-[0.1em] text-faint max-[760px]:hidden">
+      <div className="mr-6 border-r border-line pt-2 font-mono text-[11px] tracking-widest text-faint max-[760px]:hidden">
         {rail}
       </div>
       <div className="min-w-0">{children}</div>

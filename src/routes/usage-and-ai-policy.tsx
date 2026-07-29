@@ -52,8 +52,8 @@ const UsageAndAiPolicy = () => {
         description="The music of actually-its-nathaniel (Nathaniel Riley Bowman) is not licensed for AI or machine learning training. Read the full usage and AI policy."
         url="https://audio.actuallyitsnathaniel.com/usage-and-ai-policy"
       />
-      <main className="relative z-[1] flex justify-center px-6 pt-24 pb-16">
-        <article className="max-w-3xl w-full rounded-[4px] border border-line bg-panel p-8 md:p-10 text-left">
+      <main className="relative z-1 flex justify-center px-6 pt-24 pb-16">
+        <article className="max-w-3xl w-full rounded-sm border border-line bg-panel p-8 md:p-10 text-left">
           <header className="text-center pb-6 mb-6 border-b border-line">
             <h1 className="text-4xl md:text-5xl font-extrabold tracking-[-0.02em]">
               usage &amp; ai policy
@@ -66,10 +66,7 @@ const UsageAndAiPolicy = () => {
 
           <div className="md:columns-2 md:gap-8">
             {sections.map(({ heading, body, list }) => (
-              <section
-                key={heading}
-                className="mb-6 break-inside-avoid"
-              >
+              <section key={heading} className="mb-6 break-inside-avoid">
                 <h2 className="font-mono text-accent uppercase tracking-widest text-[12px] mb-2">
                   {heading}
                 </h2>

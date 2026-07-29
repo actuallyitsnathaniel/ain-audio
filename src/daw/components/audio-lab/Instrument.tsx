@@ -21,13 +21,13 @@ import type { SynthPatch } from "../../data/patches";
 // a compact segmented selector
 function Seg<T extends string>({ value, options, onChange, fmt }: { value: T; options: readonly T[]; onChange: (v: T) => void; fmt?: (v: T) => string }) {
   return (
-    <span className="flex items-center gap-[2px]">
+    <span className="flex items-center gap-0.5">
       {options.map((o) => (
         <button
           key={o}
           onClick={() => onChange(o)}
           title={o}
-          className={"rounded-[3px] border px-[6px] py-[3px] font-mono text-[10px] transition-colors " + (o === value ? "border-accent bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent" : "border-line text-faint hover:text-dim")}
+          className={"rounded-[3px] border px-1.5 py-0.75 font-mono text-[10px] transition-colors " + (o === value ? "border-accent bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent" : "border-line text-faint hover:text-dim")}
         >
           {fmt ? fmt(o) : o}
         </button>
@@ -40,9 +40,9 @@ function Seg<T extends string>({ value, options, onChange, fmt }: { value: T; op
 // no heavy card border (the tab dashboard is the frame). Tighter than the old card.
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-[6px] border-l border-line pl-[10px]">
+    <div className="flex flex-col gap-1.5 border-l border-line pl-2.5">
       <span className="font-mono text-[8.5px] tracking-[0.12em] text-faint uppercase">{title}</span>
-      <div className="flex flex-wrap items-end gap-x-[10px] gap-y-[6px]">{children}</div>
+      <div className="flex flex-wrap items-end gap-x-2.5 gap-y-1.5">{children}</div>
     </div>
   );
 }
@@ -128,7 +128,7 @@ export function Instrument() {
           value={id}
           onChange={(e) => engine.setSynthPatch(e.target.value)}
           aria-label="instrument"
-          className="cursor-pointer appearance-none rounded-[3px] border border-line2 bg-panel2 py-[5px] pr-[24px] pl-[10px] font-mono text-[11px] tracking-[0.03em] text-daw-text hover:border-accent focus:border-accent focus:outline-none"
+          className="cursor-pointer appearance-none rounded-[3px] border border-line2 bg-panel2 py-1.25 pr-6 pl-2.5 font-mono text-[11px] tracking-[0.03em] text-daw-text hover:border-accent focus:border-accent focus:outline-none"
         >
           {eng.synthPatches.map((n) => (
             <option key={n} value={n} className="bg-panel2 text-daw-text">
@@ -137,7 +137,7 @@ export function Instrument() {
             </option>
           ))}
         </select>
-        <span className="pointer-events-none absolute right-[9px] text-[8px] text-faint">▼</span>
+        <span className="pointer-events-none absolute right-2.25 text-[8px] text-faint">▼</span>
       </span>
       {builtin && <span className="font-mono text-[9px] tracking-[0.05em] text-faint">factory</span>}
 
@@ -153,31 +153,31 @@ export function Instrument() {
             if (e.key === "Enter") e.currentTarget.blur();
             if (e.key === "Escape") setSaving(false);
           }}
-          className="w-[120px] rounded-[3px] border border-accent bg-panel2 px-[7px] py-[4px] font-mono text-[10.5px] text-daw-text focus:outline-none"
+          className="w-30 rounded-[3px] border border-accent bg-panel2 px-1.75 py-1 font-mono text-[10.5px] text-daw-text focus:outline-none"
         />
       ) : (
-        <span className="flex items-center gap-[6px]">
+        <span className="flex items-center gap-1.5">
           {!builtin && (
-            <button onClick={() => engine.saveUserPatch(id)} title="save changes" className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent">
+            <button onClick={() => engine.saveUserPatch(id)} title="save changes" className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent">
               save
             </button>
           )}
-          <button onClick={() => setSaving(true)} title="save as a new patch" className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent">
+          <button onClick={() => setSaving(true)} title="save as a new patch" className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent">
             save as
           </button>
           {builtin ? (
-            <button onClick={() => engine.revertPatch(id)} title="restore factory sound" className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-faint transition-colors hover:text-dim">
+            <button onClick={() => engine.revertPatch(id)} title="restore factory sound" className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-faint transition-colors hover:text-dim">
               revert
             </button>
           ) : (
-            <button onClick={() => engine.deleteUserPatch(id)} title="delete this patch" className="rounded-[3px] border border-line px-[9px] py-[4px] font-mono text-[10px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]">
+            <button onClick={() => engine.deleteUserPatch(id)} title="delete this patch" className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]">
               delete
             </button>
           )}
         </span>
       )}
 
-      <span className="ml-auto flex items-center gap-[6px]">
+      <span className="ml-auto flex items-center gap-1.5">
         <span className="rounded-[3px] border border-line px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap text-faint" title="Z / X shift the typing-keyboard octave">
           oct <span className={"text-accent " + (octave !== 0 ? "" : "opacity-60")}>{octave >= 0 ? "+" + octave : octave}</span>
         </span>
@@ -204,13 +204,13 @@ export function Instrument() {
       <PresetKeyboard octave={octave} vel={vel} />
 
       {/* tabbed synth dashboard — one signal-flow stage at a time */}
-      <div className="flex items-center gap-[3px] border-b border-line pb-[6px]">
+      <div className="flex items-center gap-0.75 border-b border-line pb-1.5">
         {TABS.map((tb) => (
           <button
             key={tb.id}
             onClick={() => setTab(tb.id)}
             className={
-              "rounded-[3px] px-[10px] py-[4px] font-mono text-[10px] tracking-[0.08em] transition-colors " +
+              "rounded-[3px] px-2.5 py-1 font-mono text-[10px] tracking-[0.08em] transition-colors " +
               (tab === tb.id ? "bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] text-accent" : "text-faint hover:text-dim")
             }
           >
@@ -219,7 +219,7 @@ export function Instrument() {
         ))}
       </div>
 
-      <div className="flex flex-wrap gap-x-[16px] gap-y-[12px] rounded-[4px] border border-line bg-[#0e0e12] p-[12px]">
+      <div className="flex flex-wrap gap-x-4 gap-y-3 rounded-sm border border-line bg-[#0e0e12] p-3">
         {tab === "sources" && (
           <>
             <Group title="osc a">
@@ -229,7 +229,7 @@ export function Instrument() {
               <Knob size={34} label="level" value={p.osc1.level} min={0} max={1} defaultValue={1} onChange={(v) => u({ osc1: { level: v } })} fmt={(v) => Math.round(v * 100) + "%"} />
             </Group>
             <Group title="osc b">
-              <button onClick={() => u({ osc2On: !p.osc2On })} title="toggle osc b" className={"rounded-[3px] border px-[6px] py-[3px] font-mono text-[9px] transition-colors " + (p.osc2On ? "border-accent text-accent" : "border-line text-faint")}>
+              <button onClick={() => u({ osc2On: !p.osc2On })} title="toggle osc b" className={"rounded-[3px] border px-1.5 py-0.75 font-mono text-[9px] transition-colors " + (p.osc2On ? "border-accent text-accent" : "border-line text-faint")}>
                 {p.osc2On ? "on" : "off"}
               </button>
               <Seg value={p.osc2.wave} options={WAVES} onChange={(w) => u({ osc2: { wave: w } })} fmt={(w) => WAVE_GLYPH[w]} />
@@ -250,7 +250,7 @@ export function Instrument() {
               <button
                 onClick={() => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: sampleOn ? 0 : 1, loop: p.sample?.loop ?? false } })}
                 title="toggle the sample source"
-                className={"rounded-[3px] border px-[6px] py-[3px] font-mono text-[9px] transition-colors " + (sampleOn ? "border-accent text-accent" : "border-line text-faint")}
+                className={"rounded-[3px] border px-1.5 py-0.75 font-mono text-[9px] transition-colors " + (sampleOn ? "border-accent text-accent" : "border-line text-faint")}
               >
                 {sampleOn ? "on" : "off"}
               </button>
@@ -259,7 +259,7 @@ export function Instrument() {
                   value={p.sample?.presetId || firstPreset}
                   onChange={(e) => u({ sample: { presetId: e.target.value, level: p.sample?.level ?? 1, loop: p.sample?.loop ?? false } })}
                   aria-label="sample preset"
-                  className="cursor-pointer appearance-none rounded-[2px] border border-line2 bg-panel2 py-[3px] pr-[18px] pl-[6px] font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
+                  className="cursor-pointer appearance-none rounded-xs border border-line2 bg-panel2 py-0.75 pr-4.5 pl-1.5 font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
                 >
                   {engine.samplePresets.filter((pr) => pr.zones.length > 0).map((pr) => (
                     <option key={pr.id} value={pr.id} className="bg-panel2">
@@ -267,7 +267,7 @@ export function Instrument() {
                     </option>
                   ))}
                 </select>
-                <span className="pointer-events-none absolute right-[5px] text-[7px] text-faint">▼</span>
+                <span className="pointer-events-none absolute right-1.25 text-[7px] text-faint">▼</span>
               </span>
               <Seg value={p.sample?.loop ? "loop" : "one-shot"} options={["one-shot", "loop"] as const} onChange={(m) => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: p.sample?.level ?? 1, loop: m === "loop" } })} />
               <Knob size={34} label="level" value={p.sample?.level ?? 0} min={0} max={4} defaultValue={0} onChange={(v) => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: v, loop: p.sample?.loop ?? false } })} fmt={(v) => (v <= 0 ? "-∞" : (20 * Math.log10(v)).toFixed(1) + "dB")} />
@@ -276,7 +276,7 @@ export function Instrument() {
                   <button
                     onClick={() => us({ snap: p.sample!.snap === false })}
                     title="snap loop points to zero-crossings (click-free seam)"
-                    className={"self-end rounded-[3px] border px-[6px] py-[3px] font-mono text-[9px] transition-colors " + (p.sample.snap !== false ? "border-accent text-accent" : "border-line text-faint")}
+                    className={"self-end rounded-[3px] border px-1.5 py-0.75 font-mono text-[9px] transition-colors " + (p.sample.snap !== false ? "border-accent text-accent" : "border-line text-faint")}
                   >
                     snap {p.sample.snap !== false ? "on" : "off"}
                   </button>
@@ -289,7 +289,7 @@ export function Instrument() {
                   <Knob size={34} label="fine" value={p.sample.cents ?? 0} min={-100} max={100} defaultValue={0} bipolar onChange={(v) => us({ cents: Math.round(v) })} fmt={(v) => Math.round(v) + "c"} />
                   <Knob size={34} label="start" value={p.sample.start ?? 0} min={0} max={1} defaultValue={0} onChange={(v) => us({ start: Math.min(v, (p.sample!.end ?? 1) - 0.01) })} fmt={(v) => Math.round(v * 100) + "%"} />
                   <Knob size={34} label="end" value={p.sample.end ?? 1} min={0} max={1} defaultValue={1} onChange={(v) => us({ end: Math.max(v, (p.sample!.start ?? 0) + 0.01) })} fmt={(v) => Math.round(v * 100) + "%"} />
-                  <div className="mt-[2px] w-full min-w-[220px]">
+                  <div className="mt-0.5 w-full min-w-55">
                     <SampleWave
                       presetId={p.sample.presetId}
                       loop={p.sample.loop}
@@ -312,7 +312,7 @@ export function Instrument() {
               <button
                 onClick={() => u({ filter: { on: p.filter.on === false } })}
                 title="bypass the filter (flat response)"
-                className={"rounded-[3px] border px-[6px] py-[3px] font-mono text-[9px] transition-colors " + (p.filter.on !== false ? "border-accent text-accent" : "border-line text-faint")}
+                className={"rounded-[3px] border px-1.5 py-0.75 font-mono text-[9px] transition-colors " + (p.filter.on !== false ? "border-accent text-accent" : "border-line text-faint")}
               >
                 {p.filter.on !== false ? "on" : "off"}
               </button>
@@ -320,7 +320,7 @@ export function Instrument() {
               <Knob size={38} label="cutoff" value={p.filter.cut} min={40} max={18000} defaultValue={2200} disabled={p.filter.on === false} onChange={(v) => u({ filter: { cut: Math.round(v) } })} fmt={(v) => (v >= 1000 ? (v / 1000).toFixed(1) + "k" : Math.round(v) + "")} />
               <Knob size={38} label="reso" value={p.filter.q} min={0.1} max={20} defaultValue={0.8} disabled={p.filter.on === false} onChange={(v) => u({ filter: { q: v } })} fmt={(v) => v.toFixed(1)} />
               <Knob size={34} label="ktrk" value={p.filter.keyTrack} min={0} max={1} defaultValue={0} disabled={p.filter.on === false} onChange={(v) => u({ filter: { keyTrack: v } })} fmt={(v) => Math.round(v * 100) + "%"} />
-              <div className={"mt-[2px] w-full min-w-[220px] " + (p.filter.on === false ? "opacity-40" : "")}>
+              <div className={"mt-0.5 w-full min-w-55 " + (p.filter.on === false ? "opacity-40" : "")}>
                 <FilterGraph type={p.filter.on === false ? "allpass" : p.filter.type} cut={p.filter.cut} q={p.filter.q} />
               </div>
             </Group>
@@ -330,7 +330,7 @@ export function Instrument() {
               <Knob size={30} label="D" value={p.filtEnv.d} min={0.005} max={4} defaultValue={0.5} onChange={(v) => u({ filtEnv: { d: v } })} fmt={fmtSec} />
               <Knob size={30} label="S" value={p.filtEnv.s} min={0} max={1} defaultValue={0.4} onChange={(v) => u({ filtEnv: { s: v } })} fmt={(v) => Math.round(v * 100) + "%"} />
               <Knob size={30} label="R" value={p.filtEnv.r} min={0.005} max={6} defaultValue={0.4} onChange={(v) => u({ filtEnv: { r: v } })} fmt={fmtSec} />
-              <div className="mt-[2px] w-full min-w-[220px]">
+              <div className="mt-0.5 w-full min-w-55">
                 <EnvGraph a={p.filtEnv.a} d={p.filtEnv.d} s={p.filtEnv.s} r={p.filtEnv.r} />
               </div>
             </Group>
@@ -344,7 +344,7 @@ export function Instrument() {
             <Knob size={34} label="S" value={p.ampEnv.s} min={0} max={1} defaultValue={0.8} onChange={(v) => u({ ampEnv: { s: v } })} fmt={(v) => Math.round(v * 100) + "%"} />
             <Knob size={34} label="R" value={p.ampEnv.r} min={0.005} max={6} defaultValue={0.3} onChange={(v) => u({ ampEnv: { r: v } })} fmt={fmtSec} />
             <Knob size={38} label="vol" value={p.vol} min={0} max={0.5} defaultValue={0.18} onChange={(v) => u({ vol: v })} fmt={(v) => Math.round(v * 200) + "%"} />
-            <div className="mt-[2px] w-full min-w-[220px]">
+            <div className="mt-0.5 w-full min-w-55">
               <EnvGraph a={p.ampEnv.a} d={p.ampEnv.d} s={p.ampEnv.s} r={p.ampEnv.r} />
             </div>
           </Group>
@@ -364,7 +364,7 @@ export function Instrument() {
             <Knob size={38} label="voices" value={vc.unison} min={1} max={8} defaultValue={1} onChange={(v) => uv({ unison: Math.round(v) })} fmt={(v) => String(Math.round(v))} />
             <Knob size={38} label="detune" value={vc.detune} min={0} max={100} defaultValue={14} disabled={vc.unison < 2} onChange={(v) => uv({ detune: v })} fmt={(v) => Math.round(v) + "ct"} />
             <Knob size={38} label="width" value={vc.width} min={0} max={1} defaultValue={0.6} disabled={vc.unison < 2} onChange={(v) => uv({ width: v })} fmt={(v) => Math.round(v * 100) + "%"} />
-            <span className="max-w-[240px] self-center font-mono text-[8.5px] leading-[1.55] text-faint">
+            <span className="max-w-60 self-center font-mono text-[8.5px] leading-[1.55] text-faint">
               mono = last-note priority · unison stacks osc 1/2, detuned ±ct and spread across the stereo field (level-normalized, serum-style)
             </span>
           </Group>

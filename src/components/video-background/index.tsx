@@ -18,7 +18,7 @@ const VideoBG = () => {
   };
 
   return (
-    <div className="fixed top-0 left-0 w-full h-full z-[-1]">
+    <div className="fixed top-0 left-0 size-full  z-[-1]">
       <video
         height={"110%"}
         width={"auto"}
@@ -31,13 +31,13 @@ const VideoBG = () => {
         playsInline
         disablePictureInPicture
         onError={handleVideoError}
-        className="min-w-full top-0 w-full h-full object-cover scale-110 fixed z-[-1] overflow-clip flex saturate-30 brightness-[0.3] blur-sm bg-gray-900"
+        className="min-w-full top-0 size-full  object-cover scale-110 fixed z-[-1] overflow-clip flex saturate-30 brightness-[0.3] blur-sm bg-gray-900"
       >
         <source src={rileyBGMP4} type="video/MP4" />
         {/* <source src={rileyBGWEBM} type="video/webm" /> */}
       </video>
       {/* Fallback background for mobile/Arc Search */}
-      <div className="min-w-full top-0 w-full h-full fixed z-[-2] bg-linear-to-br from-gray-900 via-black to-gray-800 md:hidden" />
+      <div className="min-w-full top-0 size-full  fixed z-[-2] bg-linear-to-br from-gray-900 via-black to-gray-800 md:hidden" />
     </div>
   );
 };

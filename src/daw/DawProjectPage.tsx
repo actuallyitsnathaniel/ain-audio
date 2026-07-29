@@ -24,10 +24,10 @@ function ProjectLab({ p }: { p: Project }) {
 
   if (!isCurrent) {
     return (
-      <div className="mb-5 flex flex-col gap-3 rounded-[4px] border border-line bg-panel p-4">
+      <div className="mb-5 flex flex-col gap-3 rounded-sm border border-line bg-panel p-4">
         <div className="flex flex-wrap items-center gap-4">
           <button
-            className="inline-flex items-center gap-[9px] rounded-[3px] border border-accent bg-accent px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap text-[#111] transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--accent)_85%,white)]"
+            className="inline-flex items-center gap-2.25 rounded-[3px] border border-accent bg-accent px-4.5 py-2.75 text-[13px] font-semibold whitespace-nowrap text-[#111] transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--accent)_85%,white)]"
             onClick={() => engine.loadTrack(track, { autoplay: true })}
           >
             <span className="icon-play tiny" />{" "}
@@ -44,8 +44,8 @@ function ProjectLab({ p }: { p: Project }) {
   }
 
   return (
-    <div className="mb-5 flex flex-col gap-3 rounded-[4px] border border-line bg-panel p-4">
-      <div className="flex flex-wrap items-center gap-[14px]">
+    <div className="mb-5 flex flex-col gap-3 rounded-sm border border-line bg-panel p-4">
+      <div className="flex flex-wrap items-center gap-3.5">
         <PlayButton />
         <TimeReadout />
         <span className={lockChip}>
@@ -71,34 +71,34 @@ export function DawProjectPage({ project }: { project: Project }) {
   return (
     <section
       data-screen-label={"project: " + p.artist}
-      className="mx-auto grid max-w-[1280px] grid-cols-[56px_1fr] px-6 pt-[72px] pb-9 max-[760px]:grid-cols-1 max-[760px]:px-4 max-[760px]:pt-14 max-[760px]:pb-6"
+      className="mx-auto grid max-w-7xl grid-cols-[56px_1fr] px-6 pt-18 pb-9 max-[760px]:grid-cols-1 max-[760px]:px-4 max-[760px]:pt-14 max-[760px]:pb-6"
       style={{ "--clip": p.color } as React.CSSProperties}
     >
-      <div className="mr-6 border-r border-line pt-2 font-mono text-[11px] tracking-[0.1em] text-faint max-[760px]:hidden">
+      <div className="mr-6 border-r border-line pt-2 font-mono text-[11px] tracking-widest text-faint max-[760px]:hidden">
         ▸
       </div>
       <div className="min-w-0">
         <Link
           to="/#projects"
-          className="mb-[14px] inline-block py-2 font-mono text-[11.5px] tracking-[0.06em] whitespace-nowrap text-dim transition-colors duration-150 hover:text-daw-text"
+          className="mb-3.5 inline-block py-2 font-mono text-[11.5px] tracking-[0.06em] whitespace-nowrap text-dim transition-colors duration-150 hover:text-daw-text"
         >
           ◂ back to session
         </Link>
 
-        <div className="mb-[14px] grid grid-cols-[6px_320px_1fr] overflow-hidden rounded-[4px] border border-line bg-panel max-[980px]:grid-cols-[6px_260px_1fr] max-[760px]:grid-cols-[6px_1fr]">
-          <div className="bg-[var(--clip)] max-[760px]:row-span-2" />
+        <div className="mb-3.5 grid grid-cols-[6px_320px_1fr] overflow-hidden rounded-sm border border-line bg-panel max-[980px]:grid-cols-[6px_260px_1fr] max-[760px]:grid-cols-[6px_1fr]">
+          <div className="bg-(--clip) max-[760px]:row-span-2" />
           <img
-            className="h-full min-h-[320px] w-[320px] border-r border-line object-cover max-[980px]:min-h-[260px] max-[980px]:w-[260px] max-[760px]:max-h-[360px] max-[760px]:min-h-0 max-[760px]:w-full max-[760px]:border-r-0 max-[760px]:border-b max-[760px]:border-line"
+            className="h-full min-h-80 w-80 border-r border-line object-cover max-[980px]:min-h-65 max-[980px]:w-65 max-[760px]:max-h-90 max-[760px]:min-h-0 max-[760px]:w-full max-[760px]:border-r-0 max-[760px]:border-b max-[760px]:border-line"
             src={p.art}
             alt={p.artist}
           />
-          <div className="min-w-0 px-[26px] py-[22px]">
-            <div className="mb-2 font-mono text-[10.5px] tracking-[0.12em] text-[var(--clip)] uppercase">
+          <div className="min-w-0 px-6.5 py-5.5">
+            <div className="mb-2 font-mono text-[10.5px] tracking-[0.12em] text-(--clip) uppercase">
               project · {p.id}
             </div>
             <h1 className="m-0 text-[clamp(28px,4vw,44px)] leading-[1.05] font-extrabold tracking-[-0.02em]">{p.artist}</h1>
-            <div className="mt-[6px] font-mono text-[12px] text-dim">{p.subtitle}</div>
-            <div className="my-3 flex flex-wrap gap-[6px]">
+            <div className="mt-1.5 font-mono text-[12px] text-dim">{p.subtitle}</div>
+            <div className="my-3 flex flex-wrap gap-1.5">
               {p.roles.map((r) => (
                 <RoleChip key={r}>{r}</RoleChip>
               ))}
@@ -111,12 +111,12 @@ export function DawProjectPage({ project }: { project: Project }) {
 
         {p.vimeo ? (
           <div className="mb-5">
-            <div className="mb-2 font-mono text-[11px] tracking-[0.1em] text-faint uppercase">campaign videos</div>
+            <div className="mb-2 font-mono text-[11px] tracking-widest text-faint uppercase">campaign videos</div>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3">
               {p.vimeo.map((v) => (
                 <iframe
                   key={v.src}
-                  className="w-full rounded-[4px] border border-line bg-black"
+                  className="w-full rounded-sm border border-line bg-black"
                   style={{ aspectRatio: v.ratio }}
                   src={v.src}
                   allowFullScreen
@@ -130,7 +130,7 @@ export function DawProjectPage({ project }: { project: Project }) {
         ) : null}
 
         {disco.length ? (
-          <div className="flex flex-col gap-[22px]">
+          <div className="flex flex-col gap-5.5">
             <DiscoGroup label="singles / EPs" items={singles} />
             <DiscoGroup label="albums" items={albums} />
             <DiscoGroup label="works" items={general} />

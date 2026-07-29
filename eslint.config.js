@@ -52,6 +52,7 @@ export default tseslint.config(
         },
       ],
       "better-tailwindcss/no-deprecated-classes": "error",
+      "better-tailwindcss/enforce-canonical-classes": "error",
     },
   }
 );

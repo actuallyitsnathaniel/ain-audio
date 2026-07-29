@@ -12,7 +12,7 @@ export const MobileNavButton = ({
       data-collapse-toggle="navbar"
       id="navbar-icon"
       type="button"
-      className={`flex flex-col fixed top-3 right-3 m-4 z-[20] select-none duration-200`}
+      className={`flex flex-col fixed top-3 right-3 m-4 z-20 select-none duration-200`}
       aria-controls="navbar"
       aria-expanded="false"
       onClick={() => {
@@ -33,7 +33,7 @@ export const MobileNavButton = ({
       />
       <span
         className={`flex w-12 h-1 mb-2.5 relative bg-white rounded-sm origin-bottom-left duration-200 ${
-          expanded ? "-rotate-45 translate-y-[5px]" : "rotate-0 translate-y-0"
+          expanded ? "-rotate-45 translate-y-1.25" : "rotate-0 translate-y-0"
         }`}
       />
     </button>

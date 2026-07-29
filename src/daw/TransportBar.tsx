@@ -46,7 +46,7 @@ function MiniTransport() {
       <span className="min-w-14.5 font-mono text-[12px] text-accent" ref={ref}>
         0:00.0
       </span>
-      <span className="pointer-events-none absolute top-[calc(100%+9px)] left-0 z-60 hidden whitespace-nowrap rounded-[3px] border border-line2 bg-panel2 px-[10px] py-[6px] font-mono text-[11px] text-daw-text shadow-[0_6px_20px_-8px_rgba(0,0,0,0.8)] group-hover:block">
+      <span className="pointer-events-none absolute top-[calc(100%+9px)] left-0 z-60 hidden whitespace-nowrap rounded-[3px] border border-line2 bg-panel2 px-2.5 py-1.5 font-mono text-[11px] text-daw-text shadow-[0_6px_20px_-8px_rgba(0,0,0,0.8)] group-hover:block">
         ▸ {cur ? cur.title : "—"} ·{" "}
         {eng.loading ? "loading" : eng.playing ? "playing" : "paused"}
       </span>
@@ -121,7 +121,7 @@ export function TransportBar() {
   };
 
   return (
-    <header className="tbar-bg fixed top-0 right-0 left-0 z-50 flex h-13 items-center gap-5 border-b border-line px-4 max-[760px]:gap-[10px] max-[760px]:overflow-x-auto">
+    <header className="tbar-bg fixed top-0 inset-x-0  z-50 flex h-13 items-center gap-5 border-b border-line px-4 max-[760px]:gap-2.5 max-[760px]:overflow-x-auto">
       <button
         className="flex items-center gap-2.25"
         onClick={() => {
@@ -129,7 +129,7 @@ export function TransportBar() {
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
       >
-        <span className="h-3.5 w-3.5 rounded-xs bg-accent" />
+        <span className="size-3.5  rounded-xs bg-accent" />
         <span className="font-mono text-[12px] font-semibold tracking-[0.14em]">
           AIN·AUDIO
         </span>
@@ -139,7 +139,7 @@ export function TransportBar() {
         {NAV.map((n) => (
           <button
             key={n.path ?? n.id}
-            className="rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap text-dim transition-[color,background] duration-150 hover:bg-panel2 hover:text-daw-text max-[760px]:px-[7px]"
+            className="rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap text-dim transition-[color,background] duration-150 hover:bg-panel2 hover:text-daw-text max-[760px]:px-1.75"
             onClick={() => (n.path ? navigate(n.path) : goToSection(n.id!))}
           >
             <span className="mr-0.5 text-faint">{n.num}</span> {n.label}
@@ -147,7 +147,7 @@ export function TransportBar() {
         ))}
         <button
           className={
-            "rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap transition-[color,background] duration-150 hover:bg-panel2 max-[760px]:px-[7px] " +
+            "rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap transition-[color,background] duration-150 hover:bg-panel2 max-[760px]:px-1.75 " +
             (location.pathname === "/studio" ? "text-accent" : "text-dim hover:text-daw-text")
           }
           onClick={() => navigate("/studio")}

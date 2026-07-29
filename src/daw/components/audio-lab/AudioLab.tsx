@@ -29,18 +29,18 @@ export function AudioLab() {
   });
 
   return (
-    <div className="rounded-[4px] border border-line bg-panel p-[22px] max-[767px]:p-4">
-      <div className="grid grid-cols-1 gap-[26px] max-[767px]:gap-4 min-[981px]:grid-cols-[250px_1fr_190px]">
+    <div className="rounded-sm border border-line bg-panel p-5.5 max-[767px]:p-4">
+      <div className="grid grid-cols-1 gap-6.5 max-[767px]:gap-4 min-[981px]:grid-cols-[250px_1fr_190px]">
         {/* left: artwork + meta — on mobile the artwork is dropped and the
             meta collapses to a compact header that sits above the player */}
-        <div className="flex min-w-0 flex-col gap-[14px] max-[767px]:order-1 max-[767px]:gap-2">
+        <div className="flex min-w-0 flex-col gap-3.5 max-[767px]:order-1 max-[767px]:gap-2">
           <img
             className="aspect-square w-full rounded-[3px] border border-line2 object-cover max-[767px]:hidden"
             src={cur.art}
             alt={cur.title}
           />
           <div>
-            <div className="mb-[5px] font-mono text-[10.5px] tracking-[0.12em] text-accent uppercase">now in the lab</div>
+            <div className="mb-1.25 font-mono text-[10.5px] tracking-[0.12em] text-accent uppercase">now in the lab</div>
             <h3 className="m-0 text-[21px] leading-[1.2] font-bold text-daw-text max-[767px]:text-[18px]">{cur.title}</h3>
             <div className="mt-1 font-mono text-[11px] text-dim">{cur.subtitle}</div>
           </div>
@@ -54,7 +54,7 @@ export function AudioLab() {
 
         {/* center: transport + waveform + dial + fx + preset lab */}
         <div className="flex min-w-0 flex-col gap-4 max-[767px]:order-2">
-          <div className="flex flex-wrap items-center gap-[14px]">
+          <div className="flex flex-wrap items-center gap-3.5">
             <PlayButton />
             <TimeReadout />
             {isPair ? (
@@ -78,14 +78,14 @@ export function AudioLab() {
 
         {/* right: analysis */}
         <div className="flex min-w-0 flex-col max-[767px]:order-3">
-          <div className="grid grid-cols-1 gap-[18px] max-[980px]:grid-cols-[1fr_200px] max-[980px]:items-start max-[767px]:grid-cols-1">
+          <div className="grid grid-cols-1 gap-4.5 max-[980px]:grid-cols-[1fr_200px] max-[980px]:items-start max-[767px]:grid-cols-1">
             <div>
               <div className="mb-2 font-mono text-[10.5px] tracking-[0.08em] text-faint">output spectrum</div>
               <Spectrum height={132} />
             </div>
             <div>
               <div className="mb-2 font-mono text-[10.5px] tracking-[0.08em] text-faint">loudness · rms dBFS</div>
-              <div className="flex justify-center gap-[14px] rounded-[3px] border border-line bg-inset pt-[10px] pr-0 pb-1 pl-0">
+              <div className="flex justify-center gap-3.5 rounded-[3px] border border-line bg-inset pt-2.5 px-0 pb-1 ">
                 {isPair ? (
                   <>
                     <LevelMeter label="MIX" getLevel={() => levels.current.mix} />
@@ -98,7 +98,7 @@ export function AudioLab() {
               {isPair ? (
                 <button
                   className={
-                    "mt-3 block w-full rounded-[3px] border px-[10px] py-[9px] font-mono text-[10.5px] tracking-[0.07em] transition-all duration-150 " +
+                    "mt-3 block w-full rounded-[3px] border px-2.5 py-2.25 font-mono text-[10.5px] tracking-[0.07em] transition-all duration-150 " +
                     (eng.levelMatch
                       ? "border-accent bg-accent font-semibold text-[#111]"
                       : "border-line2 text-dim hover:border-dim hover:text-daw-text")

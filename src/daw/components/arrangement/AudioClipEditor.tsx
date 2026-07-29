@@ -86,7 +86,7 @@ export function AudioClipEditor({
   }
 
   const toggle =
-    "rounded-[3px] border px-[7px] py-[3px] font-mono text-[9px] transition-colors";
+    "rounded-[3px] border px-1.75 py-0.75 font-mono text-[9px] transition-colors";
   const on = (v: boolean) =>
     v ? "border-accent text-accent" : "border-line text-faint";
   return (
