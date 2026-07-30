@@ -4,6 +4,7 @@
 export type HoverInfoMode = "tip" | "panel";
 
 const LS = "ain-hover-info-mode";
+const LS_VER = "ain-hover-info-ver";
 
 /** Approximate Chromium/Firefox `title` delay — tip mode is 4× faster. */
 export const NATIVE_TITLE_DELAY_MS = 1000;
@@ -11,12 +12,18 @@ export const TIP_DELAY_MS = NATIVE_TITLE_DELAY_MS / 4; // 250ms
 
 function load(): HoverInfoMode {
   try {
+    // v2: info panel is the product default (was tip). One-time migrate.
+    if (localStorage.getItem(LS_VER) !== "2") {
+      localStorage.setItem(LS_VER, "2");
+      localStorage.setItem(LS, "panel");
+      return "panel";
+    }
     const v = localStorage.getItem(LS);
     if (v === "tip" || v === "panel") return v;
   } catch {
     /* private mode */
   }
-  return "tip";
+  return "panel";
 }
 
 let mode: HoverInfoMode = load();

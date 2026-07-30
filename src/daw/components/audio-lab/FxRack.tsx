@@ -40,6 +40,7 @@ export function FxRack({ hint }: { hint?: string }) {
         onRemove={(id) => engine.removeMasterDevice(id)}
         onMove={(id, to) => engine.moveMasterDevice(id, to)}
         onSetParams={(id, p) => engine.setMasterDeviceParams(id, p)}
+        readViz={(id) => engine.readMasterFxViz(id)}
         tail={
           <>
             {/* fixed master-bus safety limiter — never reordered, lives after the chain */}

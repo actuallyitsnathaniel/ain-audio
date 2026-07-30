@@ -192,6 +192,8 @@ body {
 .fx-scroll {
   scrollbar-width: thin; /* firefox */
   scrollbar-color: color-mix(in srgb, var(--accent) 45%, var(--line2)) var(--panel2);
+  /* EQ/speccomp panels resize on select — don't let the browser yank scroll position */
+  overflow-anchor: none;
 }
 .fx-scroll::-webkit-scrollbar {
   height: 8px;

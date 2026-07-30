@@ -75,6 +75,7 @@ function createChannel(fftSize, hop, nBands) {
     im: new Float32Array(fftSize),
     env: new Float32Array(nBands),
     bandGain: new Float32Array(nBands),
+    grDb: new Float32Array(nBands),
   };
 }
 
@@ -116,8 +117,8 @@ function compGainDb(levelDb, threshDb, ratio, kneeDb) {
   return ((1 / ratio - 1) * x * x) / (2 * kneeDb);
 }
 
-function processFrame(ch, window, fftSize, hop, edges, params) {
-  const { re, im, env, bandGain } = ch;
+function processFrame(ch, window, fftSize, hop, edges, params, curveAt) {
+  const { re, im, env, bandGain, grDb } = ch;
   const nBands = edges.length - 1;
   const {
     threshold,
@@ -128,6 +129,7 @@ function processFrame(ch, window, fftSize, hop, edges, params) {
     makeup,
     tilt,
     hopSec,
+    sampleRate,
   } = params;
 
   for (let i = 0; i < fftSize; i++) {
@@ -158,8 +160,15 @@ function processFrame(ch, window, fftSize, hop, edges, params) {
     env[b] = coef * env[b] + (1 - coef) * rms;
 
     const bandT = nBands <= 1 ? 0 : (b / (nBands - 1)) * 2 - 1; // −1 low … +1 high
-    const threshDb = threshold + tilt * bandT * 12;
-    const gDb = compGainDb(lin2db(env[b]), threshDb, ratio, knee);
+    const midBin = (i0 + i1) * 0.5;
+    const freqHz = (midBin * sampleRate) / fftSize;
+    const local = curveAt
+      ? curveAt(freqHz, threshold, tilt, bandT, ratio)
+      : { threshold: threshold + tilt * bandT * 12, ratio, rangeCap: 48 };
+    let gDb = compGainDb(lin2db(env[b]), local.threshold, local.ratio, knee);
+    // node range caps how hard this region can squash
+    if (local.rangeCap > 0 && gDb < -local.rangeCap) gDb = -local.rangeCap;
+    grDb[b] = -gDb;
     bandGain[b] = db2lin(gDb) * makeupLin;
   }
 
@@ -227,12 +236,71 @@ class AinSpeccompProcessor extends AudioWorkletProcessor {
     this.L = createChannel(this.fftSize, this.hop, 48);
     this.R = createChannel(this.fftSize, this.hop, 48);
     this._on = true;
+    this._viz = false;
+    this._vizCountdown = 0;
+    this._vizEnv = new Float32Array(48);
+    this._vizGr = new Float32Array(48);
+    this._curves = [];
     this._empty = null;
     this.port.onmessage = (ev) => {
       const d = ev.data || {};
       if (d.type !== "config") return;
       if (typeof d.on === "boolean") this._on = d.on;
+      if (typeof d.viz === "boolean") this._viz = d.viz;
+      if (Array.isArray(d.curves)) this._curves = d.curves;
     };
+  }
+
+  _bellWeight(freqHz, centerHz, q) {
+    if (!(freqHz > 0) || !(centerHz > 0)) return 0;
+    const oct = Math.log(freqHz / centerHz) / Math.LN2;
+    const w = Math.max(0.15, q);
+    return Math.exp(-((oct * w * 1.8) * (oct * w * 1.8)));
+  }
+
+  /** Blend global thresh/ratio with user Pro-Q-style dynamic nodes. */
+  _curveAt(freqHz, globalThresh, tilt, bandT, globalRatio) {
+    let thr = globalThresh + tilt * bandT * 12;
+    let ratio = globalRatio;
+    let rangeCap = 48;
+    let wSum = 0;
+    let ratioAcc = 0;
+    let rangeAcc = 0;
+    const curves = this._curves;
+    for (let i = 0; i < curves.length; i++) {
+      const c = curves[i];
+      if (!c || c.on === false) continue;
+      const w = this._bellWeight(freqHz, c.freq, c.q || 1);
+      if (w < 0.02) continue;
+      thr = thr + w * (c.threshold - thr);
+      ratioAcc += w * (c.ratio || globalRatio);
+      rangeAcc += w * (c.range || 12);
+      wSum += w;
+    }
+    if (wSum > 0.05) {
+      ratio = ratioAcc / wSum;
+      rangeCap = rangeAcc / wSum;
+    }
+    return { threshold: thr, ratio: Math.max(1.01, ratio), rangeCap };
+  }
+
+  _emitViz(ch) {
+    const n = this.nBands;
+    let peak = 1e-12;
+    for (let b = 0; b < n; b++) {
+      peak = Math.max(peak, ch.env[b]);
+    }
+    const denom = Math.log10(1 + peak * 8);
+    for (let b = 0; b < n; b++) {
+      this._vizEnv[b] = denom > 0 ? Math.log10(1 + ch.env[b] * 8) / denom : 0;
+      this._vizGr[b] = Math.min(1, (ch.grDb[b] || 0) / 24);
+    }
+    this.port.postMessage({
+      type: "viz",
+      n,
+      a: this._vizEnv.subarray(0, n),
+      b: this._vizGr.subarray(0, n),
+    });
   }
 
   _emptyInput(n) {
@@ -247,7 +315,7 @@ class AinSpeccompProcessor extends AudioWorkletProcessor {
     this.edges = buildBandMap(this.fftSize, sampleRate, n);
   }
 
-  _step(ch, x, mix, active, frameParams) {
+  _step(ch, x, mix, active, frameParams, emitViz) {
     const { fftSize, hop, olaGain } = this;
 
     const dry = ch.dryDelay[ch.dryIdx];
@@ -266,8 +334,19 @@ class AinSpeccompProcessor extends AudioWorkletProcessor {
     ch.fill++;
 
     if (ch.fill >= fftSize) {
-      if (active) processFrame(ch, this.window, fftSize, hop, this.edges, frameParams);
-      else identityFrame(ch, this.window, fftSize);
+      if (active) {
+        processFrame(ch, this.window, fftSize, hop, this.edges, frameParams, (freq, thr, tilt, bandT, ratio) =>
+          this._curveAt(freq, thr, tilt, bandT, ratio),
+        );
+      } else identityFrame(ch, this.window, fftSize);
+
+      if (emitViz && this._viz && active) {
+        this._vizCountdown--;
+        if (this._vizCountdown <= 0) {
+          this._vizCountdown = 3;
+          this._emitViz(ch);
+        }
+      }
 
       for (let i = 0; i < hop; i++) ch.outQueue[i] = ch.outFifo[i];
       ch.outRead = 0;
@@ -334,6 +413,7 @@ class AinSpeccompProcessor extends AudioWorkletProcessor {
       makeup: mk0,
       tilt: tilt0,
       hopSec,
+      sampleRate,
     };
 
     for (let i = 0; i < n; i++) {
@@ -348,9 +428,9 @@ class AinSpeccompProcessor extends AudioWorkletProcessor {
       const mix = this._on ? (mixA ? mixA[i] : mix0) : 0;
       const active = this._on && mix > 0.001;
 
-      outL[i] = this._step(this.L, inL[i] || 0, mix, active, frameParams);
+      outL[i] = this._step(this.L, inL[i] || 0, mix, active, frameParams, true);
       if (stereo) {
-        outR[i] = this._step(this.R, inR[i] || 0, mix, active, frameParams);
+        outR[i] = this._step(this.R, inR[i] || 0, mix, active, frameParams, false);
       }
     }
     return true;

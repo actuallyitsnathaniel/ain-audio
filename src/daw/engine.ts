@@ -61,7 +61,7 @@ import {
   type AudioCapabilityReport,
 } from "./audio-capability";
 import { FxChain, newFxId, type FxDeviceState } from "./fx-chain";
-import { FX_DEVICES, FX_DEVICE_TYPES, type FxDeviceType } from "./fx-devices";
+import { FX_DEVICES, FX_DEVICE_TYPES, migrateFxDeviceStates, type FxDeviceType } from "./fx-devices";
 import {
   BUILTIN_PATCHES,
   patchFromPreset,
@@ -651,8 +651,21 @@ class AudioEngine {
     void this.ensureSpectralWorklets().then((ok) => {
       if (ok) this._masterFx?.applyAll(this.bpm);
     });
+    this.ensureFxTick();
   }
   private _masterFx: FxChain | null = null;
+  private _fxTickTimer = 0;
+
+  /** ~30 Hz tick for EQ dynamics + per-device analysers (independent of transport). */
+  private ensureFxTick() {
+    if (this._fxTickTimer) return;
+    this._fxTickTimer = window.setInterval(() => {
+      this._masterFx?.tick();
+      for (const id of Object.keys(this._arrStrips)) {
+        this._arrStrips[id]?.fx.tick();
+      }
+    }, 16);
+  }
 
   // ── master-bus device chain API (same shape as the per-track one below) ──
   // Mutations ensure the graph exists (a user gesture is driving them), mutate the
@@ -697,6 +710,11 @@ class AudioEngine {
     this.ensureCtx();
     this._masterFx!.setParams(deviceId, params, this.bpm);
     this.saveMasterFx();
+  }
+
+  /** Latest spectral viz frame from a master-chain device (poll from rAF). */
+  readMasterFxViz(deviceId: string) {
+    return this._masterFx?.readViz(deviceId) ?? null;
   }
 
   private applyWet(instant?: boolean) {
@@ -3371,6 +3389,11 @@ class AudioEngine {
     r.t.devices = r.s.fx.states();
     this.saveArr();
     this.emit("fx");
+  }
+
+  /** Latest spectral viz frame from a track-chain device (poll from rAF). */
+  readTrackFxViz(trackId: string, deviceId: string) {
+    return this._arrStrips[trackId]?.fx.readViz(deviceId) ?? null;
   }
 
   toggleTrackMute(id: string) {

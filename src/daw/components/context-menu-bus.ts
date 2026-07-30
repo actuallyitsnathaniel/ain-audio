@@ -18,17 +18,40 @@ export interface MenuRequest {
   y: number;
   title?: string; // small header (e.g. "note" / "channel: bass")
   items: MenuItem[];
+  /**
+   * Element that opened the menu. Re-invoking openContextMenu with the same
+   * anchor toggles it closed (used by "+ device" so a second click dismisses
+   * cleanly instead of dismiss-then-reopen).
+   */
+  anchor?: HTMLElement | null;
 }
 
-let open: ((req: MenuRequest) => void) | null = null;
-export const setContextMenuHost = (fn: ((req: MenuRequest) => void) | null) => {
-  open = fn;
+type Host = {
+  open: (req: MenuRequest) => void;
+  close: () => void;
+  isOpen: () => boolean;
+  getAnchor: () => HTMLElement | null;
 };
 
-// Open the custom menu. Returns false if no host is mounted (caller may then let
-// the native menu through), true if handled.
+let host: Host | null = null;
+
+export const setContextMenuHost = (h: Host | null) => {
+  host = h;
+};
+
+/** Close the open menu, if any. */
+export function closeContextMenu(): void {
+  host?.close();
+}
+
+// Open the custom menu. Returns false if no host is mounted or the call toggled
+// an already-open menu closed; true if the menu was shown.
 export function openContextMenu(req: MenuRequest): boolean {
-  if (!open) return false;
-  open(req);
+  if (!host) return false;
+  if (host.isOpen() && req.anchor && host.getAnchor() === req.anchor) {
+    host.close();
+    return false;
+  }
+  host.open(req);
   return true;
 }

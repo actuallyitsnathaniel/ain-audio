@@ -71,6 +71,8 @@ function fft(re, im, inverse) {
   }
 }
 
+const VIZ_BINS = 48;
+
 function createChannel(fftSize, hop) {
   const half = fftSize / 2;
   return {
@@ -91,6 +93,23 @@ function createChannel(fftSize, hop) {
     synMag: new Float32Array(half + 1),
     synFreq: new Float32Array(half + 1),
   };
+}
+
+/** Max-pool FFT bins into log-spaced viz columns. */
+function fillVizLog(src, half, out) {
+  const n = out.length;
+  for (let i = 0; i < n; i++) {
+    const t0 = i / n;
+    const t1 = (i + 1) / n;
+    const k0 = Math.max(1, Math.floor(Math.pow(half, t0)));
+    const k1 = Math.max(k0 + 1, Math.min(half, Math.floor(Math.pow(half, t1))));
+    let m = 0;
+    for (let k = k0; k < k1; k++) {
+      const v = src[k];
+      if (v > m) m = v;
+    }
+    out[i] = m;
+  }
 }
 
 /** Semitone delta toward nearest in-key pitch class.
@@ -252,6 +271,10 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     this._scale = "major";
     this._mode = "snap";
     this._empty = null;
+    this._viz = false;
+    this._vizCountdown = 0;
+    this._vizDry = new Float32Array(VIZ_BINS);
+    this._vizWet = new Float32Array(VIZ_BINS);
     this.port.onmessage = (ev) => {
       const d = ev.data || {};
       if (d.type !== "config") return;
@@ -275,9 +298,32 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
         if (d.mode !== this._mode) reset = true;
         this._mode = d.mode;
       }
+      if (typeof d.viz === "boolean") this._viz = d.viz;
       // Drop accumulated PV / OLA state so mode changes don't "stick"
       if (reset) this._resetSynthState();
     };
+  }
+
+  _emitViz(ch) {
+    const half = this.fftSize / 2;
+    fillVizLog(ch.mag, half, this._vizDry);
+    fillVizLog(ch.synMag, half, this._vizWet);
+    let peak = 1e-12;
+    for (let i = 0; i < VIZ_BINS; i++) {
+      peak = Math.max(peak, this._vizDry[i], this._vizWet[i]);
+    }
+    // soft log compression → 0..1
+    const denom = Math.log10(1 + peak * 8);
+    for (let i = 0; i < VIZ_BINS; i++) {
+      this._vizDry[i] = denom > 0 ? Math.log10(1 + this._vizDry[i] * 8) / denom : 0;
+      this._vizWet[i] = denom > 0 ? Math.log10(1 + this._vizWet[i] * 8) / denom : 0;
+    }
+    this.port.postMessage({
+      type: "viz",
+      n: VIZ_BINS,
+      a: this._vizDry,
+      b: this._vizWet,
+    });
   }
 
   _resetSynthState() {
@@ -297,7 +343,7 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     return this._empty;
   }
 
-  _step(ch, x, pitchRatio, strength, doShift, maxShift) {
+  _step(ch, x, pitchRatio, strength, doShift, maxShift, emitViz) {
     const { fftSize, hop, olaGain } = this;
 
     const dry = ch.dryDelay[ch.dryIdx];
@@ -329,8 +375,34 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
           maxShift: Math.max(1, Math.min(12, maxShift | 0)),
           sampleRate: sampleRate,
         });
+        if (emitViz && this._viz) {
+          this._vizCountdown--;
+          if (this._vizCountdown <= 0) {
+            this._vizCountdown = 3;
+            this._emitViz(ch);
+          }
+        }
       } else {
         identityFrame(ch, this.window, fftSize);
+        // still show dry spectrum when mapping is idle but viz is on
+        if (emitViz && this._viz) {
+          this._vizCountdown--;
+          if (this._vizCountdown <= 0) {
+            this._vizCountdown = 3;
+            // analyze magnitudes without PV for the dry view
+            const half = fftSize / 2;
+            for (let i = 0; i < fftSize; i++) {
+              ch.re[i] = ch.inFifo[i] * this.window[i];
+              ch.im[i] = 0;
+            }
+            fft(ch.re, ch.im, false);
+            for (let k = 0; k <= half; k++) {
+              ch.mag[k] = Math.hypot(ch.re[k], ch.im[k]);
+              ch.synMag[k] = ch.mag[k];
+            }
+            this._emitViz(ch);
+          }
+        }
       }
 
       for (let i = 0; i < hop; i++) ch.outQueue[i] = ch.outFifo[i];
@@ -373,9 +445,9 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
       const pitchRatio = Math.pow(2, transpose / 12);
       const doShift = Math.abs(transpose) > 0.02;
 
-      outL[i] = this._step(this.L, inL[i] || 0, pitchRatio, strength, doShift, maxShift);
+      outL[i] = this._step(this.L, inL[i] || 0, pitchRatio, strength, doShift, maxShift, true);
       if (stereo) {
-        outR[i] = this._step(this.R, inR[i] || 0, pitchRatio, strength, doShift, maxShift);
+        outR[i] = this._step(this.R, inR[i] || 0, pitchRatio, strength, doShift, maxShift, false);
       }
     }
     return true;

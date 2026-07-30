@@ -235,6 +235,7 @@ function TrackFxPanel({ t }: { t: ArrTrack }) {
         onRemove={(id) => engine.removeTrackDevice(t.id, id)}
         onMove={(id, to) => engine.moveTrackDevice(t.id, id, to)}
         onSetParams={(id, p) => engine.setTrackDeviceParams(t.id, id, p)}
+        readViz={(id) => engine.readTrackFxViz(t.id, id)}
       />
     </div>
   );

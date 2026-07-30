@@ -6,6 +6,7 @@
 // reconnects — only add/remove/reorder do.
 
 import { FX_DEVICES, type FxDeviceType, type FxDeviceNodes } from "./fx-devices";
+import type { FxVizSlot } from "./spectral-viz";
 
 // serializable device state (persists in the track/master model)
 export interface FxDeviceState {
@@ -107,6 +108,16 @@ export class FxChain {
   // serializable snapshot of the chain
   states(): FxDeviceState[] {
     return this.live.map((d) => ({ ...d.state, params: structuredClone(d.state.params) }));
+  }
+
+  /** Latest spectral viz slot for a device (null if missing / non-spectral). */
+  readViz(id: string): FxVizSlot | null {
+    return this.live.find((d) => d.state.id === id)?.nodes.viz ?? null;
+  }
+
+  /** Continuous work for devices that need it (EQ dynamics / analyser). */
+  tick() {
+    for (const d of this.live) d.nodes.tick?.(this.ctx);
   }
 
   // tear down (track removed): disconnect everything from the graph

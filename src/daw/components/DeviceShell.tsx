@@ -6,25 +6,33 @@ export function DeviceShell({
   on,
   onToggle,
   children,
+  headerExtra,
+  footer,
+  wide,
 }: {
   name: string;
   on: boolean;
   onToggle: (v: boolean) => void;
   children: ReactNode;
+  /** Chips / toggles in the header row (e.g. viz assistant). */
+  headerExtra?: ReactNode;
+  /** Optional assistant strip under the knobs (heatmap / RTA). */
+  footer?: ReactNode;
+  /** Wider panel when a viz assistant is open. */
+  wide?: boolean;
 }) {
   return (
     <div
       className={
-        "min-w-34 rounded-sm border bg-panel2 transition-[opacity,border-color] duration-150 " +
+        "rounded-sm border bg-panel2 transition-[opacity,border-color] duration-150 [overflow-anchor:none] " +
+        (wide ? "min-w-70" : "min-w-34") +
+        " " +
         (on ? "border-line2 opacity-100" : "border-line opacity-[0.78]")
       }
     >
-      <div className="flex items-center gap-2 border-b border-line px-2.5 py-1.75">
+      <div className="flex items-center gap-2 border-b border-line px-2.5 py-1.75 pr-16">
         <button
-          className={
-            "flex size-4 items-center justify-center rounded-full border " +
-            (on ? "border-line2" : "border-line2")
-          }
+          className="flex size-4 items-center justify-center rounded-full border border-line2"
           onClick={() => onToggle(!on)}
           aria-label={"toggle " + name}
         >
@@ -43,8 +51,10 @@ export function DeviceShell({
         >
           {name}
         </span>
+        {headerExtra}
       </div>
       <div className="flex justify-center gap-2.5 px-2.5 py-3">{children}</div>
+      {footer ? <div className="border-t border-line px-2 pb-2 pt-1.5">{footer}</div> : null}
     </div>
   );
 }
