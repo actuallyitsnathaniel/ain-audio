@@ -49,7 +49,8 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
 | `reverb` | Convolver (internal dry/wet)        | synth IR, regenerated from the decay knob (device-owned `makeReverbIR`)                                                                                                                                                                                                                                                                |
 | `impartialer` | AudioWorklet (STFT) | Phase 1–3: global transpose, in-key snap, force-remap. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
-| `centinel` | AudioWorklet (YIN + STFT) | Monophonic auto-pitch. **speed** / **flex** / **humanize** / **formant** / amount / tracking / mix / key·scale·**custom map** / **midi follow** (held keys + arrangement MIDI under playhead) / transpose. Presets: nat · soft · robot. Pitch-graph viz (in / tgt / out). |
+| `centinel` | AudioWorklet (YIN + STFT) | Monophonic pitch sentinel. **speed** / **flex** / **humanize** / **formant** / amount / tracking / mix / key·scale·**custom map** / **midi follow** / transpose. Presets: nat · soft · robot. Pitch-graph viz. |
+| `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
@@ -131,11 +132,12 @@ device family** (**impartialer** / pitch-map, spectral compressor — shared STF
 decision layers; see [SPECTRAL.md](SPECTRAL.md)). Never a monolith engine rewrite.
 
 **Latency:** `FxDeviceDef` may declare optional `latencySamples` (`number` or
-`(params, sampleRate) => number`). Native devices omit it (treat as 0). `impartialer` reports
-FFT size for the active quality preset. Chain-level compensation (DelayNodes on parallel
-paths / mini-ADC) is **not wired yet** — the field exists so we do not retrofit later.
-Impartialer mixes dry/wet inside the worklet against a matching delay so strength blends do not
-comb while awaiting PDC.
+`(params, sampleRate) => number`). Native devices omit it (treat as 0). Spectral
+devices report FFT size; `cliplim` reports lookahead samples. **Mini-ADC is wired:**
+each track strip has a post-FX `DelayNode` that pads shorter tracks up to the longest
+peer latency at the sum bus (`engine.refreshTrackAdc`). Devices that keep delay when
+bypassed (STFT / cliplim) still count toward the sum. Impartialer / centinel / cliplim
+also mix dry/wet against a matching internal delay so blends do not comb.
 
 ## Loudness safety (two independent safeguards, both default ON)
 

@@ -54,6 +54,9 @@ Implemented from scratch, following these published techniques:
   **Ableton Live** (session/arrangement UX) — behavioral inspiration only, no code.
 - **Kilohearts Disperser** (product category) — phase-dispersal via cascaded allpasses;
   our `disperser` device is an original Web Audio allpass cascade, not their DSP.
+- **Au5** (transient / detail preservation technique) — clip, then restore
+  highpassed(`dry − clipped`) into the limited signal; used by `cliplim`
+  (`src/daw/worklets/cliplim-processor.js`). Behavioral inspiration; original DSP.
 
 ## Fonts
 

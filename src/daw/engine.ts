@@ -473,8 +473,10 @@ class AudioEngine {
       pan: StereoPannerNode;
       fx: FxChain;
       an: AnalyserNode;
+      /** Post-FX delay for mini-ADC (pads shorter tracks up to the longest peer). */
+      adc: DelayNode;
     }
-  > = {}; // per-track FX → vol → pan strip + post-fader meter tap
+  > = {}; // per-track FX → ADC → vol → pan strip + post-fader meter tap
   kit: DrumKit = DEFAULT_KIT;
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   private _drumBufs: Record<string, AudioBuffer | null> = {}; // laneId → decoded one-shot (null = use synth)
@@ -726,11 +728,11 @@ class AudioEngine {
   }
   addMasterDevice(type: FxDeviceType) {
     this.ensureCtx();
-    if (type === "impartialer" || type === "speccomp" || type === "centinel")
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim")
       void this.ensureSpectralWorklets();
     this._masterFx!.addDevice(type);
     this.saveMasterFx();
-    if (type === "impartialer" || type === "speccomp" || type === "centinel") {
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim") {
       void this.ensureSpectralWorklets().then((ok) => {
         if (ok) this._masterFx?.applyAll(this.bpm);
       });
@@ -2715,6 +2717,9 @@ class AudioEngine {
           c.audioWorklet.addModule(
             new URL("./worklets/centinel-processor.js", import.meta.url),
           ),
+          c.audioWorklet.addModule(
+            new URL("./worklets/cliplim-processor.js", import.meta.url),
+          ),
         ]);
         return true;
       } catch {
@@ -3222,18 +3227,23 @@ class AudioEngine {
     saveArrangement(this.arrangement);
     this.emit("arrange");
   }
-  // lazily build a track's FX→vol→pan→sum strip; returns the unity input junction.
+  // lazily build a track's FX→ADC→vol→pan→sum strip; returns the unity input junction.
   // Fader is POST-FX so level-dependent devices (crush waveshaper, filter resonance,
   // delay feedback) keep their character when the track volume moves — standard
   // channel-strip order. Mute/solo still ride the same post-FX gain node.
+  // Mini-ADC: each strip's `adc` DelayNode pads shorter (less latent) tracks so they
+  // align with the longest peer at the sum bus.
   private trackStrip(t: ArrTrack): GainNode {
     const c = this.ensureCtx();
     const n = this.nodes!;
     let s = this._arrStrips[t.id];
     if (!s) {
       const input = c.createGain(); // unity; sources land here
+      const adc = c.createDelay(1.0);
+      adc.delayTime.value = 0;
       const gain = c.createGain(); // post-FX fader
       const pan = c.createStereoPanner();
+      adc.connect(gain);
       gain.connect(pan);
       pan.connect(n.sum);
       // post-strip meter tap: pan → analyser (measure only; also → sum). Reflects the
@@ -3242,16 +3252,37 @@ class AudioEngine {
       an.fftSize = 2048;
       an.smoothingTimeConstant = 0;
       pan.connect(an);
-      // in → [devices] → gain → pan → sum. Seeded from the track's persisted device
+      // in → [devices] → adc → gain → pan → sum. Seeded from the track's persisted device
       // list (empty = clean passthrough).
-      const fx = new FxChain(c, input, gain);
+      const fx = new FxChain(c, input, adc);
       fx.setDevices((t.devices || []).map((d) => structuredClone(d)));
       fx.applyAll(this.bpm);
-      s = this._arrStrips[t.id] = { in: input, gain, pan, fx, an };
+      s = this._arrStrips[t.id] = { in: input, gain, pan, fx, an, adc };
+      this.refreshTrackAdc();
     }
     s.gain.gain.value = t.vol * this.trackGain(t);
     s.pan.pan.value = t.pan;
     return s.in;
+  }
+
+  /** Recompute per-track ADC delays from live FX chain latencies. */
+  private refreshTrackAdc() {
+    if (!this.ctx) return;
+    const sr = this.ctx.sampleRate;
+    const t = this.ctx.currentTime;
+    let maxL = 0;
+    const lat: Record<string, number> = {};
+    for (const id of Object.keys(this._arrStrips)) {
+      const s = this._arrStrips[id];
+      const L = s.fx.latencySamples(sr);
+      lat[id] = L;
+      if (L > maxL) maxL = L;
+    }
+    for (const id of Object.keys(this._arrStrips)) {
+      const s = this._arrStrips[id];
+      const sec = Math.min(1, Math.max(0, (maxL - (lat[id] ?? 0)) / sr));
+      s.adc.delayTime.setTargetAtTime(sec, t, 0.02);
+    }
   }
   private anyTrackSolo(): boolean {
     return this.arrangement.tracks.some((t) => t.solo);
@@ -3324,6 +3355,7 @@ class AudioEngine {
       try {
         s.fx.dispose();
         s.in.disconnect();
+        s.adc.disconnect();
         s.gain.disconnect();
         s.pan.disconnect();
         s.an.disconnect();
@@ -3332,6 +3364,7 @@ class AudioEngine {
       }
       delete this._arrStrips[id];
     }
+    this.refreshTrackAdc();
     this.saveArr();
   }
   private findTrack(id: string) {
@@ -3400,7 +3433,7 @@ class AudioEngine {
     );
   }
   addTrackDevice(id: string, type: FxDeviceType) {
-    if (type === "impartialer" || type === "speccomp" || type === "centinel")
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim")
       void this.ensureSpectralWorklets();
     const r = this.trackFx(id);
     if (!r) return;
@@ -3408,9 +3441,13 @@ class AudioEngine {
     r.t.devices = r.s.fx.states();
     this.saveArr();
     this.emit("fx");
-    if (type === "impartialer" || type === "speccomp" || type === "centinel") {
+    this.refreshTrackAdc();
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim") {
       void this.ensureSpectralWorklets().then((ok) => {
-        if (ok) r.s.fx.applyAll(this.bpm);
+        if (ok) {
+          r.s.fx.applyAll(this.bpm);
+          this.refreshTrackAdc();
+        }
       });
     }
   }
@@ -3421,6 +3458,7 @@ class AudioEngine {
     r.t.devices = r.s.fx.states();
     this.saveArr();
     this.emit("fx");
+    this.refreshTrackAdc();
   }
   moveTrackDevice(id: string, deviceId: string, toIndex: number) {
     const r = this.trackFx(id);
@@ -3429,6 +3467,7 @@ class AudioEngine {
     r.t.devices = r.s.fx.states();
     this.saveArr();
     this.emit("fx");
+    this.refreshTrackAdc();
   }
   setTrackDeviceParams(id: string, deviceId: string, params: unknown) {
     const r = this.trackFx(id);
@@ -3437,6 +3476,7 @@ class AudioEngine {
     r.t.devices = r.s.fx.states();
     this.saveArr();
     this.emit("fx");
+    this.refreshTrackAdc();
   }
 
   /** Latest spectral viz frame from a track-chain device (poll from rAF). */

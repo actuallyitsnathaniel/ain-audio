@@ -105,6 +105,24 @@ export class FxChain {
     for (const d of this.live) d.nodes.apply(d.state.params, this.ctx, bpm);
   }
 
+  /**
+   * Sum of reported device latencies (samples). Devices that keep a constant
+   * delay when bypassed (STFT / lookahead) still count — matches neutralize-in-place.
+   */
+  latencySamples(sampleRate = this.ctx.sampleRate): number {
+    let sum = 0;
+    for (const d of this.live) {
+      const def = FX_DEVICES[d.state.type];
+      if (def.latencySamples == null) continue;
+      const L =
+        typeof def.latencySamples === "function"
+          ? def.latencySamples(d.state.params, sampleRate)
+          : def.latencySamples;
+      sum += Math.max(0, L | 0);
+    }
+    return sum;
+  }
+
   // serializable snapshot of the chain
   states(): FxDeviceState[] {
     return this.live.map((d) => ({ ...d.state, params: structuredClone(d.state.params) }));

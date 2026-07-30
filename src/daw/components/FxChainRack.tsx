@@ -31,6 +31,7 @@ import { ImpartialerRta } from "./fx-viz/ImpartialerRta";
 import { BandCurveEditor } from "./fx-viz/BandCurveEditor";
 import { DisperserPhase } from "./fx-viz/DisperserPhase";
 import { CentinelPitch } from "./fx-viz/CentinelPitch";
+import { CliplimScope } from "./fx-viz/CliplimScope";
 import { EQ_SHAPES, type EqShape } from "../eq-curve";
 
 // Small labelled toggle chip with a glowing dot — used for sync / feel / auto-gain.
@@ -835,6 +836,99 @@ function DevicePanel({
               onClick={() => set({ quality: "high" })}
             />
           </div>
+        </DeviceShell>
+      );
+    }
+    case "cliplim": {
+      const p = d.params as FxParams["cliplim"];
+      const vizOn = p.viz !== false;
+      return (
+        <DeviceShell
+          name="CLIPLIM"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide={vizOn}
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="In/out peak scope — red dashed line is the ceiling"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <CliplimScope
+                deviceId={d.id}
+                readViz={vizReader}
+                ceilingDb={p.ceiling}
+                enabled={vizOn}
+                height={88}
+              />
+            ) : null
+          }
+        >
+          <Knob
+            value={p.ceiling}
+            min={-12}
+            max={0}
+            defaultValue={-0.5}
+            onChange={(v) => set({ ceiling: v })}
+            label="ceil"
+            disabled={!p.on}
+            fmt={(v) => v.toFixed(1) + "dB"}
+          />
+          <Knob
+            value={p.soft}
+            min={0}
+            max={1}
+            defaultValue={0.35}
+            onChange={(v) => set({ soft: v })}
+            label="soft"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.preserve}
+            min={0}
+            max={1}
+            defaultValue={0.55}
+            onChange={(v) => set({ preserve: v })}
+            label="preserve"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.lookahead}
+            min={0}
+            max={20}
+            defaultValue={2}
+            onChange={(v) => set({ lookahead: v })}
+            label="look"
+            disabled={!p.on}
+            fmt={(v) => (v < 0.05 ? "off" : v.toFixed(1) + "ms")}
+          />
+          <Knob
+            value={p.release}
+            min={5}
+            max={400}
+            defaultValue={80}
+            onChange={(v) => set({ release: v })}
+            label="rel"
+            disabled={!p.on || p.lookahead < 0.05}
+            fmt={(v) => Math.round(v) + "ms"}
+          />
+          <Knob
+            value={p.mix}
+            min={0}
+            max={1}
+            defaultValue={1}
+            onChange={(v) => set({ mix: v })}
+            label="mix"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
         </DeviceShell>
       );
     }

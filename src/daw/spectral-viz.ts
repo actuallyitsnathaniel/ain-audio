@@ -2,7 +2,7 @@
 
 export const SPECTRAL_VIZ_BINS = 96;
 
-export type FxVizKind = "impartialer" | "speccomp" | "eq" | "centinel";
+export type FxVizKind = "impartialer" | "speccomp" | "eq" | "centinel" | "cliplim";
 
 /**
  * Latest analysis snapshot for a spectral / EQ device.
@@ -15,6 +15,7 @@ export type FxVizKind = "impartialer" | "speccomp" | "eq" | "centinel";
  * eq:          `a` = input spectrum (0..1, log-binned), `b` unused
  * centinel:    `a`/`b` = scrolling detected / target MIDI (norm 0..1 over C2–C6);
  *              `xa` = corrected output pitch history
+ * cliplim:     `a`/`b` = scrolling input / output peak history (0..1 linear)
  */
 export interface FxVizSlot {
   kind: FxVizKind;

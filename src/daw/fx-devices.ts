@@ -28,7 +28,8 @@ export type FxDeviceType =
   | "impartialer"
   | "speccomp"
   | "eq"
-  | "centinel";
+  | "centinel"
+  | "cliplim";
 
 export type DelayFeel = "straight" | "dotted" | "triplet";
 export type ImpartialerScale = "major" | "minor" | "dorian" | "chromatic";
@@ -152,6 +153,25 @@ export interface FxParams {
     mix: number;
     transpose: number;
     quality: SpectralQuality;
+    viz: boolean;
+  };
+  /**
+   * Lookahead clip-limiter with Au5-style highpassed-delta detail preserve.
+   * `lookahead` ms → reported latency; 0 = clip-only (still 0-delay ring of size 0).
+   */
+  cliplim: {
+    on: boolean;
+    /** Ceiling in dBFS. */
+    ceiling: number;
+    /** 0 = hard clip · 1 = soft tanh knee. */
+    soft: number;
+    /** Re-add highpassed (dry−clipped) detail. */
+    preserve: number;
+    /** Lookahead in ms (0–20). */
+    lookahead: number;
+    /** Limiter release in ms. */
+    release: number;
+    mix: number;
     viz: boolean;
   };
 }
@@ -669,6 +689,31 @@ function buildCentinel(ctx: AudioContext): FxDeviceNodes {
   );
 }
 
+function cliplimLatencySamples(params: unknown, sampleRate: number): number {
+  const ms = Math.max(0, Math.min(20, (params as { lookahead?: number })?.lookahead ?? 0));
+  return Math.round((ms / 1000) * sampleRate);
+}
+
+function buildCliplim(ctx: AudioContext): FxDeviceNodes {
+  return buildSpectralWorklet(
+    ctx,
+    "ain-cliplim",
+    "cliplim",
+    (node, p, t) => {
+      const fx = p as FxParams["cliplim"];
+      const mix = fx.on ? fx.mix : 0;
+      node.parameters.get("ceiling")?.setTargetAtTime(fx.ceiling, t, 0.03);
+      node.parameters.get("soft")?.setTargetAtTime(fx.soft, t, 0.03);
+      node.parameters.get("preserve")?.setTargetAtTime(fx.preserve, t, 0.03);
+      node.parameters.get("lookahead")?.setTargetAtTime(fx.lookahead, t, 0.03);
+      node.parameters.get("release")?.setTargetAtTime(fx.release, t, 0.03);
+      node.parameters.get("mix")?.setTargetAtTime(mix, t, 0.03);
+      node.port.postMessage({ type: "config", on: fx.on, viz: !!fx.viz });
+    },
+    () => "low",
+  );
+}
+
 /** Pro-Q–style parametric EQ — native biquad cascade + analyser + dyn + M/S. */
 const EQ_MAX_BANDS = 12;
 const EQ_VIZ_BINS = 48;
@@ -1124,6 +1169,23 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         viz: true,
       }) as FxParams["centinel"],
     latencySamples: (params) => spectralLatencySamples(params),
+  },
+  cliplim: {
+    label: "cliplim",
+    category: "native",
+    build: buildCliplim,
+    defaults: () =>
+      ({
+        on: false,
+        ceiling: -0.5,
+        soft: 0.35,
+        preserve: 0.55,
+        lookahead: 2,
+        release: 80,
+        mix: 1,
+        viz: true,
+      }) as FxParams["cliplim"],
+    latencySamples: (params, sr) => cliplimLatencySamples(params, sr),
   },
 };
 

@@ -289,14 +289,13 @@ instance owns its core (or a small pool later if profiling demands it).
 
 ### 6.2. Latency contract (precondition)
 
-These are the first **intentionally latent** FX-rack devices. Before shipping either:
+These were the first **intentionally latent** FX-rack devices. Shipped:
 
-- Add optional `latencySamples` to `FxDeviceDef`
-  (`number | ((params) => number)`).
-- Document that compensation (DelayNodes on parallel dry paths / mini-ADC) comes when the
-  first lookahead or STFT device ships — design the field now so we do not retrofit
-  every consumer later.
-- Impartialer and speccomp both report latency from the active quality preset.
+- Optional `latencySamples` on `FxDeviceDef`
+  (`number | ((params, sampleRate) => number)`).
+- **Mini-ADC wired** — track strips pad via post-FX `DelayNode` to the longest peer
+  (`engine.refreshTrackAdc`). `cliplim` reports lookahead samples; STFT devices report FFT size.
+- Impartialer / speccomp / centinel report latency from the active quality preset.
 
 Broadband `comp` stays zero-latency native. Spectral comp is a **separate** device type.
 
@@ -307,7 +306,8 @@ type FxDeviceType =
   | "filter" | "comp" | "delay" | "chorus" | "disperser" | "crush" | "reverb"
   | "impartialer"    // pitch snap / remap
   | "centinel"          // monophonic pitch sentinel (YIN + PV)
-  | "speccomp"; // spectral compressor
+  | "speccomp"          // spectral compressor
+  | "cliplim";          // lookahead clip + preserve (worklet; category native)
 ```
 
 UI: panels in [FxChainRack.tsx](components/FxChainRack.tsx) — knobs + chip rows (key/scale
