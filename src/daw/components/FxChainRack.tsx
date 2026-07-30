@@ -1,21 +1,24 @@
 // ── FxChainRack — the generic modular device-chain editor ────────────────────
 // Renders an ordered FxDeviceState[] as device panels (DeviceShell/Knob vocabulary)
-// with add (dropdown), remove (✕), drag-to-reorder (⠿) and per-device on/off.
+// with add (dropdown), remove (✕), pick-up drag-to-reorder (⠿) and per-device on/off.
 // Bound to a chain purely through callbacks, so the SAME component edits any
 // track's chain and the master bus. `tail` renders fixed, non-reorderable panels
 // after the chain (the master's safety limiter).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   DEFAULT_DELAY_DIV,
   delayDivLabels,
+  FILTER_MODES,
   FX_DEVICES,
   FX_DEVICE_TYPES,
   NOTE_NAMES,
   IMPARTIALER_SCALES,
   SCALE_PCS,
   DEFAULT_CENTINEL_CUSTOM_PCS,
+  type FilterMode,
   type FxDeviceType,
   type FxParams,
   type ImpartialerScale,
@@ -32,7 +35,16 @@ import { BandCurveEditor } from "./fx-viz/BandCurveEditor";
 import { DisperserPhase } from "./fx-viz/DisperserPhase";
 import { CentinelPitch } from "./fx-viz/CentinelPitch";
 import { CliplimScope } from "./fx-viz/CliplimScope";
-import { EQ_SHAPES, type EqShape } from "../eq-curve";
+import {
+  ChorusLfoViz,
+  CombResponseViz,
+  CompGrViz,
+  CrushCurveViz,
+  DelayEchoViz,
+  FilterResponseViz,
+  ReverbTailViz,
+} from "./fx-viz/NativeFxViz";
+import { EQ_MAX_BANDS, EQ_SHAPES, type EqShape } from "../eq-curve";
 
 // Small labelled toggle chip with a glowing dot — used for sync / feel / auto-gain.
 function FxChip({
@@ -88,28 +100,112 @@ function DevicePanel({
   switch (d.type) {
     case "filter": {
       const p = d.params as FxParams["filter"];
+      const vizOn = p.viz !== false;
+      const mode = (p.mode ?? "low") as FilterMode;
       return (
-        <DeviceShell name="FILTER" on={p.on} onToggle={(v) => set({ on: v })}>
+        <DeviceShell
+          name="FILTER"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide
+          headerExtra={
+            <div className="flex items-center gap-1">
+              {FILTER_MODES.map((m) => (
+                <FxChip
+                  key={m}
+                  label={m === "low" ? "LP" : m === "high" ? "HP" : m === "band" ? "BP" : "N"}
+                  on={mode === m}
+                  enabled={p.on}
+                  title={
+                    m === "low"
+                      ? "Lowpass"
+                      : m === "high"
+                        ? "Highpass"
+                        : m === "band"
+                          ? "Bandpass"
+                          : "Notch"
+                  }
+                  onClick={() => set({ mode: m })}
+                />
+              ))}
+              <FxChip
+                label="viz"
+                on={vizOn}
+                enabled
+                title="Magnitude response"
+                onClick={() => set({ viz: !vizOn })}
+              />
+            </div>
+          }
+          footer={
+            vizOn ? (
+              <FilterResponseViz
+                on={p.on}
+                mode={mode}
+                freq={p.freq ?? 2000}
+                reso={p.reso ?? 0.7}
+                enabled={vizOn}
+                height={88}
+              />
+            ) : null
+          }
+        >
           <Knob
-            value={p.morph}
+            value={Math.log2((p.freq ?? 2000) / 20)}
             min={0}
-            max={1}
-            defaultValue={0.5}
-            bipolar
-            onChange={(v) => set({ morph: v })}
-            label="lp ◂ ▸ hp"
+            max={Math.log2(20000 / 20)}
+            defaultValue={Math.log2(2000 / 20)}
+            onChange={(v) => set({ freq: 20 * Math.pow(2, v) })}
+            label="freq"
             disabled={!p.on}
-            fmt={(v) =>
-              Math.abs(v - 0.5) < 0.02 ? "off" : v < 0.5 ? "LP" : "HP"
-            }
+            fmt={() => {
+              const f = p.freq ?? 2000;
+              return f >= 1000 ? (f / 1000).toFixed(1) + "k" : Math.round(f) + "Hz";
+            }}
+          />
+          <Knob
+            value={p.reso ?? 0.7}
+            min={0.1}
+            max={18}
+            defaultValue={0.7}
+            onChange={(v) => set({ reso: v })}
+            label="reso"
+            disabled={!p.on}
+            fmt={(v) => v.toFixed(1)}
           />
         </DeviceShell>
       );
     }
     case "comp": {
       const p = d.params as FxParams["comp"];
+      const vizOn = p.viz !== false;
       return (
-        <DeviceShell name="COMP" on={p.on} onToggle={(v) => set({ on: v })}>
+        <DeviceShell
+          name="COMP"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="Live gain-reduction scope"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <CompGrViz
+                deviceId={d.id}
+                readViz={vizReader}
+                threshold={p.threshold}
+                enabled={vizOn}
+                height={72}
+              />
+            ) : null
+          }
+        >
           <Knob
             value={p.threshold}
             min={-48}
@@ -131,22 +227,92 @@ function DevicePanel({
             fmt={(v) => v.toFixed(1) + ":1"}
           />
           <Knob
+            value={p.attack ?? 0.01}
+            min={0.001}
+            max={0.2}
+            defaultValue={0.01}
+            onChange={(v) => set({ attack: v })}
+            label="attack"
+            disabled={!p.on}
+            fmt={(v) => (v < 0.01 ? Math.round(v * 1000) + "ms" : v.toFixed(2) + "s")}
+          />
+          <Knob
+            value={p.release ?? 0.18}
+            min={0.02}
+            max={1.5}
+            defaultValue={0.18}
+            onChange={(v) => set({ release: v })}
+            label="release"
+            disabled={!p.on}
+            fmt={(v) => (v < 0.1 ? Math.round(v * 1000) + "ms" : v.toFixed(2) + "s")}
+          />
+          <Knob
+            value={p.knee ?? 6}
+            min={0}
+            max={40}
+            defaultValue={6}
+            onChange={(v) => set({ knee: v })}
+            label="knee"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v) + "dB"}
+          />
+          <Knob
             value={p.makeup}
             min={0}
-            max={18}
+            max={24}
             defaultValue={0}
             onChange={(v) => set({ makeup: v })}
             label="makeup"
             disabled={!p.on}
             fmt={(v) => "+" + Math.round(v) + "dB"}
           />
+          <Knob
+            value={p.mix ?? 1}
+            min={0}
+            max={1}
+            defaultValue={1}
+            onChange={(v) => set({ mix: v })}
+            label="mix"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
         </DeviceShell>
       );
     }
     case "delay": {
       const p = d.params as FxParams["delay"];
+      const vizOn = p.viz !== false;
       return (
-        <DeviceShell name="DELAY" on={p.on} onToggle={(v) => set({ on: v })}>
+        <DeviceShell
+          name="DELAY"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide={vizOn}
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="Echo tap diagram — spacing follows time/sync, height follows feedback"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <DelayEchoViz
+                on={p.on}
+                time={p.time}
+                fb={p.fb}
+                mix={p.mix}
+                sync={p.sync}
+                div={p.div}
+                feel={p.feel}
+                enabled={vizOn}
+                height={72}
+              />
+            ) : null
+          }
+        >
           {p.sync ? (
             <Knob
               value={p.div}
@@ -223,8 +389,35 @@ function DevicePanel({
     }
     case "chorus": {
       const p = d.params as FxParams["chorus"];
+      const vizOn = p.viz !== false;
       return (
-        <DeviceShell name="CHORUS" on={p.on} onToggle={(v) => set({ on: v })}>
+        <DeviceShell
+          name="CHORUS"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide={vizOn}
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="L/R LFO delay modulation"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <ChorusLfoViz
+                on={p.on}
+                rate={p.rate}
+                depth={p.depth}
+                mix={p.mix}
+                enabled={vizOn}
+                height={72}
+              />
+            ) : null
+          }
+        >
           <Knob
             value={p.rate}
             min={0.1}
@@ -260,6 +453,88 @@ function DevicePanel({
             min={0}
             max={1}
             defaultValue={0.35}
+            onChange={(v) => set({ mix: v })}
+            label="mix"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+        </DeviceShell>
+      );
+    }
+    case "comb": {
+      const p = d.params as FxParams["comb"];
+      const vizOn = p.viz !== false;
+      return (
+        <DeviceShell
+          name="COMB"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide={vizOn}
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="Comb magnitude response — peaks/notches at multiples of freq"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <CombResponseViz
+                on={p.on}
+                freq={p.freq}
+                feedback={p.feedback}
+                damp={p.damp}
+                mix={p.mix}
+                enabled={vizOn}
+                height={88}
+              />
+            ) : null
+          }
+        >
+          <Knob
+            value={Math.log2(p.freq / 20)}
+            min={0}
+            max={Math.log2(4000 / 20)}
+            defaultValue={Math.log2(220 / 20)}
+            onChange={(v) => set({ freq: 20 * Math.pow(2, v) })}
+            label="freq"
+            disabled={!p.on}
+            fmt={() =>
+              p.freq >= 1000
+                ? (p.freq / 1000).toFixed(1) + "k"
+                : Math.round(p.freq) + "Hz"
+            }
+          />
+          <Knob
+            value={p.feedback}
+            min={-0.95}
+            max={0.95}
+            defaultValue={0.55}
+            bipolar
+            onChange={(v) => set({ feedback: v })}
+            label="fdbk"
+            disabled={!p.on}
+            fmt={(v) =>
+              (v < 0 ? "−" : "") + Math.round(Math.abs(v) * 100) + "%"
+            }
+          />
+          <Knob
+            value={p.damp}
+            min={0}
+            max={1}
+            defaultValue={0.25}
+            onChange={(v) => set({ damp: v })}
+            label="damp"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.mix}
+            min={0}
+            max={1}
+            defaultValue={0.5}
             onChange={(v) => set({ mix: v })}
             label="mix"
             disabled={!p.on}
@@ -327,8 +602,34 @@ function DevicePanel({
     }
     case "crush": {
       const p = d.params as FxParams["crush"];
+      const vizOn = p.viz !== false;
       return (
-        <DeviceShell name="CRUSH" on={p.on} onToggle={(v) => set({ on: v })}>
+        <DeviceShell
+          name="CRUSH"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide={vizOn}
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="Waveshaper transfer curve"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <CrushCurveViz
+                on={p.on}
+                drive={p.drive}
+                autoGain={p.autoGain}
+                enabled={vizOn}
+                height={88}
+              />
+            ) : null
+          }
+        >
           <Knob
             value={p.drive}
             min={0}
@@ -351,17 +652,110 @@ function DevicePanel({
     }
     case "reverb": {
       const p = d.params as FxParams["reverb"];
+      const vizOn = p.viz !== false;
       return (
-        <DeviceShell name="REVERB" on={p.on} onToggle={(v) => set({ on: v })}>
+        <DeviceShell
+          name="REVERB"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="IR tail envelope sketch"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <ReverbTailViz
+                on={p.on}
+                decay={p.decay}
+                mix={p.mix}
+                predelay={p.predelay ?? 0}
+                size={p.size ?? 0}
+                damping={p.damping ?? 0}
+                enabled={vizOn}
+                height={80}
+              />
+            ) : null
+          }
+        >
           <Knob
             value={p.decay}
             min={0.2}
-            max={6}
+            max={8}
             defaultValue={2.2}
             onChange={(v) => set({ decay: v })}
             label="decay"
             disabled={!p.on}
             fmt={(v) => v.toFixed(1) + "s"}
+          />
+          <Knob
+            value={p.size ?? 0}
+            min={0}
+            max={1}
+            defaultValue={0}
+            onChange={(v) => set({ size: v })}
+            label="size"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.predelay ?? 0}
+            min={0}
+            max={0.2}
+            defaultValue={0}
+            onChange={(v) => set({ predelay: v })}
+            label="pre"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 1000) + "ms"}
+          />
+          <Knob
+            value={p.damping ?? 0}
+            min={0}
+            max={1}
+            defaultValue={0}
+            onChange={(v) => set({ damping: v })}
+            label="damp"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.diffusion ?? 0}
+            min={0}
+            max={1}
+            defaultValue={0}
+            onChange={(v) => set({ diffusion: v })}
+            label="diffuse"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={Math.log2((p.loCut ?? 20) / 20)}
+            min={0}
+            max={Math.log2(500 / 20)}
+            defaultValue={0}
+            onChange={(v) => set({ loCut: 20 * Math.pow(2, v) })}
+            label="lo"
+            disabled={!p.on}
+            fmt={() => Math.round(p.loCut ?? 20) + "Hz"}
+          />
+          <Knob
+            value={Math.log2((p.hiCut ?? 20000) / 1000)}
+            min={0}
+            max={Math.log2(20000 / 1000)}
+            defaultValue={Math.log2(20000 / 1000)}
+            onChange={(v) => set({ hiCut: 1000 * Math.pow(2, v) })}
+            label="hi"
+            disabled={!p.on}
+            fmt={() =>
+              (p.hiCut ?? 20000) >= 1000
+                ? ((p.hiCut ?? 20000) / 1000).toFixed(1) + "k"
+                : Math.round(p.hiCut ?? 20000) + "Hz"
+            }
           />
           <Knob
             value={p.mix}
@@ -1249,6 +1643,8 @@ function EqPanel({
   const selected = bands.find((b) => b.id === sel) ?? null;
   const patchBand = (id: string, patch: Partial<import("../eq-curve").EqBand>) =>
     set({ bands: bands.map((b) => (b.id === id ? { ...b, ...patch } : b)) });
+  const setBands = (next: import("../eq-curve").EqBand[]) =>
+    set({ bands: next.slice(0, EQ_MAX_BANDS) });
 
   return (
     <DeviceShell
@@ -1298,7 +1694,7 @@ function EqPanel({
               enabled={vizOn}
               height={168}
               bands={bands}
-              onBandsChange={(next) => set({ bands: next })}
+              onBandsChange={setBands}
               selectedId={sel}
               onSelect={setSel}
             />
@@ -1397,7 +1793,7 @@ function EqPanel({
                     enabled
                     title="Remove this band (or press Delete / Backspace). ⌥-click a handle also deletes."
                     onClick={() => {
-                      set({ bands: bands.filter((b) => b.id !== selected.id) });
+                      setBands(bands.filter((b) => b.id !== selected.id));
                       setSel(null);
                     }}
                   />
@@ -1450,7 +1846,8 @@ function EqPanel({
         className="max-w-48 px-1 font-mono text-[9px] leading-snug text-dim"
         data-tip="Parametric equalizer — place bands on the analyzer to boost or cut. Unlike SPECCOMP, this changes tone with filters, not spectral compression."
       >
-        parametric EQ · {bands.length} band{bands.length === 1 ? "" : "s"}
+        parametric EQ · {bands.length}/{EQ_MAX_BANDS} band
+        {bands.length === 1 ? "" : "s"}
         {selected ? (
           <>
             <br />
@@ -1495,7 +1892,6 @@ export function FxChainRack({
   readViz?: (deviceId: string) => FxVizSlot | null;
   tail?: ReactNode;
 }) {
-  const [dragId, setDragId] = useState<string | null>(null);
   // Ableton-style device fold: a folded device is a slim vertical strip (UI state
   // only — never persisted with the chain).
   const [folded, setFolded] = useState<Set<string>>(new Set());
@@ -1536,42 +1932,132 @@ export function FxChainRack({
   // re-measure after every render (three property reads, cheap)
   useEffect(updateEdges);
 
-  // pointer-based reorder (works on mouse + touch + pen, unlike HTML5 DnD).
-  // dragging a handle live-reorders as the pointer passes over other devices.
-  const drag = useRef<{ id: string } | null>(null);
-
-  // which device sits under this client point (via data-fxid)?
-  const idAtPoint = (x: number, y: number): string | null => {
-    let el = document.elementFromPoint(x, y) as HTMLElement | null;
-    while (el) {
-      const id = el.dataset?.fxid;
-      if (id) return id;
-      el = el.parentElement;
-    }
-    return null;
+  // Ableton-style pick-up reorder: lift a floating ghost, open a gap under the
+  // cursor, commit onMove once on release (no live audio rewires mid-drag).
+  type DragState = {
+    id: string;
+    from: number;
+    drop: number;
+    ox: number;
+    oy: number;
+    w: number;
+    h: number;
+    x: number;
+    y: number;
+    label: string;
+    on: boolean;
   };
+  const [dragUi, setDragUi] = useState<DragState | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const devicesRef = useRef(devices);
+  useEffect(() => {
+    devicesRef.current = devices;
+  }, [devices]);
+
+  const dropIndexAt = useCallback((clientX: number, id: string): number => {
+    const list = devicesRef.current.filter((d) => d.id !== id);
+    for (let i = 0; i < list.length; i++) {
+      const el = scroller.current?.querySelector(
+        `[data-fxid="${list[i].id}"]`,
+      ) as HTMLElement | null;
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (clientX < r.left + r.width / 2) return i;
+    }
+    return list.length;
+  }, []);
+
+  const autoScroll = useCallback((clientX: number) => {
+    const el = scroller.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const edge = 48;
+    if (clientX < r.left + edge) el.scrollLeft -= 14;
+    else if (clientX > r.right - edge) el.scrollLeft += 14;
+  }, []);
 
   const startDrag =
     (id: string) => (e: ReactPointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return;
       e.preventDefault();
+      e.stopPropagation();
       e.currentTarget.setPointerCapture(e.pointerId);
-      drag.current = { id };
-      setDragId(id);
+      const wrap = e.currentTarget.closest("[data-fxid]") as HTMLElement | null;
+      if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      const from = devices.findIndex((d) => d.id === id);
+      if (from < 0) return;
+      const d = devices[from];
+      const next: DragState = {
+        id,
+        from,
+        drop: from,
+        ox: e.clientX - r.left,
+        oy: e.clientY - r.top,
+        w: r.width,
+        h: r.height,
+        x: r.left,
+        y: r.top,
+        label: FX_DEVICES[d.type].label,
+        on: !!(d.params as { on?: boolean }).on,
+      };
+      dragRef.current = next;
+      setDragUi(next);
     };
+
   const moveDrag = (e: ReactPointerEvent<HTMLButtonElement>) => {
-    if (!drag.current) return;
-    const over = idAtPoint(e.clientX, e.clientY);
-    if (!over || over === drag.current.id) return;
-    // "take the hovered slot": target = hovered index in the FULL list. moveDevice
-    // splices the dragged one out first, so this is insert-after when dragging right
-    // and insert-before when dragging left — a 2-device chain stays swappable both ways.
-    const to = devices.findIndex((d) => d.id === over);
-    if (to >= 0) onMove(drag.current.id, to); // live reorder + rewire as you drag
+    const cur = dragRef.current;
+    if (!cur) return;
+    autoScroll(e.clientX);
+    const drop = dropIndexAt(e.clientX, cur.id);
+    const next: DragState = {
+      ...cur,
+      drop,
+      x: e.clientX - cur.ox,
+      y: e.clientY - cur.oy,
+    };
+    dragRef.current = next;
+    setDragUi(next);
   };
+
   const endDrag = () => {
-    drag.current = null;
-    setDragId(null);
+    const cur = dragRef.current;
+    dragRef.current = null;
+    setDragUi(null);
+    if (!cur) return;
+    if (cur.drop !== cur.from) onMove(cur.id, cur.drop);
   };
+
+  const cancelDrag = useCallback(() => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setDragUi(null);
+  }, []);
+
+  useEffect(() => {
+    if (!dragUi) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      cancelDrag();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [dragUi, cancelDrag]);
+
+  // Visual order while dragging: others + a gap slot at `drop`.
+  const dragSlots: Array<{ kind: "device"; d: (typeof devices)[0] } | { kind: "gap" }> =
+    (() => {
+      if (!dragUi) return devices.map((d) => ({ kind: "device" as const, d }));
+      const others = devices.filter((d) => d.id !== dragUi.id);
+      const out: Array<{ kind: "device"; d: (typeof devices)[0] } | { kind: "gap" }> = [];
+      others.forEach((d, i) => {
+        if (dragUi.drop === i) out.push({ kind: "gap" });
+        out.push({ kind: "device", d });
+      });
+      if (dragUi.drop >= others.length) out.push({ kind: "gap" });
+      return out;
+    })();
 
   return (
     // ONE row, never wraps — the chain scrolls horizontally forever, like Ableton's device view
@@ -1580,20 +2066,31 @@ export function FxChainRack({
         ref={scroller}
         className="fx-scroll flex flex-nowrap items-stretch gap-2.5 overflow-x-auto pb-1.5"
       >
-        {devices.map((d) => {
+        {dragSlots.map((slot, si) => {
+          if (slot.kind === "gap" && dragUi) {
+            return (
+              <div
+                key={"gap-" + si}
+                className="shrink-0 rounded-sm border border-dashed border-accent/50 bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] transition-[width] duration-150"
+                style={{ width: dragUi.w, minHeight: Math.max(72, dragUi.h * 0.35) }}
+                aria-hidden
+              />
+            );
+          }
+          if (slot.kind !== "device") return null;
+          const d = slot.d;
           const on = !!(d.params as { on?: boolean }).on;
           return (
             <div
               key={d.id}
               data-fxid={d.id}
               className={
-                "relative shrink-0 transition-opacity " +
-                (dragId === d.id ? "opacity-40" : "")
+                "relative shrink-0 transition-[transform,opacity] duration-150 " +
+                (dragUi ? "ease-out" : "")
               }
             >
               {folded.has(d.id) ? (
                 // folded: a slim vertical strip — power dot + rotated name; click to expand.
-                // Still a data-fxid drop target, so reorder-drags pass over it correctly.
                 <button
                   onClick={() => toggleFold(d.id)}
                   className="flex h-full w-6.5 flex-col items-center gap-1.75 rounded-sm border border-line bg-panel2 py-2 transition-colors hover:border-line2"
@@ -1640,7 +2137,8 @@ export function FxChainRack({
                     onPointerCancel={endDrag}
                     className="absolute top-0.75 right-5.5 z-3 flex h-6 w-4.5 cursor-grab touch-none items-center justify-center rounded-[3px] text-[15px] leading-none text-faint transition-colors hover:bg-panel hover:text-dim active:cursor-grabbing"
                     aria-label={"reorder " + FX_DEVICES[d.type].label}
-                    title="drag to reorder"
+                    title="drag to reorder — pick up; Esc cancels"
+                    data-tip="Pick up and drag — devices slide apart to make room; release to drop · Esc cancels"
                   >
                     ⠿
                   </button>
@@ -1728,6 +2226,42 @@ export function FxChainRack({
           </span>
         </div>
       )}
+
+      {/* Floating pick-up ghost */}
+      {dragUi &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-90 overflow-hidden rounded-sm border border-accent bg-panel2 shadow-[0_18px_40px_-12px_rgba(0,0,0,0.85)]"
+            style={{
+              left: dragUi.x,
+              top: dragUi.y,
+              width: dragUi.w,
+              height: dragUi.h,
+              transform: "rotate(-1.5deg) scale(1.02)",
+              opacity: 0.94,
+            }}
+            aria-hidden
+          >
+            <div className="flex items-center gap-2 border-b border-line px-2.5 py-1.75">
+              <span
+                className={
+                  "size-1.5 rounded-full " +
+                  (dragUi.on
+                    ? "bg-accent shadow-[0_0_6px_var(--accent)]"
+                    : "bg-faint")
+                }
+              />
+              <span className="font-mono text-[10.5px] tracking-widest text-daw-text">
+                {dragUi.label.toUpperCase()}
+              </span>
+              <span className="ml-auto font-mono text-[9px] text-faint">esc cancels</span>
+            </div>
+            <div className="flex h-[calc(100%-28px)] items-center justify-center bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] font-mono text-[9px] text-faint">
+              drop to place
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

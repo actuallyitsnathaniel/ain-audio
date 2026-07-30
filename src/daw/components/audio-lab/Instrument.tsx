@@ -116,7 +116,13 @@ export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boo
   // voicing (poly/mono + unison): read with UX-friendly defaults so raising the voices
   // knob on an old patch gets a musical detune/width; ALWAYS write the full object
   // (deepMerge over an absent `voices` would store a partial otherwise).
-  const vc = p.voices ?? { mode: "poly" as const, unison: 1, detune: 14, width: 0.6 };
+  const vc = p.voices ?? {
+    mode: "poly" as const,
+    unison: 1,
+    detune: 14,
+    width: 0.6,
+    phase: 1,
+  };
   const uv = (patch: Partial<NonNullable<SynthPatch["voices"]>>) => u({ voices: { ...vc, ...patch } } as Parameters<typeof engine.updateActivePatch>[0]);
   // partial merge of the (guaranteed-present) sample source — deepMerge keeps the rest.
   // `sample?` on SynthPatch defeats DeepPartial's object-narrowing, so cast the shape.
@@ -369,8 +375,20 @@ export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boo
             <Knob size={38} label="voices" value={vc.unison} min={1} max={8} defaultValue={1} onChange={(v) => uv({ unison: Math.round(v) })} fmt={(v) => String(Math.round(v))} />
             <Knob size={38} label="detune" value={vc.detune} min={0} max={100} defaultValue={14} disabled={vc.unison < 2} onChange={(v) => uv({ detune: v })} fmt={(v) => Math.round(v) + "ct"} />
             <Knob size={38} label="width" value={vc.width} min={0} max={1} defaultValue={0.6} disabled={vc.unison < 2} onChange={(v) => uv({ width: v })} fmt={(v) => Math.round(v * 100) + "%"} />
+            <span title="Per-oscillator start phase. 100% = fully random (default — stops detuned voices combing). 0 = locked.">
+              <Knob
+                size={38}
+                label="phase"
+                value={vc.phase ?? 1}
+                min={0}
+                max={1}
+                defaultValue={1}
+                onChange={(v) => uv({ phase: v })}
+                fmt={(v) => (v < 0.01 ? "lock" : Math.round(v * 100) + "%")}
+              />
+            </span>
             <span className="max-w-60 self-center font-mono text-[8.5px] leading-[1.55] text-faint">
-              mono = last-note priority · unison stacks osc 1/2, detuned ±ct and spread across the stereo field (level-normalized, serum-style)
+              mono = last-note priority · unison stacks osc 1/2, detuned ±ct and spread across the stereo field (level-normalized, serum-style). phase randomizes each osc so stacks don’t comb.
             </span>
           </Group>
         )}

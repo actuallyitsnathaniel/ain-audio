@@ -2,7 +2,13 @@
 
 export const SPECTRAL_VIZ_BINS = 96;
 
-export type FxVizKind = "impartialer" | "speccomp" | "eq" | "centinel" | "cliplim";
+export type FxVizKind =
+  | "impartialer"
+  | "speccomp"
+  | "eq"
+  | "centinel"
+  | "cliplim"
+  | "comp";
 
 /**
  * Latest analysis snapshot for a spectral / EQ device.
@@ -12,10 +18,14 @@ export type FxVizKind = "impartialer" | "speccomp" | "eq" | "centinel" | "clipli
  *              `xa`/`xb` = log-freq peak centers 0..1 for each bin (argmax inside the bin)
  *              so RTA can place dry vs wet at true frequencies — not the same column.
  * speccomp:    `a` = dry band envelope (−60..0 → 0..1), `b` = GR amount (0..1 ≈ 0..24 dB)
- * eq:          `a` = input spectrum (0..1, log-binned), `b` unused
+ * eq:          `a` = input spectrum (0..1 over analyser −90..−10);
+ *              `b` = dyn engagement flash per bin (0..1);
+ *              `xa[0..EQ_MAX_BANDS)` = live per-band gains incl. dynamics (dB);
+ *              `xb` = absolute spectrum dB per bin (analyser scale)
  * centinel:    `a`/`b` = scrolling detected / target MIDI (norm 0..1 over C2–C6);
  *              `xa` = corrected output pitch history
  * cliplim:     `a`/`b` = scrolling input / output peak history (0..1 linear)
+ * comp:        `a` = scrolling gain reduction (0..1 ≈ 0..24 dB)
  */
 export interface FxVizSlot {
   kind: FxVizKind;

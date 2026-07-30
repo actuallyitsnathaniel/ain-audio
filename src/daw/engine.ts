@@ -67,6 +67,7 @@ import {
   patchFromPreset,
   type SynthPatch,
 } from "./data/patches";
+import { setOscillatorWave } from "./osc-phase";
 import { parseMidi } from "./data/midi-file";
 import {
   DEFAULT_KIT,
@@ -1567,11 +1568,14 @@ class AudioEngine {
 
     // ── unison (Serum-style): osc1/osc2 replicate ×N with a symmetric cents spread
     // and stereo placement; level normalizes by 1/√N. Sub/noise/sample stay single
-    // (a widened sub loses its low-end focus). ──
+    // (a widened sub loses its low-end focus). Phase randomize (default full) so
+    // detuned stacks don't start phase-locked and comb. ──
     const vc = p.voices;
     const uniN = Math.max(1, Math.min(8, Math.round(vc?.unison ?? 1)));
     const uniDet = vc?.detune ?? 0; // cents at the extremes
     const uniW = Math.max(0, Math.min(1, vc?.width ?? 0)); // stereo spread
+    // absent / undefined → full random (1); 0 = locked like classic Web Audio
+    const uniPhase = Math.max(0, Math.min(1, vc?.phase ?? 1));
 
     const oscs: OscillatorNode[] = [];
     // a pitched oscillator at `semi` offset, mixed at `level`, with portamento bends.
@@ -1588,7 +1592,8 @@ class AudioEngine {
       for (let i = 0; i < uni; i++) {
         const k = uni === 1 ? 0 : (i / (uni - 1)) * 2 - 1; // −1 … +1 across the stack
         const o = c.createOscillator();
-        o.type = wave;
+        const ph = uniPhase > 0.001 ? Math.random() * uniPhase * Math.PI * 2 : 0;
+        setOscillatorWave(c, o, wave, ph);
         o.frequency.value = freqOf(semi);
         o.detune.value = cents + k * uniDet;
         applyBends(o.frequency, "freq", semi); // glide this osc's own pitch line

@@ -60,6 +60,8 @@ export const FREQ_MIN = 20;
 export const FREQ_MAX = 20_000;
 export const GAIN_MIN = -24;
 export const GAIN_MAX = 24;
+/** Hard cap — matches the live biquad cascade length in `buildEq`. */
+export const EQ_MAX_BANDS = 12;
 /** Analyzer vertical span for dynamics threshold (speccomp). */
 export const DYN_DB_MIN = -60;
 export const DYN_DB_MAX = 0;
@@ -177,7 +179,18 @@ export function activeEqBands(bands: EqBand[]): EqBand[] {
   return bands.filter((b) => b.on && (!anySolo || b.solo));
 }
 
-export function eqResponseDb(bands: EqBand[], freq: number): number {
+function bandPlotGain(b: EqBand, index: number, liveGains?: Float32Array | null): number {
+  if (liveGains && index < liveGains.length && Number.isFinite(liveGains[index])) {
+    return liveGains[index];
+  }
+  return b.gain;
+}
+
+export function eqResponseDb(
+  bands: EqBand[],
+  freq: number,
+  liveGains?: Float32Array | null,
+): number {
   const active = activeEqBands(bands);
   if (!active.length) return 0;
   const filters = ensurePlotFilters(active.length);
@@ -187,6 +200,7 @@ export function eqResponseDb(bands: EqBand[], freq: number): number {
   let lin = 1;
   for (let i = 0; i < active.length; i++) {
     const b = active[i];
+    const idx = bands.indexOf(b);
     const f = filters[i];
     f.type = shapeToPlotType(b.shape);
     f.frequency.value = Math.max(20, Math.min(20000, b.freq));
@@ -195,10 +209,10 @@ export function eqResponseDb(bands: EqBand[], freq: number): number {
       f.gain.value = 0;
     } else if (b.shape === "tilt") {
       // tilt ≈ peaking with broad Q — gain at shelf-ish; keep peaking gain
-      f.gain.value = b.gain;
+      f.gain.value = bandPlotGain(b, idx, liveGains);
       f.Q.value = Math.max(0.1, Math.min(1, b.q * 0.35));
     } else {
-      f.gain.value = b.gain;
+      f.gain.value = bandPlotGain(b, idx, liveGains);
     }
     f.getFrequencyResponse(freqs, mag, phase);
     lin *= mag[0] || 1;
@@ -210,6 +224,8 @@ export function eqResponseDb(bands: EqBand[], freq: number): number {
 export function eqResponseCurve(
   bands: EqBand[],
   n = 128,
+  /** Optional per-band live gains (incl. dynamics) indexed like `bands`. */
+  liveGains?: Float32Array | null,
 ): { freqs: Float32Array; db: Float32Array } {
   const freqs = new Float32Array(n);
   const db = new Float32Array(n);
@@ -227,6 +243,7 @@ export function eqResponseCurve(
 
   for (let i = 0; i < active.length; i++) {
     const b = active[i];
+    const idx = bands.indexOf(b);
     const f = filters[i];
     f.type = shapeToPlotType(b.shape);
     f.frequency.value = Math.max(20, Math.min(20000, b.freq));
@@ -234,10 +251,10 @@ export function eqResponseCurve(
     if (b.shape === "lowcut" || b.shape === "highcut" || b.shape === "bandpass" || b.shape === "notch") {
       f.gain.value = 0;
     } else if (b.shape === "tilt") {
-      f.gain.value = b.gain;
+      f.gain.value = bandPlotGain(b, idx, liveGains);
       f.Q.value = Math.max(0.1, Math.min(1, b.q * 0.35));
     } else {
-      f.gain.value = b.gain;
+      f.gain.value = bandPlotGain(b, idx, liveGains);
     }
     f.getFrequencyResponse(freqs, mag, phase);
     for (let k = 0; k < n; k++) acc[k] *= mag[k] || 1;

@@ -52,6 +52,8 @@ Implemented from scratch, following these published techniques:
 - **REAPER** — names the transport-declick behavior ("tiny fade at play and stop") our engine mirrors.
 - **Xfer Serum** (unison voicing style), **FL Studio** (portamento/legato behavior),
   **Ableton Live** (session/arrangement UX) — behavioral inspiration only, no code.
+- **FabFilter Pro-Q 3** — interactive EQ analyzer UX (band handles, solo, dyn, ST/M/S);
+  our `eq` device is original Web Audio DSP + UI, not their code.
 - **Kilohearts Disperser** (product category) — phase-dispersal via cascaded allpasses;
   our `disperser` device is an original Web Audio allpass cascade, not their DSP.
 - **Au5** (transient / detail preservation technique) — clip, then restore

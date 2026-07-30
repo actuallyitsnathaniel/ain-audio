@@ -53,7 +53,7 @@ export function DeviceShell({
         </span>
         {headerExtra}
       </div>
-      <div className="flex justify-center gap-2.5 px-2.5 py-3">{children}</div>
+      <div className="flex flex-wrap justify-center gap-2.5 px-2.5 py-3">{children}</div>
       {footer ? <div className="border-t border-line px-2 pb-2 pt-1.5">{footer}</div> : null}
     </div>
   );

@@ -46,7 +46,14 @@ export interface SynthPatch {
   // polyphony + unison, Serum-style. Absent = poly, 1 voice (all old patches).
   // unison replicates osc1/osc2 (not sub/noise/sample): detune = cents spread at the
   // extremes (symmetric), width = stereo spread 0..1. Levels normalize by 1/√N.
-  voices?: { mode: "poly" | "mono"; unison: number; detune: number; width: number };
+  // phase = 0..1 randomize per oscillator (1 = full 0–2π; default — stops unison combing).
+  voices?: {
+    mode: "poly" | "mono";
+    unison: number;
+    detune: number;
+    width: number;
+    phase?: number;
+  };
 }
 
 const osc = (wave: Wave, cents = 0, semi = 0, level = 1): OscSpec => ({ wave, semi, cents, level });

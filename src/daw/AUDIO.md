@@ -41,13 +41,15 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 
 | Type     | Node(s)                             | Notes                                                                                                                                                                                                                                                                                                                                  |
 | -------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `filter` | BiquadFilter                        | bipolar morph: <0.5 lowpass, >0.5 highpass, ~0.5 off                                                                                                                                                                                                                                                                                   |
-| `comp`   | DynamicsCompressor + makeup gain    | _creative_ dynamics; manual makeup. Off ⇒ threshold 0/ratio 1 (neutral)                                                                                                                                                                                                                                                                |
+| `filter` | BiquadFilter | Ableton-style multimode: **LP / HP / BP / Notch** chips + **freq** + **reso** (Q). Old `morph` migrates. Magnitude viz. |
+| `comp`   | DynamicsCompressor + makeup + dry/wet | Ableton-style: thresh / ratio / attack / release / knee / makeup / mix. Off ⇒ dry pass. Live GR viz. |
 | `delay`  | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the tempo: the `div` knob steps the straight divisions (`DELAY_DIVS`, 1/16→1/1); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies every chain. Off = free ms (`time`). Persisted `space` migrates → `delay`. |
 | `chorus` | Dual Delay + LFO + feedback (internal dry/wet) | Stereo dual-voice chorus; rate / depth / feedback / mix. Native nodes only. |
+| `comb` | Feedback Delay + damp | Comb filter: `freq` sets delay (=1/f); bipolar **fdbk** (neg = invert); **damp** softens the loop; mix. Magnitude viz. |
 | `disperser` | Cascade of allpass biquads | Flat magnitude; phase wraps around `freq`. `amount` engages up to 12 stages + Q. Transient reshape without EQ. Toggleable **phase-response viz** (`DisperserPhase`). |
 | `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
-| `reverb` | Convolver (internal dry/wet)        | synth IR, regenerated from the decay knob (device-owned `makeReverbIR`)                                                                                                                                                                                                                                                                |
+| `reverb` | Convolver + predelay + tone         | Ableton-style hall: decay / size / damping / diffusion / predelay / lo·hi cut / mix. Synth IR via `makeReverbIR`. |
+| `eq` | Native biquad cascade | Pro-Q–style parametric EQ: up to 12 bands, shapes (bell/LS/HS/LC/HC/notch/BP/tilt), drag/Q editor, solo, per-band **dyn**, accurate response curve (incl. live dyn), input RTA, **ST/M/S**. Shared `BandCurveEditor` with speccomp. |
 | `impartialer` | AudioWorklet (STFT) | Phase 1–3: global transpose, in-key snap, force-remap. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
 | `centinel` | AudioWorklet (YIN + STFT) | Monophonic pitch sentinel. **speed** / **flex** / **humanize** / **formant** / amount / tracking / mix / key·scale·**custom map** / **midi follow** / transpose. Presets: nat · soft · robot. Pitch-graph viz. |
 | `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
@@ -638,11 +640,12 @@ resolvePatch(presetId), dest }`. Legacy arrangement `presetId`s (raw preset ids)
 
 ## Reverb impulse response
 
-Default is a **synthesised IR** (`makeReverbIR`): exponentially-decaying, lightly low-passed,
-L/R-decorrelated noise. The `decay` knob regenerates it. To use a **real IR file** instead, call
-`engine.loadReverbIR(url)` — it fetches/decodes via `fetchBuf`, pins the convolver buffer, and
-disables decay regeneration; `engine.useSynthReverbIR()` reverts. Real IRs can live alongside the
-preset assets and be loaded on demand (no fixed convention wired yet — add one when needed).
+FX-rack **reverb** uses a synthesised IR (`makeReverbIR`): decay / size / damping / diffusion
+shape an exponentially decaying, stereo-decorrelated noise buffer; predelay + lo/hi cuts sit
+around the convolver. Knob changes that affect the IR regenerate it (keyed, not every apply).
+
+Separately, the engine may still expose `loadReverbIR(url)` / `useSynthReverbIR()` for a
+legacy/global path — prefer the FX-rack device for new work.
 
 ## Events (`EngineEvent`)
 

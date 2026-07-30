@@ -5,6 +5,7 @@ import type { FxVizSlot } from "../../spectral-viz";
 import {
   DYN_DB_MAX,
   DYN_DB_MIN,
+  EQ_MAX_BANDS,
   FREQ_MAX,
   FREQ_MIN,
   GAIN_MAX,
@@ -27,12 +28,12 @@ type DragKind = "move" | null;
 
 /**
  * Pro-Q–inspired interactive analyzer:
- * - click empty space → add node
+ * - double-click empty space → add node
  * - drag node → freq + gain/threshold
  * - wheel on node → Q
- * - double-click node → remove
+ * - Delete / ⌥-click → remove
  *
- * `mode: "eq"` draws static response + gain handles.
+ * `mode: "eq"` draws (dyn-aware) response + gain handles + input RTA.
  * `mode: "speccomp"` draws threshold handles + RTA/GR from the worklet.
  */
 export function BandCurveEditor({
@@ -225,16 +226,16 @@ export function BandCurveEditor({
           const gr = slot.b[i] ?? 0;
           const x = padL + gap + i * (bw + gap);
           if (mode === "eq") {
-            // spectrum as soft fill from 0dB downward (pre-EQ energy), not accent bars
-            const barH = Math.max(1, env * (plotH - zeroY) * 0.95);
-            g.globalAlpha = 0.22;
-            g.fillStyle = "#8e8e98";
-            g.fillRect(x, zeroY, bw, barH);
-            // dyn engagement flash
+            // SpecComp-parity metering: silhouette from plot bottom (analyser 0..1)
+            const barH = Math.max(1, env * plotH * 0.92);
+            g.globalAlpha = 0.28;
+            g.fillStyle = DRY;
+            g.fillRect(x, plotH - barH, bw, barH);
+            // dyn engagement flash at band center
             if (gr > 0.05) {
               g.globalAlpha = 0.35 + gr * 0.45;
               g.fillStyle = accent;
-              g.fillRect(x, zeroY - 2, bw, 3);
+              g.fillRect(x, Math.max(0, plotH - barH - 3), bw, 3);
             }
           } else {
             // a = dry input (−60..0 → 0..1); b = GR (0..1 ≈ 0..24 dB).
@@ -314,9 +315,14 @@ export function BandCurveEditor({
       g.globalAlpha = 1;
     }
 
-    // EQ composite response (accurate biquad magnitude)
+    // EQ composite response (accurate biquad magnitude; live dyn gains when available)
     if (mode === "eq" && bands && bands.length) {
-      const curve = eqResponseCurve(bands, 128);
+      const slot = deviceId && readViz ? readViz(deviceId) : null;
+      const liveGains =
+        slot?.kind === "eq" && slot.xa.length > EQ_MAX_BANDS && slot.xa[EQ_MAX_BANDS] === 1
+          ? slot.xa
+          : null;
+      const curve = eqResponseCurve(bands, 128, liveGains);
       g.beginPath();
       for (let i = 0; i < curve.freqs.length; i++) {
         const x = padL + freqToX(curve.freqs[i], plotW);
@@ -588,6 +594,7 @@ export function BandCurveEditor({
     const freq = clampFreq(xToFreq(x, plotW));
     const db = yToDb(y, plotH, minDb, maxDb);
     if (mode === "eq" && onBandsChange && bands) {
+      if (bands.length >= EQ_MAX_BANDS) return;
       const b = defaultEqBand({ freq, gain: Math.min(GAIN_MAX, Math.max(GAIN_MIN, db)) });
       onBandsChange([...bands, b]);
       select(b.id);
@@ -609,7 +616,7 @@ export function BandCurveEditor({
       style={{ height, touchAction: "none" }}
       data-tip={
         mode === "eq"
-          ? "Parametric EQ — double-click empty space to add a band. Drag handles for freq/gain. Wheel = Q. Delete/Backspace or the del chip removes the selected band (⌥-click also deletes)."
+          ? `Parametric EQ — double-click empty space to add a band (max ${EQ_MAX_BANDS}). Drag handles for freq/gain. Wheel = Q. Delete/Backspace or the del chip removes the selected band (⌥-click also deletes).`
           : "Spectral dynamics — blue = dry input, green = wet output (post-compression). When compressing, blue peeks above green. Double-click to add a threshold node."
       }
       onPointerDown={onPointerDown}

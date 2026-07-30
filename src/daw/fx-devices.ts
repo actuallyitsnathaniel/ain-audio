@@ -15,13 +15,14 @@ import {
   type FxVizSlot,
 } from "./spectral-viz";
 import type { EqBand, SpecCurve } from "./eq-curve";
-import { defaultEqBand } from "./eq-curve";
+import { EQ_MAX_BANDS, defaultEqBand } from "./eq-curve";
 
 export type FxDeviceType =
   | "filter"
   | "comp"
   | "delay"
   | "chorus"
+  | "comb"
   | "disperser"
   | "crush"
   | "reverb"
@@ -32,6 +33,8 @@ export type FxDeviceType =
   | "cliplim";
 
 export type DelayFeel = "straight" | "dotted" | "triplet";
+export type FilterMode = "low" | "high" | "band" | "notch";
+export const FILTER_MODES: FilterMode[] = ["low", "high", "band", "notch"];
 export type ImpartialerScale = "major" | "minor" | "dorian" | "chromatic";
 export type CentinelScale = ImpartialerScale | "custom";
 export type ImpartialerMappingMode = "off" | "snap" | "remap";
@@ -66,7 +69,7 @@ export const DELAY_DIVS: { label: string; beats: number }[] = [
 ];
 export const delayDivLabels = DELAY_DIVS.map((d) => d.label);
 export const DEFAULT_DELAY_DIV = 1; // 1/8
-const DELAY_FEEL_MULT: Record<DelayFeel, number> = { straight: 1, dotted: 1.5, triplet: 2 / 3 };
+export const DELAY_FEEL_MULT: Record<DelayFeel, number> = { straight: 1, dotted: 1.5, triplet: 2 / 3 };
 
 /** STFT presets — keep in sync with worklets/impartialer-processor.js + speccomp-processor.js */
 export const SPECTRAL_QUALITY: Record<SpectralQuality, { fftSize: number; hop: number }> = {
@@ -78,14 +81,88 @@ const db2lin = (db: number) => Math.pow(10, db / 20);
 
 // per-device param shapes (the `params` blob each device instance carries)
 export interface FxParams {
-  filter: { on: boolean; morph: number };
-  comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number; makeup: number };
-  delay: { on: boolean; time: number; fb: number; mix: number; sync: boolean; div: number; feel: DelayFeel };
-  chorus: { on: boolean; rate: number; depth: number; mix: number; feedback: number };
+  /**
+   * Multimode filter — Low / High / Band / Notch + cutoff + resonance (Ableton Auto Filter–style).
+   * Legacy `morph` migrates → mode/freq/reso.
+   */
+  filter: {
+    on: boolean;
+    mode: FilterMode;
+    /** Cutoff / center frequency (Hz). */
+    freq: number;
+    /** Resonance (Q). */
+    reso: number;
+    viz: boolean;
+  };
+  comp: {
+    on: boolean;
+    threshold: number;
+    ratio: number;
+    /** Seconds — DynamicsCompressor attack. */
+    attack: number;
+    /** Seconds — DynamicsCompressor release. */
+    release: number;
+    /** Soft-knee width in dB (0 = hard). */
+    knee: number;
+    /** Makeup gain in dB. */
+    makeup: number;
+    /** Dry/wet 0..1 (Ableton-style parallel). */
+    mix: number;
+    viz: boolean;
+  };
+  delay: {
+    on: boolean;
+    time: number;
+    fb: number;
+    mix: number;
+    sync: boolean;
+    div: number;
+    feel: DelayFeel;
+    viz: boolean;
+  };
+  chorus: { on: boolean; rate: number; depth: number; mix: number; feedback: number; viz: boolean };
+  /**
+   * Feedback comb — delay = 1/freq, signed feedback (neg = inverted).
+   * Creates harmonic peaks/notches; damp softens the loop.
+   */
+  comb: {
+    on: boolean;
+    /** Comb spacing frequency (Hz); delay = 1/freq. */
+    freq: number;
+    /** Feedback −0.95..0.95 (negative inverts the comb). */
+    feedback: number;
+    /** HF damp in the feedback loop 0..1. */
+    damp: number;
+    mix: number;
+    viz: boolean;
+  };
   /** Phase disperser — cascaded allpasses; flat magnitude, rotates phase around `freq`. */
   disperser: { on: boolean; freq: number; amount: number; viz: boolean };
-  crush: { on: boolean; drive: number; autoGain: boolean };
-  reverb: { on: boolean; decay: number; mix: number };
+  crush: { on: boolean; drive: number; autoGain: boolean; viz: boolean };
+  /**
+   * Algorithmic hall — synth IR + predelay + tone filters.
+   * Ableton-flavored: decay / size / damping / diffusion / predelay / lo·hi cut / mix.
+   */
+  reverb: {
+    on: boolean;
+    /** Tail length in seconds. */
+    decay: number;
+    /** Dry/wet 0..1. */
+    mix: number;
+    /** Predelay before the IR (seconds, 0–0.2). */
+    predelay: number;
+    /** Room size 0..1 — denser early energy / longer perceived space. */
+    size: number;
+    /** HF absorption 0..1 — darker tail. */
+    damping: number;
+    /** Stereo scatter / decorrelation 0..1. */
+    diffusion: number;
+    /** Wet-path highcut (Hz). */
+    hiCut: number;
+    /** Wet-path lowcut (Hz). */
+    loCut: number;
+    viz: boolean;
+  };
   impartialer: {
     on: boolean;
     key: number;
@@ -191,26 +268,94 @@ export interface FxDeviceNodes {
 
 export type { FxVizSlot };
 
-// synthesised reverb IR (exponentially-decaying, lightly LP'd stereo noise) — same as the
-// engine's makeReverbIR, extracted so the reverb device owns it.
-export function makeReverbIR(ctx: AudioContext, decay: number): AudioBuffer {
+// synthesised reverb IR — base algorithm matches the original decay-only IR;
+// size / damping / diffusion add Ableton-style shaping on top (all 0 = original).
+export type ReverbIrOpts = {
+  decay: number;
+  size?: number;
+  damping?: number;
+  diffusion?: number;
+};
+
+export function makeReverbIR(ctx: AudioContext, opts: number | ReverbIrOpts): AudioBuffer {
+  const o: ReverbIrOpts = typeof opts === "number" ? { decay: opts } : opts;
+  const decay = Math.min(8, Math.max(0.2, o.decay));
+  const size = Math.max(0, Math.min(1, o.size ?? 0));
+  const damping = Math.max(0, Math.min(1, o.damping ?? 0));
+  const diffusion = Math.max(0, Math.min(1, o.diffusion ?? 0));
   const sr = ctx.sampleRate;
-  const len = Math.max(1, Math.floor(sr * Math.min(8, Math.max(0.2, decay))));
+  // size=0 → exact original length (sr * decay)
+  const len = Math.max(1, Math.floor(sr * decay * (1 + size * 0.35)));
   const buf = ctx.createBuffer(2, len, sr);
+  const early = size > 0.001 ? Math.floor(sr * (0.01 + size * 0.05)) : 0;
   for (let ch = 0; ch < 2; ch++) {
     const data = buf.getChannelData(ch);
     let lp = 0;
     for (let i = 0; i < len; i++) {
-      const env = Math.pow(1 - i / len, 2.2);
+      const t = i / len;
+      const earlyBoost =
+        early > 0 && i < early ? 1 + size * (1 - i / early) * 1.2 : 1;
+      // size=0 → original exponent 2.2
+      const env = Math.pow(1 - t, 2.2 - size * 0.6) * earlyBoost;
       const white = Math.random() * 2 - 1;
-      lp += 0.32 * (white - lp);
-      data[i] = lp * env;
+      // size=0 · damping=0 → original constant 0.32 one-pole
+      const lpCoef = 0.32 * (1 - damping * t * 0.9);
+      lp += lpCoef * (white - lp);
+      const scatter = diffusion > 0.001 ? (Math.random() * 2 - 1) * diffusion * 0.3 : 0;
+      data[i] = (lp + scatter) * env;
     }
   }
   return buf;
 }
 
 // ── device factories ──
+
+/** Map filter params → live biquad settings (shared with viz). */
+export function filterParamsToBiquad(
+  mode: FilterMode,
+  freq: number,
+  reso: number,
+  on = true,
+): { type: BiquadFilterType; cut: number; q: number } {
+  const cut = Math.max(20, Math.min(20000, freq));
+  const q = Math.max(0.1, Math.min(18, reso));
+  if (!on) return { type: "lowpass", cut: 20000, q: 0.5 };
+  switch (mode) {
+    case "high":
+      return { type: "highpass", cut, q };
+    case "band":
+      return { type: "bandpass", cut, q };
+    case "notch":
+      return { type: "notch", cut, q };
+    case "low":
+    default:
+      return { type: "lowpass", cut, q };
+  }
+}
+
+/** @deprecated morph → params; kept for one-shot migration of old saves. */
+export function filterMorphToBiquad(
+  morph: number,
+  on = true,
+): { type: BiquadFilterType; cut: number; q: number } {
+  if (!on || Math.abs(morph - 0.5) < 0.02) {
+    return { type: "lowpass", cut: 20000, q: 0.5 };
+  }
+  if (morph < 0.5) {
+    const k = 1 - morph * 2;
+    return {
+      type: "lowpass",
+      cut: 20000 * Math.pow(120 / 20000, k),
+      q: 0.9 + k * 2.2,
+    };
+  }
+  const k = (morph - 0.5) * 2;
+  return {
+    type: "highpass",
+    cut: 20 * Math.pow(6000 / 20, k),
+    q: 0.9 + k * 2.2,
+  };
+}
 
 function buildFilter(ctx: AudioContext): FxDeviceNodes {
   const filter = ctx.createBiquadFilter();
@@ -227,49 +372,72 @@ function buildFilter(ctx: AudioContext): FxDeviceNodes {
     apply: (p, c) => {
       const fx = p as FxParams["filter"];
       const t = c.currentTime;
-      if (!fx.on || Math.abs(fx.morph - 0.5) < 0.02) {
-        filter.type = "lowpass";
-        filter.frequency.setTargetAtTime(20000, t, 0.03);
-        filter.Q.setTargetAtTime(0.5, t, 0.03);
-      } else if (fx.morph < 0.5) {
-        const k = 1 - fx.morph * 2;
-        filter.type = "lowpass";
-        filter.frequency.setTargetAtTime(20000 * Math.pow(120 / 20000, k), t, 0.03);
-        filter.Q.setTargetAtTime(0.9 + k * 2.2, t, 0.03);
-      } else {
-        const k = (fx.morph - 0.5) * 2;
-        filter.type = "highpass";
-        filter.frequency.setTargetAtTime(20 * Math.pow(6000 / 20, k), t, 0.03);
-        filter.Q.setTargetAtTime(0.9 + k * 2.2, t, 0.03);
-      }
+      const { type, cut, q } = filterParamsToBiquad(
+        fx.mode ?? "low",
+        fx.freq ?? 2000,
+        fx.reso ?? 0.7,
+        fx.on,
+      );
+      filter.type = type;
+      filter.frequency.setTargetAtTime(cut, t, 0.03);
+      filter.Q.setTargetAtTime(q, t, 0.03);
     },
   };
 }
+
+const COMP_VIZ_BINS = 64;
 
 function buildComp(ctx: AudioContext): FxDeviceNodes {
   const comp = ctx.createDynamicsCompressor();
   const makeup = ctx.createGain();
   const inGain = ctx.createGain();
+  const outGain = ctx.createGain();
+  const dry = ctx.createGain();
+  const wet = ctx.createGain();
+  dry.gain.value = 0;
+  wet.gain.value = 1;
+  // Ableton-style parallel: in → dry → out; in → comp → makeup → wet → out
+  inGain.connect(dry);
+  dry.connect(outGain);
   inGain.connect(comp);
   comp.connect(makeup);
+  makeup.connect(wet);
+  wet.connect(outGain);
+  const viz = createFxVizSlot("comp", COMP_VIZ_BINS);
+  let liveOn = false;
   return {
     in: inGain,
-    out: makeup,
+    out: outGain,
+    viz,
     apply: (p, c) => {
       const fx = p as FxParams["comp"];
       const t = c.currentTime;
+      liveOn = !!fx.on;
+      const mix = Math.max(0, Math.min(1, fx.mix ?? 1));
       if (fx.on) {
         comp.threshold.setTargetAtTime(fx.threshold, t, 0.03);
-        comp.ratio.setTargetAtTime(fx.ratio, t, 0.03);
-        comp.attack.setTargetAtTime(fx.attack, t, 0.03);
-        comp.release.setTargetAtTime(fx.release, t, 0.03);
-        comp.knee.setTargetAtTime(6, t, 0.03);
+        comp.ratio.setTargetAtTime(Math.max(1, fx.ratio), t, 0.03);
+        comp.attack.setTargetAtTime(Math.max(0, fx.attack), t, 0.03);
+        comp.release.setTargetAtTime(Math.max(0.01, fx.release), t, 0.03);
+        comp.knee.setTargetAtTime(Math.max(0, Math.min(40, fx.knee ?? 6)), t, 0.03);
         makeup.gain.setTargetAtTime(db2lin(fx.makeup), t, 0.03);
+        wet.gain.setTargetAtTime(mix, t, 0.03);
+        dry.gain.setTargetAtTime(1 - mix, t, 0.03);
       } else {
         comp.threshold.setTargetAtTime(0, t, 0.03);
         comp.ratio.setTargetAtTime(1, t, 0.03);
+        comp.knee.setTargetAtTime(0, t, 0.03);
         makeup.gain.setTargetAtTime(1, t, 0.03);
+        wet.gain.setTargetAtTime(0, t, 0.03);
+        dry.gain.setTargetAtTime(1, t, 0.03);
       }
+    },
+    tick: () => {
+      const gr = liveOn ? Math.min(1, Math.max(0, -comp.reduction / 24)) : 0;
+      viz.a.copyWithin(0, 1);
+      viz.a[COMP_VIZ_BINS - 1] = gr;
+      viz.n = COMP_VIZ_BINS;
+      viz.gen = (viz.gen + 1) | 0;
     },
   };
 }
@@ -380,6 +548,63 @@ function buildChorus(ctx: AudioContext): FxDeviceNodes {
   };
 }
 
+/** Feedback comb — delay = 1/freq, signed fb, damped loop. */
+function buildComb(ctx: AudioContext): FxDeviceNodes {
+  const inGain = ctx.createGain();
+  const outGain = ctx.createGain();
+  const dry = ctx.createGain();
+  const wet = ctx.createGain();
+  wet.gain.value = 0;
+  // max delay ≈ 1/20 Hz
+  const delay = ctx.createDelay(0.06);
+  delay.delayTime.value = 1 / 220;
+  const damp = ctx.createBiquadFilter();
+  damp.type = "lowpass";
+  damp.frequency.value = 12000;
+  damp.Q.value = 0.5;
+  const fb = ctx.createGain();
+  fb.gain.value = 0;
+  const sum = ctx.createGain();
+  sum.gain.value = 1;
+
+  inGain.connect(dry);
+  dry.connect(outGain);
+  inGain.connect(sum);
+  sum.connect(delay);
+  delay.connect(damp);
+  damp.connect(fb);
+  fb.connect(sum);
+  delay.connect(wet);
+  wet.connect(outGain);
+
+  return {
+    in: inGain,
+    out: outGain,
+    apply: (p, c) => {
+      const fx = p as FxParams["comb"];
+      const t = c.currentTime;
+      const freq = Math.max(20, Math.min(4000, fx.freq || 220));
+      const delaySec = Math.min(0.055, Math.max(0.00025, 1 / freq));
+      const g = Math.max(-0.95, Math.min(0.95, fx.feedback ?? 0));
+      const dampAmt = Math.max(0, Math.min(1, fx.damp ?? 0.25));
+      // damp 0 → ~18 kHz · damp 1 → ~800 Hz
+      const dampHz = 18000 * Math.pow(800 / 18000, dampAmt);
+      const mix = Math.max(0, Math.min(1, fx.mix ?? 0.5));
+      delay.delayTime.setTargetAtTime(delaySec, t, 0.03);
+      damp.frequency.setTargetAtTime(dampHz, t, 0.04);
+      if (fx.on) {
+        fb.gain.setTargetAtTime(g, t, 0.03);
+        wet.gain.setTargetAtTime(mix, t, 0.03);
+        dry.gain.setTargetAtTime(1 - mix, t, 0.03);
+      } else {
+        fb.gain.setTargetAtTime(0, t, 0.03);
+        wet.gain.setTargetAtTime(0, t, 0.03);
+        dry.gain.setTargetAtTime(1, t, 0.03);
+      }
+    },
+  };
+}
+
 /**
  * Phase disperser — cascade of allpass biquads sharing one center frequency.
  * Magnitude stays flat; phase wraps around `freq`, which reshapes attack/transient
@@ -476,31 +701,86 @@ function buildCrush(ctx: AudioContext): FxDeviceNodes {
 function buildReverb(ctx: AudioContext): FxDeviceNodes {
   const conv = ctx.createConvolver();
   conv.normalize = true;
-  let curDecay = 2.2;
-  conv.buffer = makeReverbIR(ctx, curDecay);
-  const dry = ctx.createGain();
-  const wet = ctx.createGain();
+  let curKey = "";
+  const irFrom = (c: AudioContext, fx: FxParams["reverb"]) => {
+    const key = [
+      fx.decay.toFixed(2),
+      (fx.size ?? 0).toFixed(2),
+      (fx.damping ?? 0).toFixed(2),
+      (fx.diffusion ?? 0).toFixed(2),
+    ].join("|");
+    if (key !== curKey) {
+      curKey = key;
+      conv.buffer = makeReverbIR(c, {
+        decay: fx.decay,
+        size: fx.size ?? 0,
+        damping: fx.damping ?? 0,
+        diffusion: fx.diffusion ?? 0,
+      });
+    }
+  };
+  // defaults match the original decay-only reverb (extras at 0 / open filters)
+  const init: FxParams["reverb"] = {
+    on: false,
+    decay: 2.2,
+    mix: 0.25,
+    predelay: 0,
+    size: 0,
+    damping: 0,
+    diffusion: 0,
+    hiCut: 20000,
+    loCut: 20,
+    viz: true,
+  };
+  irFrom(ctx, init);
+
   const inGain = ctx.createGain();
   const outGain = ctx.createGain();
+  const dry = ctx.createGain();
+  const wet = ctx.createGain();
+  wet.gain.value = 0;
+  const pre = ctx.createDelay(0.25);
+  pre.delayTime.value = 0;
+  const lo = ctx.createBiquadFilter();
+  lo.type = "highpass";
+  lo.frequency.value = 20;
+  lo.Q.value = 0.7;
+  const hi = ctx.createBiquadFilter();
+  hi.type = "lowpass";
+  hi.frequency.value = 20000;
+  hi.Q.value = 0.7;
+
+  // in → dry → out
   inGain.connect(dry);
   dry.connect(outGain);
-  inGain.connect(conv);
-  conv.connect(wet);
+  // in → predelay → IR → loCut → hiCut → wet → out
+  inGain.connect(pre);
+  pre.connect(conv);
+  conv.connect(lo);
+  lo.connect(hi);
+  hi.connect(wet);
   wet.connect(outGain);
-  wet.gain.value = 0;
+
   return {
     in: inGain,
     out: outGain,
     apply: (p, c) => {
       const fx = p as FxParams["reverb"];
       const t = c.currentTime;
-      // regenerate the IR only when the decay meaningfully changed (avoids per-apply cost)
-      if (Math.abs(fx.decay - curDecay) > 0.05) {
-        curDecay = fx.decay;
-        conv.buffer = makeReverbIR(c, fx.decay);
+      irFrom(c, fx);
+      const mix = Math.max(0, Math.min(1, fx.mix));
+      const pd = Math.max(0, Math.min(0.2, fx.predelay ?? 0));
+      pre.delayTime.setTargetAtTime(pd, t, 0.04);
+      lo.frequency.setTargetAtTime(Math.max(20, Math.min(2000, fx.loCut ?? 20)), t, 0.04);
+      hi.frequency.setTargetAtTime(Math.max(1000, Math.min(20000, fx.hiCut ?? 20000)), t, 0.04);
+      if (fx.on) {
+        wet.gain.setTargetAtTime(mix, t, 0.05);
+        // original dry law — keep body loud; wet sits on top (not a full replace)
+        dry.gain.setTargetAtTime(1 - mix * 0.4, t, 0.05);
+      } else {
+        wet.gain.setTargetAtTime(0, t, 0.05);
+        dry.gain.setTargetAtTime(1, t, 0.05);
       }
-      wet.gain.setTargetAtTime(fx.on ? fx.mix : 0, t, 0.05);
-      dry.gain.setTargetAtTime(fx.on ? 1 - fx.mix * 0.4 : 1, t, 0.05);
     },
   };
 }
@@ -715,7 +995,6 @@ function buildCliplim(ctx: AudioContext): FxDeviceNodes {
 }
 
 /** Pro-Q–style parametric EQ — native biquad cascade + analyser + dyn + M/S. */
-const EQ_MAX_BANDS = 12;
 const EQ_VIZ_BINS = 48;
 
 function shapeToBiquadType(shape: EqBand["shape"]): BiquadFilterType {
@@ -915,6 +1194,9 @@ function buildEq(ctx: AudioContext): FxDeviceNodes {
   const fillViz = () => {
     const n = EQ_VIZ_BINS;
     const nyquist = ctx.sampleRate * 0.5;
+    const minDb = analyser.minDecibels;
+    const maxDb = analyser.maxDecibels;
+    const span = Math.max(1e-6, maxDb - minDb);
     for (let i = 0; i < n; i++) {
       const t0 = i / n;
       const t1 = (i + 1) / n;
@@ -924,11 +1206,41 @@ function buildEq(ctx: AudioContext): FxDeviceNodes {
       const i1 = Math.max(i0 + 1, Math.min(freqBytes.length - 1, Math.floor(f1 / binHz())));
       let m = 0;
       for (let k = i0; k < i1; k++) m = Math.max(m, freqBytes[k] || 0);
-      viz.a[i] = m / 255;
+      // 0..1 over analyser min/max (−90..−10) — same metering chrome as SpecComp
+      viz.a[i] = Math.min(1, Math.max(0, m / 255));
       viz.b[i] = 0;
+      // stash absolute dB for optional UI (xa unused as freq peaks for EQ)
+      viz.xb[i] = minDb + (m / 255) * span;
     }
     viz.n = n;
     viz.gen = (viz.gen + 1) | 0;
+  };
+
+  const writeLiveGains = (fx: FxParams["eq"], gains: Float32Array) => {
+    if (!fx.on) {
+      if (viz.xa.length > EQ_MAX_BANDS) viz.xa[EQ_MAX_BANDS] = 0;
+      return;
+    }
+    const bands = fx.bands ?? [];
+    for (let i = 0; i < EQ_MAX_BANDS; i++) {
+      const b = bands[i];
+      if (!bandAudible(fx, b)) {
+        viz.xa[i] = 0;
+        continue;
+      }
+      if (
+        b!.shape === "lowcut" ||
+        b!.shape === "highcut" ||
+        b!.shape === "bandpass" ||
+        b!.shape === "notch"
+      ) {
+        viz.xa[i] = 0;
+      } else {
+        viz.xa[i] = gains[i];
+      }
+    }
+    // sentinel: xa[EQ_MAX_BANDS] marks live gains valid for the response plot
+    if (viz.xa.length > EQ_MAX_BANDS) viz.xa[EQ_MAX_BANDS] = 1;
   };
 
   const bandAudible = (fx: FxParams["eq"], b: EqBand | undefined): boolean => {
@@ -1026,6 +1338,7 @@ function buildEq(ctx: AudioContext): FxDeviceNodes {
       setMsRouting(sm, t);
       analyser.getByteFrequencyData(freqBytes);
       const any = computeDynGains(live, dynGainsScratch);
+      writeLiveGains(live, dynGainsScratch);
       applyStatic(live, t, any ? dynGainsScratch : null);
     },
     tick: (c) => {
@@ -1033,8 +1346,9 @@ function buildEq(ctx: AudioContext): FxDeviceNodes {
       if (live.viz) fillViz();
       const bands = live.bands ?? [];
       if (!live.on) return;
-      viz.b.fill(0);
       const any = computeDynGains(live, dynGainsScratch);
+      writeLiveGains(live, dynGainsScratch);
+      viz.b.fill(0);
       if (any) {
         for (let i = 0; i < EQ_MAX_BANDS; i++) {
           const b = bands[i];
@@ -1045,9 +1359,9 @@ function buildEq(ctx: AudioContext): FxDeviceNodes {
           const bi = Math.min(EQ_VIZ_BINS - 1, Math.max(0, Math.floor(tt * EQ_VIZ_BINS)));
           viz.b[bi] = Math.max(viz.b[bi], dynEnv[i]);
         }
-        viz.gen = (viz.gen + 1) | 0;
         applyStatic(live, c.currentTime, dynGainsScratch);
       }
+      viz.gen = (viz.gen + 1) | 0;
     },
   };
 }
@@ -1071,14 +1385,61 @@ export interface FxDeviceDef {
 }
 
 export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
-  filter: { label: "filter", build: buildFilter, defaults: () => ({ on: false, morph: 0.5 }) as FxParams["filter"] },
-  comp: { label: "comp", build: buildComp, defaults: () => ({ on: false, threshold: -18, ratio: 4, attack: 0.01, release: 0.18, makeup: 0 }) as FxParams["comp"] },
-  delay: { label: "delay", build: buildDelay, defaults: () => ({ on: false, time: 0.32, fb: 0.35, mix: 0.3, sync: false, div: DEFAULT_DELAY_DIV, feel: "dotted" }) as FxParams["delay"] },
+  filter: {
+    label: "filter",
+    build: buildFilter,
+    defaults: () =>
+      ({ on: false, mode: "low", freq: 2000, reso: 0.7, viz: true }) as FxParams["filter"],
+  },
+  comp: {
+    label: "comp",
+    build: buildComp,
+    defaults: () =>
+      ({
+        on: false,
+        threshold: -18,
+        ratio: 4,
+        attack: 0.01,
+        release: 0.18,
+        knee: 6,
+        makeup: 0,
+        mix: 1,
+        viz: true,
+      }) as FxParams["comp"],
+  },
+  delay: {
+    label: "delay",
+    build: buildDelay,
+    defaults: () =>
+      ({
+        on: false,
+        time: 0.32,
+        fb: 0.35,
+        mix: 0.3,
+        sync: false,
+        div: DEFAULT_DELAY_DIV,
+        feel: "dotted",
+        viz: true,
+      }) as FxParams["delay"],
+  },
   chorus: {
     label: "chorus",
     build: buildChorus,
     defaults: () =>
-      ({ on: false, rate: 0.9, depth: 0.45, mix: 0.35, feedback: 0.15 }) as FxParams["chorus"],
+      ({ on: false, rate: 0.9, depth: 0.45, mix: 0.35, feedback: 0.15, viz: true }) as FxParams["chorus"],
+  },
+  comb: {
+    label: "comb",
+    build: buildComb,
+    defaults: () =>
+      ({
+        on: false,
+        freq: 220,
+        feedback: 0.55,
+        damp: 0.25,
+        mix: 0.5,
+        viz: true,
+      }) as FxParams["comb"],
   },
   disperser: {
     label: "disperser",
@@ -1086,8 +1447,29 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
     defaults: () =>
       ({ on: false, freq: 180, amount: 0.55, viz: true }) as FxParams["disperser"],
   },
-  crush: { label: "crush", build: buildCrush, defaults: () => ({ on: false, drive: 0.35, autoGain: true }) as FxParams["crush"] },
-  reverb: { label: "reverb", build: buildReverb, defaults: () => ({ on: false, decay: 2.2, mix: 0.25 }) as FxParams["reverb"] },
+  crush: {
+    label: "crush",
+    build: buildCrush,
+    defaults: () =>
+      ({ on: false, drive: 0.35, autoGain: true, viz: true }) as FxParams["crush"],
+  },
+  reverb: {
+    label: "reverb",
+    build: buildReverb,
+    defaults: () =>
+      ({
+        on: false,
+        decay: 2.2,
+        mix: 0.25,
+        predelay: 0,
+        size: 0,
+        damping: 0,
+        diffusion: 0,
+        hiCut: 20000,
+        loCut: 20,
+        viz: true,
+      }) as FxParams["reverb"],
+  },
   impartialer: {
     label: "impartialer",
     category: "spectral",
@@ -1226,10 +1608,12 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
         const stereoMode =
           prev.stereoMode === "mid" || prev.stereoMode === "side" ? prev.stereoMode : "stereo";
         const bands = Array.isArray(prev.bands)
-          ? (prev.bands as Record<string, unknown>[]).map((b) => ({
-              ...b,
-              solo: !!b.solo,
-            }))
+          ? (prev.bands as Record<string, unknown>[])
+              .slice(0, EQ_MAX_BANDS)
+              .map((b) => ({
+                ...b,
+                solo: !!b.solo,
+              }))
           : prev.bands;
         return { ...s, params: { ...prev, stereoMode, bands } };
       }
@@ -1241,7 +1625,104 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
         }
       }
 
-      if (type === "disperser" && prev.viz === undefined) {
+      if (type === "comp") {
+        return {
+          ...s,
+          params: {
+            ...prev,
+            attack: typeof prev.attack === "number" ? prev.attack : 0.01,
+            release: typeof prev.release === "number" ? prev.release : 0.18,
+            knee: typeof prev.knee === "number" ? prev.knee : 6,
+            mix: typeof prev.mix === "number" ? prev.mix : 1,
+            viz: prev.viz === undefined ? true : !!prev.viz,
+          },
+        };
+      }
+
+      if (type === "filter") {
+        // morph → mode/freq/reso (Ableton multimode)
+        if (typeof prev.morph === "number" && prev.mode === undefined) {
+          const m = filterMorphToBiquad(prev.morph as number, true);
+          const mode: FilterMode =
+            m.type === "highpass" ? "high" : "low";
+          return {
+            ...s,
+            params: {
+              on: !!prev.on,
+              mode,
+              freq: m.cut,
+              reso: m.q,
+              viz: prev.viz === undefined ? true : !!prev.viz,
+            },
+          };
+        }
+        const mode =
+          prev.mode === "high" || prev.mode === "band" || prev.mode === "notch"
+            ? prev.mode
+            : "low";
+        return {
+          ...s,
+          params: {
+            ...prev,
+            mode,
+            freq: typeof prev.freq === "number" ? prev.freq : 2000,
+            reso: typeof prev.reso === "number" ? prev.reso : 0.7,
+            viz: prev.viz === undefined ? true : !!prev.viz,
+          },
+        };
+      }
+
+      if (type === "reverb") {
+        // Remap the brief "colored" defaults we shipped → original-neutral init.
+        const colored =
+          prev.predelay === 0.02 &&
+          prev.size === 0.55 &&
+          prev.damping === 0.35 &&
+          prev.diffusion === 0.7 &&
+          prev.hiCut === 12000 &&
+          prev.loCut === 60;
+        return {
+          ...s,
+          params: {
+            ...prev,
+            predelay: colored
+              ? 0
+              : typeof prev.predelay === "number"
+                ? prev.predelay
+                : 0,
+            size: colored ? 0 : typeof prev.size === "number" ? prev.size : 0,
+            damping: colored
+              ? 0
+              : typeof prev.damping === "number"
+                ? prev.damping
+                : 0,
+            diffusion: colored
+              ? 0
+              : typeof prev.diffusion === "number"
+                ? prev.diffusion
+                : 0,
+            hiCut: colored
+              ? 20000
+              : typeof prev.hiCut === "number"
+                ? prev.hiCut
+                : 20000,
+            loCut: colored
+              ? 20
+              : typeof prev.loCut === "number"
+                ? prev.loCut
+                : 20,
+            viz: prev.viz === undefined ? true : !!prev.viz,
+          },
+        };
+      }
+
+      if (
+        (type === "disperser" ||
+          type === "delay" ||
+          type === "chorus" ||
+          type === "crush") &&
+        prev.viz === undefined
+      ) {
         return { ...s, params: { ...prev, viz: true } };
       }
 
