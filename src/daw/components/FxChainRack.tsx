@@ -21,6 +21,7 @@ import {
 import type { FxDeviceState } from "../fx-chain";
 import { Knob } from "./Knob";
 import { DeviceShell } from "./DeviceShell";
+import { openContextMenu } from "./context-menu-bus";
 
 // Small labelled toggle chip with a glowing dot — used for sync / feel / auto-gain.
 function FxChip({
@@ -652,25 +653,41 @@ export function FxChainRack({
             no devices — add one →
           </div>
         )}
-        <label className="flex shrink-0 items-center">
-          <select
-            value=""
-            onChange={(e) => {
-              if (e.target.value) onAdd(e.target.value as FxDeviceType);
-            }}
-            aria-label="add device"
-            className="cursor-pointer appearance-none rounded-[3px] border border-line2 bg-panel2 px-2 py-1.25 font-mono text-[9.5px] tracking-[0.05em] text-dim transition-colors hover:border-accent hover:text-accent focus:border-accent focus:outline-none"
-          >
-            <option value="" disabled className="bg-panel2 text-daw-text">
-              + device
-            </option>
-            {FX_DEVICE_TYPES.map((t) => (
-              <option key={t} value={t} className="bg-panel2 text-daw-text">
-                {FX_DEVICES[t].label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <button
+          type="button"
+          aria-label="add device"
+          aria-haspopup="menu"
+          className="cursor-pointer rounded-[3px] border border-line2 bg-panel2 px-2 py-1.25 font-mono text-[9.5px] tracking-[0.05em] text-dim transition-colors hover:border-accent hover:text-accent focus:border-accent focus:outline-none"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            // native stack first, then spectral worklets (same options-menu chrome)
+            const native = FX_DEVICE_TYPES.filter(
+              (t) => t !== "impartialer" && t !== "speccomp",
+            );
+            const spectral = FX_DEVICE_TYPES.filter(
+              (t) => t === "impartialer" || t === "speccomp",
+            );
+            openContextMenu({
+              x: r.left,
+              y: r.bottom + 4,
+              title: "add device",
+              items: [
+                ...native.map((t) => ({
+                  label: FX_DEVICES[t].label,
+                  onClick: () => onAdd(t),
+                })),
+                ...(spectral.length ? [{ separator: true as const }] : []),
+                ...spectral.map((t) => ({
+                  label: FX_DEVICES[t].label,
+                  hint: "spectral",
+                  onClick: () => onAdd(t),
+                })),
+              ],
+            });
+          }}
+        >
+          + device
+        </button>
         {tail}
       </div>
       {/* clipped-content indicators — pointer-events-none, stop above the scrollbar (6px pad + 8px bar) */}

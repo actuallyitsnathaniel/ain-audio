@@ -43,16 +43,44 @@ export function ContextMenu() {
     };
   }, [req]);
 
-  // clamp into the viewport once measured
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  // Position once measured: clamp to the viewport and dodge docked panels marked
+  // [data-menu-avoid] (e.g. the hover-info panel) so menus don't cover them.
+  // Applied imperatively so we don't cascade a second render for the clamp.
   useLayoutEffect(() => {
     if (!req || !ref.current) return;
-    const { width, height } = ref.current.getBoundingClientRect();
+    const el = ref.current;
+    const { width, height } = el.getBoundingClientRect();
     const pad = 6;
-    setPos({
-      x: Math.min(req.x, window.innerWidth - width - pad),
-      y: Math.min(req.y, window.innerHeight - height - pad),
-    });
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let x = req.x;
+    let y = req.y;
+
+    // Flip above the open point when there isn't room below.
+    if (y + height + pad > vh) y = Math.max(pad, req.y - height - 8);
+
+    x = Math.max(pad, Math.min(x, vw - width - pad));
+    y = Math.max(pad, Math.min(y, vh - height - pad));
+
+    const obstacles = document.querySelectorAll<HTMLElement>("[data-menu-avoid]");
+    for (const obs of obstacles) {
+      const o = obs.getBoundingClientRect();
+      const hitX = x < o.right + pad && x + width > o.left - pad;
+      const hitY = y < o.bottom + pad && y + height > o.top - pad;
+      if (!hitX || !hitY) continue;
+
+      const leftOf = o.left - width - pad;
+      const above = o.top - height - pad;
+      // Prefer left of the panel (keeps the menu near a right-edge trigger),
+      // then above it. Fall back to squeezing as high as the viewport allows.
+      if (leftOf >= pad) x = leftOf;
+      else if (above >= pad) y = above;
+      else y = Math.max(pad, above);
+    }
+
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
   }, [req]);
 
   if (!req) return null;
@@ -61,8 +89,8 @@ export function ContextMenu() {
     <div
       ref={ref}
       onContextMenu={(e) => e.preventDefault()}
-      style={{ left: pos.x, top: pos.y }}
-      className="fixed z-70 min-w-44 overflow-hidden rounded-[5px] border border-line2 bg-panel py-1 shadow-[0_14px_44px_rgba(0,0,0,0.55)]"
+      style={{ left: req.x, top: req.y }}
+      className="fixed z-80 min-w-44 overflow-hidden rounded-[5px] border border-line2 bg-panel py-1 shadow-[0_14px_44px_rgba(0,0,0,0.55)]"
     >
       {req.title && (
         <div className="px-2.75 pt-0.75 pb-1.25 font-mono text-[9px] tracking-widest text-faint uppercase">

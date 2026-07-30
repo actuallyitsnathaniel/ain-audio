@@ -149,6 +149,7 @@ export function HoverInfoHost() {
       {mode === "panel" && (
         <aside
           data-hover-info-ui
+          data-menu-avoid
           className="fixed right-3 bottom-3 z-70 flex w-[min(100%-1.5rem,22rem)] flex-col gap-1.5 rounded-[4px] border border-line2 bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-3 py-2.5 shadow-[0_12px_40px_-16px_rgba(0,0,0,0.85)] backdrop-blur-sm max-[767px]:hidden"
           aria-live="polite"
         >

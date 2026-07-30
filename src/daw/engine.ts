@@ -3635,10 +3635,13 @@ class AudioEngine {
       }
     }
     // Reflect the edit on a clip that's playing RIGHT NOW:
-    //  · RATE-only change (sync / semi / cents) → smoothly re-rate the live source (no
-    //    gap) so a knob drag warbles continuously.
-    //  · STRUCTURAL change (trim a/b, reverse, loop region, the buffer/source itself)
-    //    can't be patched on a live node → stop it so the scheduler re-fires it fresh.
+    //  · off/varispeed RATE-only (sync / semi / cents / stretch) → smoothly re-rate the
+    //    live buffer source so a knob drag warbles continuously.
+    //  · complex → push rate+semitones onto the live stretch node (playbackRate is not
+    //    the pitch path — that was why transpose only applied after stop/play).
+    //  · beats → semis are baked into the sliced buffer; stop so the scheduler re-fires
+    //    once the new render lands.
+    //  · STRUCTURAL (trim a/b, reverse, loop region, buffer, warp mode, …) → stop + re-fire.
     if (content.kind === "audio" && this.ctx && prev?.kind === "audio") {
       const structural =
         prev.bufId !== content.bufId ||
@@ -3654,15 +3657,48 @@ class AudioEngine {
       if (structural) {
         this.stopAudioForClip(clipId); // re-fire with the new trim/reverse/loop next tick
       } else {
-        const rate = this.audioClipRate(content);
+        const mode = warpModeOf(content);
         const tt = this.ctx.currentTime;
-        for (const key in this._startedAudio) {
-          if (!key.startsWith(clipId + "@")) continue;
-          const a = this._startedAudio[key];
-          a.src.playbackRate.setTargetAtTime(rate, tt, 0.02);
-          a.synced = !!content.sync;
-          a.baseRate = rate;
-          a.baseBpm = this.bpm; // re-base so future tempo drags scale from here
+        if (mode === "complex") {
+          const st = this._stretch[clipId];
+          if (st?.ready && st.node) {
+            const { ratio, semis } = this.warpParams(content);
+            // one-slot queue: this pops any deferred deactivate — mark stopSent false so
+            // the stretch sweep re-sends it (same bookkeeping as a live tempo drag)
+            st.node.schedule({
+              output: tt,
+              rate: ratio,
+              semitones: semis,
+            });
+            for (const key in this._stretchFired) {
+              if (!key.startsWith(clipId + "@")) continue;
+              const f = this._stretchFired[key];
+              f.when = Math.min(f.when, tt);
+              f.stopSent = false;
+            }
+          }
+          // tape fallback while the node is still warming: tempo-fit only (no pitch)
+          const fallbackRate = this.warpParams(content).ratio;
+          for (const key in this._startedAudio) {
+            if (!key.startsWith(clipId + "@")) continue;
+            const a = this._startedAudio[key];
+            a.src.playbackRate.setTargetAtTime(fallbackRate, tt, 0.02);
+            a.synced = false;
+            a.baseRate = fallbackRate;
+            a.baseBpm = this.bpm;
+          }
+        } else if (mode === "beats") {
+          this.stopAudioForClip(clipId); // new slice render keyed on semis
+        } else {
+          const rate = this.audioClipRate(content);
+          for (const key in this._startedAudio) {
+            if (!key.startsWith(clipId + "@")) continue;
+            const a = this._startedAudio[key];
+            a.src.playbackRate.setTargetAtTime(rate, tt, 0.02);
+            a.synced = !!content.sync;
+            a.baseRate = rate;
+            a.baseBpm = this.bpm; // re-base so future tempo drags scale from here
+          }
         }
       }
     }
