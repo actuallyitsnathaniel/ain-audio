@@ -67,6 +67,47 @@ import {
 
 export type TransportMode = "track" | "sequence";
 
+export const AUDIO_BUFFER_SIZES = [256, 512, 1024, 2048, 4096] as const;
+export type AudioBufferSize = (typeof AUDIO_BUFFER_SIZES)[number];
+export type AudioPrefs = {
+  inputDeviceId: string | null;
+  bufferSize: AudioBufferSize;
+  latencyMode: "auto" | "manual";
+  latencyMs: number;
+  inputMonitor: boolean;
+};
+
+const DEFAULT_AUDIO_PREFS: AudioPrefs = {
+  inputDeviceId: null,
+  bufferSize: 1024,
+  latencyMode: "auto",
+  latencyMs: 0,
+  inputMonitor: false,
+};
+
+function loadAudioPrefs(): AudioPrefs {
+  try {
+    const raw = localStorage.getItem("ain-audio-prefs");
+    if (!raw) return { ...DEFAULT_AUDIO_PREFS };
+    const p = JSON.parse(raw) as Partial<AudioPrefs>;
+    const buf = AUDIO_BUFFER_SIZES.includes(p.bufferSize as AudioBufferSize)
+      ? (p.bufferSize as AudioBufferSize)
+      : DEFAULT_AUDIO_PREFS.bufferSize;
+    return {
+      inputDeviceId: typeof p.inputDeviceId === "string" ? p.inputDeviceId : null,
+      bufferSize: buf,
+      latencyMode: p.latencyMode === "manual" ? "manual" : "auto",
+      latencyMs:
+        typeof p.latencyMs === "number" && Number.isFinite(p.latencyMs)
+          ? Math.max(0, Math.min(500, Math.round(p.latencyMs)))
+          : 0,
+      inputMonitor: !!p.inputMonitor,
+    };
+  } catch {
+    return { ...DEFAULT_AUDIO_PREFS };
+  }
+}
+
 const STEP_BEATS = 0.25; // one drum step = a 1/16 note
 
 type EngineEvent =
@@ -1801,7 +1842,9 @@ class AudioEngine {
     // leaving an audio arm → release the mic (privacy); arming audio → request it
     if (prev && prev !== this.armedChannel) this.teardownInput();
     if (this.armedChannel && t?.kind === "audio") void this.enableInput();
+    else this.syncInputMonitor();
     this.emit("clip");
+    this.emit("transport");
   }
 
   toggleMidiKeys() {
@@ -1824,12 +1867,15 @@ class AudioEngine {
   }
 
   // ── Record (MIDI notes + live audio input) ──
-  // ● / Shift+R. Reuses count-in from playSequence — capture is monitor-only until
+  // ● / Shift+R. Reuses count-in from playSequence — capture is gated until
   // the anchor. MIDI → noteOn/Off into a midi/drum clip. Audio → getUserMedia PCM
-  // into a new audio clip on the armed audio track. No punch markers / takes yet.
+  // into a new audio clip on the armed audio track. Prefs: device / buffer /
+  // latency compensation / input monitor (ain-audio-prefs). No punch/takes yet.
   recording = false;
   recordStamp = 0; // bumped when a take finishes → ClipEditor remounts
   inputStatus: "idle" | "live" | "denied" | "unsupported" = "idle";
+  audioPrefs: AudioPrefs = loadAudioPrefs();
+  inputDevices: { deviceId: string; label: string }[] = [];
   private _recTarget: { trackId: string; clipId: string } | null = null;
   private _recOpen = new Map<number, { startBeat: number; vel: number }>(); // midi holds
   private _recMode: "midi" | "audio" | null = null;
@@ -1840,7 +1886,10 @@ class AudioEngine {
   private _inputSource: MediaStreamAudioSourceNode | null = null;
   private _recProc: ScriptProcessorNode | null = null;
   private _recSink: GainNode | null = null; // mute sink so the processor runs
+  private _monitorGain: GainNode | null = null; // live input → armed track strip
   private _recChunks: Float32Array[][] = []; // each callback: per-channel copies
+  private _deviceListen = false;
+  private _inputOpenGen = 0; // ignore stale getUserMedia resolutions
 
   // true while playSequence's count-in clicks are still running (anchor is in the future)
   private inCountIn(): boolean {
@@ -1851,8 +1900,140 @@ class AudioEngine {
     );
   }
 
+  private persistAudioPrefs() {
+    try {
+      localStorage.setItem("ain-audio-prefs", JSON.stringify(this.audioPrefs));
+    } catch {
+      /* fine */
+    }
+  }
+
+  /** Approximate input→clip latency (ms). USB/OS buffers are invisible to the page. */
+  estimatedLatencyMs(): number {
+    const c = this.ctx;
+    const sr = c?.sampleRate || 48000;
+    const bufMs = (this.audioPrefs.bufferSize / sr) * 1000;
+    const base = c ? (c.baseLatency || 0) * 1000 : 0;
+    const out = c ? ((c as AudioContext & { outputLatency?: number }).outputLatency || 0) * 1000 : 0;
+    return Math.round(bufMs + base + out);
+  }
+
+  effectiveLatencyMs(): number {
+    return this.audioPrefs.latencyMode === "manual"
+      ? Math.max(0, this.audioPrefs.latencyMs)
+      : this.estimatedLatencyMs();
+  }
+
+  setAudioPrefs(partial: Partial<AudioPrefs>) {
+    const prev = { ...this.audioPrefs };
+    if (partial.inputDeviceId !== undefined)
+      this.audioPrefs.inputDeviceId = partial.inputDeviceId || null;
+    if (partial.bufferSize !== undefined && AUDIO_BUFFER_SIZES.includes(partial.bufferSize))
+      this.audioPrefs.bufferSize = partial.bufferSize;
+    if (partial.latencyMode === "auto" || partial.latencyMode === "manual")
+      this.audioPrefs.latencyMode = partial.latencyMode;
+    if (partial.latencyMs !== undefined)
+      this.audioPrefs.latencyMs = Math.max(0, Math.min(500, Math.round(partial.latencyMs)));
+    if (partial.inputMonitor !== undefined)
+      this.audioPrefs.inputMonitor = !!partial.inputMonitor;
+    this.persistAudioPrefs();
+
+    const deviceChanged = prev.inputDeviceId !== this.audioPrefs.inputDeviceId;
+    const bufChanged = prev.bufferSize !== this.audioPrefs.bufferSize;
+    const monChanged = prev.inputMonitor !== this.audioPrefs.inputMonitor;
+
+    if (deviceChanged && (this._inputStream || this.armedAudioTrack())) {
+      void this.reopenInput();
+      return;
+    }
+    if (bufChanged && this._recProc) {
+      const wasCapturing = this._recCapturing;
+      this.stopAudioCaptureGraph(true);
+      this.ensureInputSource();
+      if (this.recording && this._recMode === "audio") {
+        this.ensureAudioCaptureGraph();
+        this._recCapturing = wasCapturing;
+      } else {
+        this.syncInputMonitor();
+      }
+    } else if (monChanged) {
+      this.syncInputMonitor();
+    }
+    this.emit("transport");
+  }
+
+  private armedAudioTrack(): ArrTrack | null {
+    if (!this.armedChannel) return null;
+    const t = this.findTrack(this.armedChannel);
+    return t?.kind === "audio" ? t : null;
+  }
+
+  private ensureDeviceListen() {
+    if (this._deviceListen || !navigator.mediaDevices?.addEventListener) return;
+    this._deviceListen = true;
+    navigator.mediaDevices.addEventListener("devicechange", () => {
+      void this.refreshInputDevices();
+    });
+  }
+
+  async listInputDevices(): Promise<{ deviceId: string; label: string }[]> {
+    await this.refreshInputDevices();
+    return this.inputDevices;
+  }
+
+  async refreshInputDevices() {
+    this.ensureDeviceListen();
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      this.inputDevices = [];
+      this.emit("transport");
+      return;
+    }
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      this.inputDevices = all
+        .filter((d) => d.kind === "audioinput")
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || "input " + (i + 1),
+        }));
+      const id = this.audioPrefs.inputDeviceId;
+      if (id && !this.inputDevices.some((d) => d.deviceId === id)) {
+        this.audioPrefs.inputDeviceId = null;
+        this.persistAudioPrefs();
+        if (this._inputStream) void this.reopenInput();
+      }
+    } catch {
+      this.inputDevices = [];
+    }
+    this.emit("transport");
+  }
+
+  private audioConstraints(): MediaTrackConstraints {
+    const c: MediaTrackConstraints = {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    };
+    if (this.audioPrefs.inputDeviceId)
+      c.deviceId = { exact: this.audioPrefs.inputDeviceId };
+    return c;
+  }
+
   // Request mic/interface access and keep the stream warm while an audio track is armed.
   async enableInput(): Promise<boolean> {
+    return this.openInput(false);
+  }
+
+  private async reopenInput(): Promise<boolean> {
+    this.teardownInput();
+    if (!this.armedAudioTrack()) {
+      this.emit("transport");
+      return false;
+    }
+    return this.openInput(false);
+  }
+
+  private async openInput(retried: boolean): Promise<boolean> {
     if (!navigator.mediaDevices?.getUserMedia) {
       this.inputStatus = "unsupported";
       this.emit("transport");
@@ -1860,30 +2041,67 @@ class AudioEngine {
     }
     if (this._inputStream) {
       this.inputStatus = "live";
+      this.ensureInputSource();
+      this.syncInputMonitor();
+      void this.refreshInputDevices();
       this.emit("transport");
       return true;
     }
+    const gen = ++this._inputOpenGen;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
+        audio: this.audioConstraints(),
       });
+      if (gen !== this._inputOpenGen) {
+        for (const t of stream.getTracks()) t.stop();
+        return !!this._inputStream;
+      }
       this._inputStream = stream;
       this.inputStatus = "live";
+      this.ensureInputSource();
+      this.syncInputMonitor();
+      void this.refreshInputDevices();
       this.emit("transport");
       return true;
     } catch {
+      if (!retried && this.audioPrefs.inputDeviceId) {
+        this.audioPrefs.inputDeviceId = null;
+        this.persistAudioPrefs();
+        return this.openInput(true);
+      }
       this.inputStatus = "denied";
       this.emit("transport");
       return false;
     }
   }
 
+  private ensureInputSource() {
+    if (!this._inputStream || this._inputSource) return;
+    const c = this.ensureCtx();
+    this._inputSource = c.createMediaStreamSource(this._inputStream);
+  }
+
+  private syncInputMonitor() {
+    try {
+      this._monitorGain?.disconnect();
+    } catch {
+      /* fine */
+    }
+    this._monitorGain = null;
+    const t = this.armedAudioTrack();
+    if (!this.audioPrefs.inputMonitor || !t || !this._inputStream) return;
+    this.ensureInputSource();
+    if (!this._inputSource) return;
+    const c = this.ensureCtx();
+    const g = c.createGain();
+    g.gain.value = 1;
+    this._inputSource.connect(g);
+    g.connect(this.trackStrip(t));
+    this._monitorGain = g;
+  }
+
   private teardownInput() {
-    this.stopAudioCaptureGraph();
+    this.stopAudioCaptureGraph(true);
     if (this._inputStream) {
       for (const t of this._inputStream.getTracks()) t.stop();
       this._inputStream = null;
@@ -1891,15 +2109,11 @@ class AudioEngine {
     this.inputStatus = "idle";
   }
 
-  private stopAudioCaptureGraph() {
+  /** Tear down capture nodes. When `full`, also drop the MediaStreamSource + monitor. */
+  private stopAudioCaptureGraph(full = true) {
     this._recCapturing = false;
     try {
       this._recProc?.disconnect();
-    } catch {
-      /* fine */
-    }
-    try {
-      this._inputSource?.disconnect();
     } catch {
       /* fine */
     }
@@ -1909,18 +2123,32 @@ class AudioEngine {
       /* fine */
     }
     this._recProc = null;
-    this._inputSource = null;
     this._recSink = null;
+    if (!full) return;
+    try {
+      this._monitorGain?.disconnect();
+    } catch {
+      /* fine */
+    }
+    this._monitorGain = null;
+    try {
+      this._inputSource?.disconnect();
+    } catch {
+      /* fine */
+    }
+    this._inputSource = null;
   }
 
-  // Wire MediaStream → ScriptProcessor (silent sink). Chunks append only while
-  // `_recCapturing` (after count-in). No input monitoring — avoids speaker feedback.
+  // MediaStream → ScriptProcessor (silent sink). Chunks append only while
+  // `_recCapturing` (after count-in). Monitor is a parallel tap via syncInputMonitor.
   private ensureAudioCaptureGraph() {
     if (!this._inputStream || this._recProc) return;
+    this.ensureInputSource();
+    const src = this._inputSource;
+    if (!src) return;
     const c = this.ensureCtx();
-    const src = c.createMediaStreamSource(this._inputStream);
-    // 4096 = decent latency/CPU tradeoff; stereo in, stereo out (out is silenced)
-    const proc = c.createScriptProcessor(4096, 2, 2);
+    const size = this.audioPrefs.bufferSize;
+    const proc = c.createScriptProcessor(size, 2, 2);
     const sink = c.createGain();
     sink.gain.value = 0;
     proc.onaudioprocess = (ev) => {
@@ -1935,9 +2163,9 @@ class AudioEngine {
     src.connect(proc);
     proc.connect(sink);
     sink.connect(c.destination); // processor only runs when connected to the graph
-    this._inputSource = src;
     this._recProc = proc;
     this._recSink = sink;
+    this.syncInputMonitor();
   }
 
   // Resolve which clip/track receives the take.
@@ -2122,6 +2350,8 @@ class AudioEngine {
     if (!trackId || !c || this._recChunks.length === 0) return;
     const startBeat = this._recStartBeat;
     const lenBeats = Math.max(0.25, endBeat - startBeat);
+    const compBeats =
+      (this.effectiveLatencyMs() / 1000) * (this.arrangement.bpm / 60);
     let frames = 0;
     for (const block of this._recChunks) frames += block[0].length;
     if (frames < 64) return; // nothing useful
@@ -2130,7 +2360,8 @@ class AudioEngine {
     let o = 0;
     for (const block of this._recChunks) {
       const n = block[0].length;
-      for (let ch = 0; ch < nCh; ch++) buf.copyToChannel(block[ch], ch, o);
+      for (let ch = 0; ch < nCh; ch++)
+        buf.copyToChannel(block[ch] as Float32Array<ArrayBuffer>, ch, o);
       o += n;
     }
     const bufId = "rec" + ++this._importSeq + Date.now().toString(36);
@@ -2142,7 +2373,7 @@ class AudioEngine {
       "." +
       (Math.floor(startBeat % this.arrangement.beatsPerBar) + 1);
     const created = this.addClip(trackId, {
-      startBeat: Math.max(0, startBeat),
+      startBeat: Math.max(0, startBeat - compBeats),
       lengthBeats: lenBeats,
       loop: false,
       content: {

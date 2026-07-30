@@ -3,11 +3,12 @@
 // bars.beats + mm:ss readout, tempo (+ tap), time signature, loop (toggle + numeric
 // range), metronome (+ count-in), follow-playhead. Spacebar/Home/L keyboard transport.
 
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { Knob } from "../Knob";
+import { AudioPrefsPanel } from "./AudioPrefsPanel";
 
 const SIGS: [number, string][] = [
   [4, "4/4"],
@@ -42,12 +43,13 @@ function Select({ value, onChange, title, children }: { value: number; onChange:
 }
 
 export function PlaybackPane() {
-  const eng = useEngine(["transport", "arrange"]);
+  const eng = useEngine(["transport", "arrange", "clip"]);
   const playing = eng.sequencePlaying && eng.arrangeMode;
   const bpb = eng.arrangement.beatsPerBar;
   const loop = eng.arrangement.loop;
   const barBeat = useRef<HTMLSpanElement>(null);
   const timeStr = useRef<HTMLSpanElement>(null);
+  const [prefsOpen, setPrefsOpen] = useState(false);
 
   // imperative readouts (rAF, no per-frame React render)
   useRafLoop(() => {
@@ -187,12 +189,22 @@ export function PlaybackPane() {
         keys {eng.midiKeys ? "on" : "off"}
       </button>
 
-      {/* tempo + tap */}
-      <span className="ml-auto flex items-center gap-2.5">
+      {/* tempo + tap + audio prefs */}
+      <span className="relative ml-auto flex items-center gap-2.5">
         <button className={ctl + px + idle} onClick={() => engine.tapTempo()} title="tap tempo — hit repeatedly to set the BPM">
           tap
         </button>
         <Knob value={eng.arrangement.bpm} min={40} max={220} defaultValue={120} size={40} onChange={(v) => engine.setArrangementBpm(v)} label="tempo" fmt={(v) => Math.round(v) + " bpm"} />
+        <button
+          type="button"
+          data-audio-prefs-open
+          className={ctl + px + onOff(prefsOpen || eng.inputStatus === "live")}
+          onClick={() => setPrefsOpen((o) => !o)}
+          title="audio preferences — input device, buffer, latency, monitor"
+        >
+          audio
+        </button>
+        {prefsOpen && <AudioPrefsPanel onClose={() => setPrefsOpen(false)} />}
       </span>
     </div>
   );

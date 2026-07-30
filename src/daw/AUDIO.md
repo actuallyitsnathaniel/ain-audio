@@ -398,8 +398,19 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
   selected/armed midi or drum clip (creates a 1-bar clip at the cursor if needed).
 - **Audio**: arm an audio track (requests mic/interface via `getUserMedia`), then ● —
   after count-in, PCM is captured through a ScriptProcessor into a new imported audio
-  clip on that track (persisted via `encodeWav` → IndexedDB). No input monitoring yet
-  (avoids speaker feedback).
+  clip on that track (persisted via `encodeWav` → IndexedDB).
+  **Audio prefs** (`ain-audio-prefs`, **audio** chip on the playback pane → small panel):
+  - **Input** — `enumerateDevices` list; `deviceId: { exact }` on open (falls back to
+    Default if the device is gone). `devicechange` refreshes the list.
+  - **Buffer** — ScriptProcessor size `256|512|1024|2048|4096` (default **1024**).
+    Smaller = lower capture latency, more CPU. (AudioWorklet is the next latency win —
+    not yet; buffer size maps cleanly to ScriptProcessor today.)
+  - **Latency compensation** — on bake, clip `startBeat` shifts earlier by
+    `compBeats = (ms/1000)·bpm/60`. **Auto** estimates
+    `(bufferSize/sampleRate + baseLatency + outputLatency)·1000` ms; **manual** is a
+    user ms value. USB/OS round-trip is invisible to the page — treat auto as approximate.
+  - **Monitor** — optional live tap `MediaStreamSource → armed track strip` (default off).
+    Speakers can feedback; headphones recommended. Stream stays warm while armed either way.
 Count-in is monitor-only for MIDI and capture-gated for audio until
 `currentTime >= _seqAnchorTime`. Press ● again to punch out without stopping transport;
 Space/Stop ends the take. No punch-in markers or takes ladder yet.

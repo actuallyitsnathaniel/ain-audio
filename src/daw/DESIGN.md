@@ -59,6 +59,8 @@ to blue then nudged toward teal. If asked to re-tint, blend from these two ancho
 Things Tailwind can't express cleanly — reuse these, don't reinvent:
 
 - CSS play/pause/spinner glyphs: `.icon-play` (+ `.small`/`.tiny`), `.icon-pause`, `.play-spinner`.
+- `.keycap` — optically inflate Mac/unicode key glyphs (`⌘` `⌥` `⌫` `⇧` `←`…) so they match
+  surrounding mono copy; wrap glyphs/short combos only, not word keys like Space/Home/Shift.
 - Keyframes: `spin`, `blink` (+ `.cursor-blink`), `fade-in`, `sheet-up` (bottom-sheet animations).
 - `.tbar-bg` — the translucent blurred transport bar (`color-mix` + `backdrop-filter`).
 - `.scrollbar-hide` — used by the mobile transport nav and other routes.

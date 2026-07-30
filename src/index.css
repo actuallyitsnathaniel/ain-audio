@@ -207,3 +207,17 @@ body {
 .fx-scroll::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--accent) 65%, var(--line2));
 }
+
+/* Inflate Mac/unicode key glyphs so they optically match surrounding mono text.
+   ⌘ ⌥ ⌫ ⇧ ← → ↑ ↓ − sit smaller than Latin letters at the same font-size — wrap
+   those glyphs (and short combos like ⌘⇧ / ⌘Z) in .keycap. Word keys (Space,
+   Home, Shift) don't need it; leave them as plain text. Relative `em` so it
+   scales with whatever size the parent copy is set to. */
+.keycap {
+  display: inline-block;
+  font-size: 1.35em;
+  line-height: 1;
+  font-weight: 500;
+  vertical-align: -0.08em;
+  letter-spacing: 0.04em;
+}

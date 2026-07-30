@@ -567,11 +567,125 @@ export function ArrangementPage() {
           )}
         </div>
 
-        <div className="mt-3.5 flex items-center gap-3 font-mono text-[10.5px] tracking-[0.03em] text-faint">
-          <Link to="/" className="rounded-[3px] border border-line px-2.5 py-1.25 text-dim transition-colors hover:border-accent hover:text-accent">
+        <div className="mt-3.5 flex items-start gap-3 font-mono text-[10.5px] leading-[1.55] tracking-[0.03em] text-faint">
+          <Link
+            to="/"
+            className="shrink-0 rounded-[3px] border border-line px-2.5 py-1.25 text-dim transition-colors hover:border-accent hover:text-accent"
+          >
             ← back to the lab
           </Link>
-          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = move cursor · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · Shift+⌥-drag = slip content · Shift+R = record MIDI · M = computer MIDI keys · drag edge = resize (⌥ = stretch content) · shift-click = multi-select · drag empty = marquee · space play (from cursor) · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · <b>no selection:</b> ←→ move cursor (⌘ fine · ⌘⇧ clip edge) · Home/End · <b>selection:</b> ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
+
+          <details className="min-w-0">
+            <summary className="cursor-pointer select-none text-faint transition-colors hover:text-accent">
+              arrangement view shortcuts
+            </summary>
+            {/* .keycap (index.css) inflates unicode key glyphs to match this mono size */}
+            <div className="mt-1.5 ml-0.5 flex flex-col gap-y-2.5">
+              <div>
+                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">focus & navigation</div>
+                <ul className="flex flex-col gap-y-1">
+                  <li>
+                    <span className="text-dim">focus</span> · click a pane to key-focus (edit keys follow focused pane;
+                    space/undo are global)
+                  </li>
+                  <li>
+                    <span className="text-dim">no selection</span> · <span className="keycap">←</span>/
+                    <span className="keycap">→</span> move cursor · <span className="keycap">⌘</span> fine ·{" "}
+                    <span className="keycap">⌘⇧</span> edge jump · Home/End
+                  </li>
+                  <li>
+                    <span className="text-dim">with selection</span> · <span className="keycap">←</span>/
+                    <span className="keycap">→</span> nudge · Shift+<span className="keycap">←</span>/
+                    <span className="keycap">→</span> resize · <span className="keycap">↑</span>/
+                    <span className="keycap">↓</span> change track · R reverse · 0 mute
+                  </li>
+                  <li>
+                    <span className="text-dim">play</span> · Space (from cursor)
+                  </li>
+                  <li>
+                    <span className="text-dim">zoom</span> · + / <span className="keycap">−</span>
+                  </li>
+                  <li>
+                    <span className="text-dim">grid</span> · <span className="keycap">⌘</span>1 /{" "}
+                    <span className="keycap">⌘</span>2
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">selection, creation & clipboard</div>
+                <ul className="flex flex-col gap-y-1">
+                  <li>
+                    <span className="text-dim">multi-select</span> · Shift+click
+                  </li>
+                  <li>
+                    <span className="text-dim">marquee</span> · drag empty area
+                  </li>
+                  <li>
+                    <span className="text-dim">create clip</span> · double-click empty lane
+                  </li>
+                  <li>
+                    <span className="text-dim">insert</span> · <span className="keycap">⌘</span>I
+                  </li>
+                  <li>
+                    <span className="text-dim">duplicate</span> · <span className="keycap">⌘</span>D or{" "}
+                    <span className="keycap">⌥</span>-drag
+                  </li>
+                  <li>
+                    <span className="text-dim">copy/cut/paste</span> · <span className="keycap">⌘</span>C /{" "}
+                    <span className="keycap">⌘</span>X / <span className="keycap">⌘</span>V
+                  </li>
+                  <li>
+                    <span className="text-dim">delete</span> · <span className="keycap">⌫</span>
+                  </li>
+                  <li>
+                    <span className="text-dim">undo</span> · <span className="keycap">⌘</span>Z
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">editing, movement & arrangement</div>
+                <ul className="flex flex-col gap-y-1">
+                  <li>
+                    <span className="text-dim">move clip</span> · drag (<span className="keycap">⌘</span> = free,
+                    multi-select drags together)
+                  </li>
+                  <li>
+                    <span className="text-dim">slip content</span> · Shift+<span className="keycap">⌥</span>-drag
+                  </li>
+                  <li>
+                    <span className="text-dim">resize clip</span> · drag edge (<span className="keycap">⌥</span> = stretch
+                    content)
+                  </li>
+                  <li>
+                    <span className="text-dim">split</span> · <span className="keycap">⌘</span>E
+                  </li>
+                  <li>
+                    <span className="text-dim">consolidate</span> · <span className="keycap">⌘</span>J{" "}
+                    <span className="text-faint">(audio = real bounce)</span>
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">midi, instruments & special</div>
+                <ul className="flex flex-col gap-y-1">
+                  <li>
+                    <span className="text-dim">record midi</span> · Shift+R
+                  </li>
+                  <li>
+                    <span className="text-dim">computer keys as midi</span> · M
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">miscellaneous</div>
+                <ul className="flex flex-col gap-y-1">
+                  <li>
+                    <span className="text-dim">move cursor</span> · click timeline
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </details>
         </div>
       </TrackSection>
     </main>
