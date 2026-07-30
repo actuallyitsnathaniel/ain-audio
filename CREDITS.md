@@ -19,6 +19,12 @@ point of use in the code/docs.
   WARP mode: pitch-preserving tempo-fit + duration-preserving transpose, rendered offline into
   cached buffers in `engine.ts` (`stretchRender`).
 
+## Runtime libraries (other)
+
+- [Mediabunny](https://mediabunny.dev/) (MPL-2.0) — tree-shaken WebM mux + WebCodecs Opus encode
+  for studio take/bounce persistence in IndexedDB (`src/daw/data/audio-store.ts`). Falls back to
+  float WAV when the browser cannot encode Opus.
+
 ## Build / dev toolchain
 
 - [Vite](https://vite.dev) (+ `@vitejs/plugin-react`)

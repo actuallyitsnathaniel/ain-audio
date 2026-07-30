@@ -12,8 +12,11 @@ import {
   delayDivLabels,
   FX_DEVICES,
   FX_DEVICE_TYPES,
+  NOTE_NAMES,
+  IMPARTIALER_SCALES,
   type FxDeviceType,
   type FxParams,
+  type ImpartialerScale,
 } from "../fx-devices";
 import type { FxDeviceState } from "../fx-chain";
 import { Knob } from "./Knob";
@@ -249,6 +252,212 @@ function DevicePanel({
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
           />
+        </DeviceShell>
+      );
+    }
+    case "impartialer": {
+      const p = d.params as FxParams["impartialer"];
+      const mapOn = p.mode === "snap" || p.mode === "remap";
+      return (
+        <DeviceShell name="IMPARTIALER" on={p.on} onToggle={(v) => set({ on: v })}>
+          <Knob
+            value={p.key}
+            min={0}
+            max={11}
+            defaultValue={0}
+            onChange={(v) => set({ key: Math.round(v) })}
+            label="key"
+            disabled={!p.on || !mapOn}
+            fmt={(v) => NOTE_NAMES[Math.round(v)] ?? "C"}
+          />
+          <Knob
+            value={p.transpose}
+            min={-12}
+            max={12}
+            defaultValue={0}
+            bipolar
+            onChange={(v) => set({ transpose: Math.round(v) })}
+            label="trans"
+            disabled={!p.on}
+            fmt={(v) => (v > 0 ? "+" : "") + Math.round(v)}
+          />
+          <Knob
+            value={p.strength}
+            min={0}
+            max={1}
+            defaultValue={0.7}
+            onChange={(v) => set({ strength: v })}
+            label="strength"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.maxShift}
+            min={1}
+            max={2}
+            defaultValue={1}
+            onChange={(v) => set({ maxShift: Math.round(v) })}
+            label="max±"
+            disabled={!p.on || p.mode !== "snap"}
+            fmt={(v) => "±" + Math.round(v)}
+          />
+          <div className="flex flex-col gap-1 self-center">
+            <FxChip
+              label="snap"
+              on={p.mode === "snap"}
+              enabled={p.on}
+              title="snap — only nudge out-of-key notes (within max±); in-key color stays"
+              onClick={() => set({ mode: "snap" })}
+            />
+            <FxChip
+              label="remap"
+              on={p.mode === "remap"}
+              enabled={p.on}
+              title="remap — force every partial onto the scale grid (stronger lock)"
+              onClick={() => set({ mode: "remap" })}
+            />
+            <FxChip
+              label="off"
+              on={p.mode === "off"}
+              enabled={p.on}
+              title="mapping off — transpose only (original tonality through the mapper)"
+              onClick={() => set({ mode: "off" })}
+            />
+            <FxChip
+              label="lo"
+              on={p.quality === "low"}
+              enabled={p.on}
+              title="low latency (2048 FFT)"
+              onClick={() => set({ quality: "low" })}
+            />
+            <FxChip
+              label="hi"
+              on={p.quality === "high"}
+              enabled={p.on}
+              title="high quality (4096 FFT, more latency)"
+              onClick={() => set({ quality: "high" })}
+            />
+          </div>
+          <div className="flex flex-col gap-1 self-center">
+            {IMPARTIALER_SCALES.map((sc) => (
+              <FxChip
+                key={sc}
+                label={sc === "chromatic" ? "chr" : sc.slice(0, 3)}
+                on={p.scale === sc}
+                enabled={p.on && mapOn}
+                title={sc}
+                onClick={() => set({ scale: sc as ImpartialerScale })}
+              />
+            ))}
+          </div>
+        </DeviceShell>
+      );
+    }
+    case "speccomp": {
+      const p = d.params as FxParams["speccomp"];
+      return (
+        <DeviceShell name="SPECCOMP" on={p.on} onToggle={(v) => set({ on: v })}>
+          <Knob
+            value={p.threshold}
+            min={-48}
+            max={0}
+            defaultValue={-24}
+            onChange={(v) => set({ threshold: v })}
+            label="thresh"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v) + "dB"}
+          />
+          <Knob
+            value={p.ratio}
+            min={1}
+            max={12}
+            defaultValue={4}
+            onChange={(v) => set({ ratio: v })}
+            label="ratio"
+            disabled={!p.on}
+            fmt={(v) => v.toFixed(1) + ":1"}
+          />
+          <Knob
+            value={p.attack}
+            min={0.001}
+            max={0.2}
+            defaultValue={0.01}
+            onChange={(v) => set({ attack: v })}
+            label="attack"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 1000) + "ms"}
+          />
+          <Knob
+            value={p.release}
+            min={0.02}
+            max={0.8}
+            defaultValue={0.12}
+            onChange={(v) => set({ release: v })}
+            label="release"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 1000) + "ms"}
+          />
+          <Knob
+            value={p.makeup}
+            min={0}
+            max={18}
+            defaultValue={0}
+            onChange={(v) => set({ makeup: v })}
+            label="makeup"
+            disabled={!p.on}
+            fmt={(v) => "+" + Math.round(v) + "dB"}
+          />
+          <Knob
+            value={p.mix}
+            min={0}
+            max={1}
+            defaultValue={1}
+            onChange={(v) => set({ mix: v })}
+            label="mix"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <span title="bias threshold toward lows (−) or highs (+)">
+            <Knob
+              value={p.tilt}
+              min={-1}
+              max={1}
+              defaultValue={0}
+              bipolar
+              onChange={(v) => set({ tilt: v })}
+              label="tilt"
+              disabled={!p.on}
+              fmt={(v) => (Math.abs(v) < 0.05 ? "flat" : v > 0 ? "hi" : "lo")}
+            />
+          </span>
+          <span title="band count — fewer wide bands ↔ more narrow bands">
+            <Knob
+              value={p.focus}
+              min={0}
+              max={1}
+              defaultValue={0.35}
+              onChange={(v) => set({ focus: v })}
+              label="focus"
+              disabled={!p.on}
+              fmt={(v) => String(12 + Math.round(v * 36))}
+            />
+          </span>
+          <div className="flex flex-col gap-1 self-center">
+            <FxChip
+              label="lo"
+              on={p.quality === "low"}
+              enabled={p.on}
+              title="low latency (2048 FFT)"
+              onClick={() => set({ quality: "low" })}
+            />
+            <FxChip
+              label="hi"
+              on={p.quality === "high"}
+              enabled={p.on}
+              title="high quality (4096 FFT, more latency)"
+              onClick={() => set({ quality: "high" })}
+            />
+          </div>
         </DeviceShell>
       );
     }

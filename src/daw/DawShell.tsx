@@ -6,6 +6,7 @@ import { TransportBar } from "./TransportBar";
 import { BgCanvas } from "./BgCanvas";
 import { MidiGate } from "./components/MidiGate";
 import { ContextMenu } from "./components/ContextMenu";
+import { HoverInfoHost } from "./components/HoverInfo";
 import { scrollToId } from "./lab-utils";
 
 // Shared chrome for every DAW route: the fixed transport bar, the audio-reactive
@@ -49,6 +50,7 @@ export function DawShell({ children }: { children: ReactNode }) {
       {children}
       <MidiGate />
       <ContextMenu />
+      <HoverInfoHost />
     </>
   );
 }

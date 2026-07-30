@@ -716,6 +716,55 @@ export function Timeline({
       });
     });
 
+    // live audio take — grows with the playhead; peaks from capture chunks (no clip yet)
+    const live = engine.audioRecordPreview();
+    if (live) {
+      const ti = tracks().findIndex((t) => t.id === live.trackId);
+      if (ti >= 0) {
+        const y = trackYOf(ti);
+        const x = beatToX(live.startBeat);
+        const cw = Math.max(
+          4,
+          (live.endBeat - live.startBeat) * view.current.ppb,
+        );
+        if (x + cw >= 0 && x <= w) {
+          g.fillStyle = live.waiting
+            ? "color-mix(in srgb, #ef4444 35%, #7a9a4a)"
+            : "#6a8a3a";
+          g.globalAlpha = live.waiting ? 0.45 : 0.85;
+          g.beginPath();
+          g.roundRect(x, y + 3, cw, ROW_H - 8, 3);
+          g.fill();
+          g.globalAlpha = 1;
+          // pulsing left edge while armed/waiting
+          g.fillStyle = "rgba(239,68,68," + (live.waiting ? "0.7" : "0.55") + ")";
+          g.fillRect(x, y + 3, 2, ROW_H - 8);
+          if (!live.waiting && live.peaks.length) {
+            const midY = y + 3 + (ROW_H - 8) / 2;
+            const half = (ROW_H - 8) / 2 - 4;
+            const n = live.peaks.length;
+            const px0 = Math.max(Math.ceil(x), KEY_W);
+            const px1 = Math.min(x + cw, w);
+            g.fillStyle = "rgba(255,255,255,0.55)";
+            for (let px = px0; px < px1; px++) {
+              const t =
+                cw > 1 ? (px - x) / cw : 0;
+              const pk = live.peaks[Math.min(n - 1, Math.floor(t * n))] || 0;
+              const hh = Math.max(0.5, Math.min(1, pk) * half);
+              g.fillRect(px, midY - hh, 1, hh * 2);
+            }
+          }
+          g.fillStyle = "rgba(0,0,0,0.55)";
+          g.font = "8px ui-monospace, monospace";
+          g.fillText(
+            live.waiting ? "rec…" : "recording",
+            x + 6,
+            y + 13,
+          );
+        }
+      }
+    }
+
     // pending quantized launch: a dashed accent line at the queued TARGET beat +
     // a countdown bracket at the boundary the playhead is racing toward
     const pl = engine.pendingLaunch();

@@ -46,6 +46,8 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `space`  | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the tempo: the `div` knob steps the straight divisions (`DELAY_DIVS`, 1/16→1/1); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies every chain. Off = free ms (`time`). |
 | `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
 | `reverb` | Convolver (internal dry/wet)        | synth IR, regenerated from the decay knob (device-owned `makeReverbIR`)                                                                                                                                                                                                                                                                |
+| `impartialer` | AudioWorklet (STFT) | Phase 1–3: global transpose, in-key snap, force-remap. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
+| `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
 `input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/
@@ -121,10 +123,16 @@ deliver fine at rAF rate.
 **WASM is used exactly where native nodes can't go, one device at a time.** The FxChain device
 contract (`build(ctx) → { in, out, apply }`) hosts an AudioWorklet(+WASM)-backed device
 identically to a native one — signalsmith-stretch (the COMPLEX warp) already proves the
-pattern. Future candidates: transient-preserving clip limiter, RTA EQ. Never a monolith engine
-rewrite. Related: the first **lookahead** device we ship introduces latency → that's the moment
-to add a `latencySamples` field to `FxDeviceDef` and compensate parallel paths (mini-ADC); all
-current devices are effectively zero-latency, so none exists yet.
+pattern. Future candidates: transient-preserving clip limiter, RTA EQ, and the **spectral
+device family** (**impartialer** / pitch-map, spectral compressor — shared STFT core, forked
+decision layers; see [SPECTRAL.md](SPECTRAL.md)). Never a monolith engine rewrite.
+
+**Latency:** `FxDeviceDef` may declare optional `latencySamples` (`number` or
+`(params, sampleRate) => number`). Native devices omit it (treat as 0). `impartialer` reports
+FFT size for the active quality preset. Chain-level compensation (DelayNodes on parallel
+paths / mini-ADC) is **not wired yet** — the field exists so we do not retrofit later.
+Impartialer mixes dry/wet inside the worklet against a matching delay so strength blends do not
+comb while awaiting PDC.
 
 ## Loudness safety (two independent safeguards, both default ON)
 
@@ -200,8 +208,9 @@ render their selected clips through an `OfflineAudioContext` (`renderAudioSpan`)
 stereo buffer — clip-level gain/rate/trim/loop/reverse are printed, track FX/vol/pan are NOT
 (Ableton semantics; they keep applying live). The voicing comes from `audioClipSource(clip, bd)`,
 the same resolver the live scheduler uses, so the bounce sounds exactly like playback. The result
-lands in the import store (`encodeWav` in [data/audio-store.ts](data/audio-store.ts) → float32
-WAV bytes in IndexedDB) as a clean full-width clip tempo-tagged at the bounce bpm. No decoded
+lands in the import store (`putAudioBuffer` in [data/audio-store.ts](data/audio-store.ts) →
+Opus in WebM via WebCodecs/[Mediabunny](https://mediabunny.dev/) when available, else float32
+WAV; user file drops keep original bytes) as a clean full-width clip tempo-tagged at the bounce bpm. No decoded
 buffers yet (rare) → falls back to the old keep-earliest-source merge. MIDI/drum consolidation
 (note merge) is unchanged. Mutation happens synchronously AFTER all rendering, under one undo.
 
@@ -397,15 +406,22 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
 - **MIDI/drum**: writes Note On/Off from the live keyboard / Web MIDI into the
   selected/armed midi or drum clip (creates a 1-bar clip at the cursor if needed).
 - **Audio**: arm an audio track (requests mic/interface via `getUserMedia`), then ● —
-  after count-in, PCM is captured through a ScriptProcessor into a new imported audio
-  clip on that track (persisted via `encodeWav` → IndexedDB).
+  after count-in, PCM is captured through the input-capture worklet (or ScriptProcessor
+  fallback) into a new imported audio clip on that track. Playback uses the in-memory
+  `AudioBuffer` immediately; persistence is async via `putAudioBuffer` → IndexedDB
+  (`ain-audio` / `imports`): **Opus in WebM** when WebCodecs can encode (Mediabunny
+  mux), else float WAV. Dropped files keep their original encoded bytes + mime.
   **Audio prefs** (`ain-audio-prefs`, **audio** chip on the playback pane → small panel):
   - **Input** — `enumerateDevices` list; `deviceId: { exact }` on open (falls back to
     Default if the device is gone). `devicechange` refreshes the list.
-  - **Channels** — `stereo | left | right | sum` (default **left**). Interfaces like a
-    Scarlett present as stereo; a mic on input 1 is L-only, so **left** folds that
-    channel to both sides for monitor + baked takes. **stereo** keeps L/R; **right**
-    for input 2; **sum** = (L+R)/2.
+  - **Output** — `audiooutput` list + `AudioContext.setSinkId(id)` when supported
+    (Chrome/Edge; Safari often missing → control disabled, system default). Persist
+    `outputDeviceId`; on failure clear id and soft-nudge. System tab shows the chosen
+    output label / “system default”.
+  - **Channels** — `stereo | left | right | sum` (default **left**). USB interfaces often
+    present as stereo; a mic on input 1 is L-only, so **left** folds that channel to both
+    sides for monitor + baked takes. **stereo** keeps L/R; **right** for input 2;
+    **sum** = (L+R)/2.
   - **Buffer** — message batch size `256|512|1024|2048|4096` (default **512**).
     Capture prefers an **AudioWorklet** (`ain-input-capture`, ~128-frame quantum on
     the audio thread); ScriptProcessor is the fallback. Also:
@@ -413,17 +429,34 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
     auto compensation folds in `track.getSettings().latency` when reported.
   - **Latency compensation** — on bake, clip `startBeat` shifts earlier by
     `compBeats = (ms/1000)·bpm/60`. **Auto** uses the estimate above; **manual** is a
-    user ms value. USB/OS round-trip is still partly invisible — treat auto as approximate.
-    For the absolute lowest *heard* delay, use the Scarlett’s **direct monitor** hardware
+    user ms value. **Calibrate** (prefs or system): plays a metronome click, captures
+    ~1s of input, finds the peak vs click time, writes `latencyMode: "manual"` +
+    clamped 0–500 ms (clap against the click; needs mic allowed). USB/OS round-trip is
+    still partly invisible — treat auto as approximate.
+    For the absolute lowest *heard* delay, use the interface’s **hardware direct monitor**
     mix; software monitor intentionally bypasses track/master FX and the safety compressor.
   - **Monitor** — optional live tap on a dedicated **monitorBus** → destination
     (default off). Skips FX + DynamicsCompressor so software monitoring stays tight.
     A silent tap into the armed track’s analyser keeps the fader meter alive whether
     or not monitor is on. Speakers can feedback; headphones recommended. Stream stays
     warm while armed either way.
+
+**Capability / acceptance** — first arm of an audio track (or first open of **audio** prefs)
+shows a one-time **Before you record** sheet (`ain-audio-accept` v1). Checklist must be
+acked before Continue. **audio → system** shows a live `engine.audioCapabilityReport()`
+(browser/OS, chosen input/output labels when set, sample rate, capture path, persist codec
+Opus/WebM vs WAV, latency estimate, UI frame load — labeled as UI not DSP; Safari note when
+`setSinkId` is missing). Soft
+chips under the transport warn on mic denied, ScriptProcessor fallback, sustained UI hitch
+while playing/recording, output sink failure, and first monitor-on tip (`ain-audio-tip-monitor`).
+Re-read acceptance from System without clearing the ack.
 Count-in is monitor-only for MIDI and capture-gated for audio until
 `currentTime >= _seqAnchorTime`. Press ● again to punch out without stopping transport;
-Space/Stop ends the take. No punch-in markers or takes ladder yet.
+Space/Stop ends the take. **Light punch**: when the arrangement **loop** brace is on,
+audio capture only appends PCM while `currentBeat()` is inside `[loop.start, loop.end)`;
+bake places the clip at `max(loop.start, startBeat − comp)` and clamps length to the punched
+span. Loop off = full take from ● to punch-out. Hint under the transport while recording +
+loop on. No takes ladder / mute-previous-take yet.
 **Computer MIDI Keyboard** (`engine.midiKeys`, **M** / `keys` chip in the playback pane): Ableton
 toggle between single-key shortcuts (off — L loop, R reverse…) and typing-keyboard pitches
 (on — Ableton A–; row plays the **armed** or selected MIDI track via `noteOn`; Z/X octave,

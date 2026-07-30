@@ -5,6 +5,7 @@ import { jlmTrack } from "./data/tracks";
 import { useEngine } from "./hooks/useEngine";
 import { useRafLoop } from "./hooks/useRafLoop";
 import { scrollToId } from "./lab-utils";
+import { HoverInfoModeToggle } from "./components/HoverInfo";
 
 const NAV: { id?: string; path?: string; label: string; num: string }[] = [
   { id: "projects", label: "projects", num: "01" },
@@ -155,6 +156,7 @@ export function TransportBar() {
           <span className="mr-0.5 text-faint">06</span> studio
         </button>
       </nav>
+      <HoverInfoModeToggle />
       <CpuMeter />
       <MemMeter />
     </header>

@@ -39,13 +39,27 @@ import {
 import { splitContent } from "./data/clip-split";
 import {
   putAudio,
+  putAudioBuffer,
   allAudio,
   pruneAudio,
   clearAudio,
-  encodeWav,
+  canPersistOpus,
+  lastPersistCodec,
 } from "./data/audio-store";
 // pitch-preserving stretch (WASM/AudioWorklet) — see CREDITS.md "signalsmith-stretch"
 import SignalsmithStretch, { type StretchNode } from "signalsmith-stretch";
+import {
+  buildCapabilityReport,
+  loadAudioAccepted,
+  loadMonitorTipSeen,
+  saveAudioAccepted,
+  saveMonitorTipSeen,
+  classifyInputDevice,
+  resolveInputDeviceLabel,
+  shortDeviceLabel,
+  type AudioNudge,
+  type AudioCapabilityReport,
+} from "./audio-capability";
 import { FxChain, newFxId, type FxDeviceState } from "./fx-chain";
 import { FX_DEVICES, FX_DEVICE_TYPES, type FxDeviceType } from "./fx-devices";
 import {
@@ -69,11 +83,12 @@ export type TransportMode = "track" | "sequence";
 
 export const AUDIO_BUFFER_SIZES = [256, 512, 1024, 2048, 4096] as const;
 export type AudioBufferSize = (typeof AUDIO_BUFFER_SIZES)[number];
-/** How a stereo interface maps into the take / monitor. Scarlett mic on input 1 → `left`. */
+/** How a stereo interface maps into the take / monitor. Mic on input 1 → `left`. */
 export const INPUT_CHANNEL_MODES = ["stereo", "left", "right", "sum"] as const;
 export type InputChannelMode = (typeof INPUT_CHANNEL_MODES)[number];
 export type AudioPrefs = {
   inputDeviceId: string | null;
+  outputDeviceId: string | null;
   bufferSize: AudioBufferSize;
   /** stereo keep L/R · left/right fold that channel to both · sum = (L+R)/2 */
   inputChannels: InputChannelMode;
@@ -84,8 +99,9 @@ export type AudioPrefs = {
 
 const DEFAULT_AUDIO_PREFS: AudioPrefs = {
   inputDeviceId: null,
+  outputDeviceId: null,
   bufferSize: 512, // lower default — 256 is tighter but glitchier on slower machines
-  inputChannels: "left", // Scarlett / Focusrite input-1 mono is the common case
+  inputChannels: "left", // USB interface input-1 mono is the common case
   latencyMode: "auto",
   latencyMs: 0,
   inputMonitor: false,
@@ -104,6 +120,8 @@ function loadAudioPrefs(): AudioPrefs {
       : DEFAULT_AUDIO_PREFS.inputChannels;
     return {
       inputDeviceId: typeof p.inputDeviceId === "string" ? p.inputDeviceId : null,
+      outputDeviceId:
+        typeof p.outputDeviceId === "string" ? p.outputDeviceId : null,
       bufferSize: buf,
       inputChannels: ch,
       latencyMode: p.latencyMode === "manual" ? "manual" : "auto",
@@ -250,7 +268,10 @@ function loadMasterVol(): number {
 function loadMasterDevices(): FxDeviceState[] {
   try {
     const raw = localStorage.getItem(LS_MASTER_FX);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw) as FxDeviceState[];
+      if (Array.isArray(parsed)) return migrateFxDeviceStates(parsed) as FxDeviceState[];
+    }
   } catch {
     /* corrupted → default */
   }
@@ -560,6 +581,7 @@ class AudioEngine {
       // interactive = lowest glitch-free output buffer the browser will give us
       this.ctx = new Ctor({ latencyHint: "interactive" });
       this.buildGraph();
+      void this.applyOutputSink();
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
     return this.ctx;
@@ -625,6 +647,10 @@ class AudioEngine {
     this._masterFx.applyAll(this.bpm);
     this.applyWet(true);
     this.applyLimiter();
+    // Warm spectral worklets; re-apply so passthrough fallbacks remount
+    void this.ensureSpectralWorklets().then((ok) => {
+      if (ok) this._masterFx?.applyAll(this.bpm);
+    });
   }
   private _masterFx: FxChain | null = null;
 
@@ -648,8 +674,14 @@ class AudioEngine {
   }
   addMasterDevice(type: FxDeviceType) {
     this.ensureCtx();
+    if (type === "impartialer" || type === "speccomp") void this.ensureSpectralWorklets();
     this._masterFx!.addDevice(type);
     this.saveMasterFx();
+    if (type === "impartialer" || type === "speccomp") {
+      void this.ensureSpectralWorklets().then((ok) => {
+        if (ok) this._masterFx?.applyAll(this.bpm);
+      });
+    }
   }
   removeMasterDevice(deviceId: string) {
     this.ensureCtx();
@@ -1912,6 +1944,18 @@ class AudioEngine {
   inputStatus: "idle" | "pending" | "live" | "denied" | "unsupported" = "idle";
   audioPrefs: AudioPrefs = loadAudioPrefs();
   inputDevices: { deviceId: string; label: string }[] = [];
+  outputDevices: { deviceId: string; label: string }[] = [];
+  /** Latency calibrate UI: idle | running | done | needInput | unsupported | failed */
+  calibrateStatus:
+    | "idle"
+    | "running"
+    | "done"
+    | "needInput"
+    | "unsupported"
+    | "failed" = "idle";
+  lastCalibrateMs: number | null = null;
+  /** IndexedDB take/bounce codec after probe (or last successful encode). */
+  private _persistCodec: "opus" | "wav" | "unknown" = "unknown";
   private _recTarget: { trackId: string; clipId: string } | null = null;
   private _recOpen = new Map<number, { startBeat: number; vel: number }>(); // midi holds
   private _recMode: "midi" | "audio" | null = null;
@@ -1926,12 +1970,25 @@ class AudioEngine {
   private _monitorGain: GainNode | null = null; // live input → monitorBus
   private _monitorNodes: AudioNode[] = []; // splitter/merger/gains for channel fold
   private _recChunks: Float32Array[][] = []; // each callback: per-channel copies
+  /** Live waveform bins while capturing (max-abs per hop) — Timeline draws these. */
+  private _recPeaks: number[] = [];
+  private _recPeakCarry = 0;
+  private _recPeakCarryN = 0;
+  private static readonly REC_PEAK_HOP = 512;
   private _deviceListen = false;
   private _inputOpenGen = 0; // ignore stale getUserMedia resolutions
   /** From MediaStreamTrack.getSettings().latency when the browser reports it (seconds). */
   private _inputReportedLatencySec = 0;
   private _captureWorkletReady: Promise<boolean> | null = null;
   private _captureUsesWorklet = false;
+  private _punchStarted = false; // light punch: first chunk inside loop brace
+  private _calibActive = false;
+  private _calibChunks: Float32Array[][] = [];
+  private _calibClickAt = 0; // AudioContext time of calibration click
+  /** Rolling UI frame dt (ms) — sampleUiFrame from a rAF loop. */
+  private _uiFrameAvgMs = 16.7;
+  private _hitchSince = 0;
+  audioNudges: AudioNudge[] = [];
 
   // true while playSequence's count-in clicks are still running (anchor is in the future)
   private inCountIn(): boolean {
@@ -1947,6 +2004,112 @@ class AudioEngine {
       localStorage.setItem("ain-audio-prefs", JSON.stringify(this.audioPrefs));
     } catch {
       /* fine */
+    }
+  }
+
+  hasAudioAccepted(): boolean {
+    return loadAudioAccepted();
+  }
+
+  acceptAudioLimits() {
+    saveAudioAccepted();
+    this.emit("transport");
+  }
+
+  /** Call from a rAF loop so System / hitch nudges reflect UI thread health. */
+  sampleUiFrame(dtMs: number) {
+    if (!(dtMs > 0) || dtMs > 2000) return;
+    this._uiFrameAvgMs = this._uiFrameAvgMs * 0.95 + dtMs * 0.05;
+    const playingOrRec =
+      this.recording || (this.sequencePlaying && this.arrangeMode);
+    if (playingOrRec && this._uiFrameAvgMs > 32) {
+      if (!this._hitchSince) this._hitchSince = performance.now();
+      else if (
+        performance.now() - this._hitchSince > 2000 &&
+        !this.audioNudges.some((n) => n.id === "hitch")
+      ) {
+        this.pushNudge({
+          id: "hitch",
+          dismissible: true,
+          message:
+            "UI frames are lagging while audio runs — simplify the session or close other tabs if you hear glitches.",
+        });
+      }
+    } else {
+      this._hitchSince = 0;
+    }
+  }
+
+  audioCapabilityReport(): AudioCapabilityReport {
+    return buildCapabilityReport({
+      prefs: this.audioPrefs,
+      inputDevices: this.inputDevices,
+      outputDevices: this.outputDevices,
+      sinkIdSupported: this.supportsSinkId(),
+      persistCodec: lastPersistCodec() ?? this._persistCodec,
+      ctx: this.ctx,
+      inputStatus: this.inputStatus,
+      inputReportedLatencySec: this._inputReportedLatencySec,
+      captureUsesWorklet: this._captureUsesWorklet,
+      hasCaptureNode: !!(this._recWorklet || this._recProc),
+      estimatedLatencyMs: this.estimatedLatencyMs(),
+      effectiveLatencyMs: this.effectiveLatencyMs(),
+      uiFrameAvgMs: this._uiFrameAvgMs,
+    });
+  }
+
+  /** Probe WebCodecs Opus encode once for System / capability (non-blocking). */
+  async probePersistCodec(): Promise<"opus" | "wav"> {
+    this._persistCodec = (await canPersistOpus()) ? "opus" : "wav";
+    this.emit("transport");
+    return this._persistCodec;
+  }
+
+  /** Chosen input’s product label when prefs point at a specific device. */
+  selectedInputLabel(): string | null {
+    return resolveInputDeviceLabel(
+      this.audioPrefs.inputDeviceId,
+      this.inputDevices,
+    );
+  }
+
+  dismissNudge(id: AudioNudge["id"]) {
+    this.audioNudges = this.audioNudges.filter((n) => n.id !== id);
+    if (id === "monitorTip") saveMonitorTipSeen();
+    this.emit("transport");
+  }
+
+  private pushNudge(n: AudioNudge) {
+    if (this.audioNudges.some((x) => x.id === n.id)) return;
+    this.audioNudges = [...this.audioNudges, n];
+    this.emit("transport");
+  }
+
+  private maybeNudgeMonitorTip() {
+    if (!this.audioPrefs.inputMonitor || loadMonitorTipSeen()) return;
+    const label = this.selectedInputLabel();
+    const kind = classifyInputDevice(this.audioPrefs.inputDeviceId, label);
+    const message =
+      kind === "interface" && label
+        ? `Software monitor is best-effort — headphones help; ${shortDeviceLabel(label)}’s hardware direct monitor is still lower latency.`
+        : kind === "builtin"
+          ? "Software monitor is best-effort on a built-in mic — headphones help; an interface with hardware direct monitor will feel tighter."
+          : "Software monitor is best-effort — headphones help; your interface’s hardware direct monitor is still lower latency.";
+    this.pushNudge({
+      id: "monitorTip",
+      dismissible: true,
+      message,
+    });
+  }
+
+  private maybeNudgeInputStatus() {
+    if (this.inputStatus === "denied") {
+      this.pushNudge({
+        id: "denied",
+        dismissible: true,
+        message:
+          "Mic access denied — allow this site in the browser, then re-arm the audio track.",
+      });
     }
   }
 
@@ -1978,6 +2141,8 @@ class AudioEngine {
     const prev = { ...this.audioPrefs };
     if (partial.inputDeviceId !== undefined)
       this.audioPrefs.inputDeviceId = partial.inputDeviceId || null;
+    if (partial.outputDeviceId !== undefined)
+      this.audioPrefs.outputDeviceId = partial.outputDeviceId || null;
     if (partial.bufferSize !== undefined && AUDIO_BUFFER_SIZES.includes(partial.bufferSize))
       this.audioPrefs.bufferSize = partial.bufferSize;
     if (
@@ -1994,10 +2159,14 @@ class AudioEngine {
     this.persistAudioPrefs();
 
     const deviceChanged = prev.inputDeviceId !== this.audioPrefs.inputDeviceId;
+    const outputChanged =
+      prev.outputDeviceId !== this.audioPrefs.outputDeviceId;
     const bufChanged = prev.bufferSize !== this.audioPrefs.bufferSize;
     const monChanged =
       prev.inputMonitor !== this.audioPrefs.inputMonitor ||
       prev.inputChannels !== this.audioPrefs.inputChannels;
+
+    if (outputChanged) void this.applyOutputSink();
 
     if (deviceChanged && (this._inputStream || this.armedAudioTrack())) {
       void this.reopenInput();
@@ -2016,6 +2185,7 @@ class AudioEngine {
       }
     } else if (monChanged) {
       this.syncInputMonitor();
+      if (this.audioPrefs.inputMonitor) this.maybeNudgeMonitorTip();
     }
     this.emit("transport");
   }
@@ -2030,19 +2200,30 @@ class AudioEngine {
     if (this._deviceListen || !navigator.mediaDevices?.addEventListener) return;
     this._deviceListen = true;
     navigator.mediaDevices.addEventListener("devicechange", () => {
-      void this.refreshInputDevices();
+      void this.refreshAudioDevices();
     });
   }
 
   async listInputDevices(): Promise<{ deviceId: string; label: string }[]> {
-    await this.refreshInputDevices();
+    await this.refreshAudioDevices();
     return this.inputDevices;
   }
 
+  async listOutputDevices(): Promise<{ deviceId: string; label: string }[]> {
+    await this.refreshAudioDevices();
+    return this.outputDevices;
+  }
+
+  /** @deprecated use refreshAudioDevices — kept so older call sites still work */
   async refreshInputDevices() {
+    return this.refreshAudioDevices();
+  }
+
+  async refreshAudioDevices() {
     this.ensureDeviceListen();
     if (!navigator.mediaDevices?.enumerateDevices) {
       this.inputDevices = [];
+      this.outputDevices = [];
       this.emit("transport");
       return;
     }
@@ -2054,14 +2235,57 @@ class AudioEngine {
           deviceId: d.deviceId,
           label: d.label || "input " + (i + 1),
         }));
-      const id = this.audioPrefs.inputDeviceId;
-      if (id && !this.inputDevices.some((d) => d.deviceId === id)) {
+      this.outputDevices = all
+        .filter((d) => d.kind === "audiooutput")
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || "output " + (i + 1),
+        }));
+      const inId = this.audioPrefs.inputDeviceId;
+      if (inId && !this.inputDevices.some((d) => d.deviceId === inId)) {
         this.audioPrefs.inputDeviceId = null;
         this.persistAudioPrefs();
         if (this._inputStream) void this.reopenInput();
       }
+      const outId = this.audioPrefs.outputDeviceId;
+      if (outId && !this.outputDevices.some((d) => d.deviceId === outId)) {
+        this.audioPrefs.outputDeviceId = null;
+        this.persistAudioPrefs();
+        void this.applyOutputSink();
+      }
     } catch {
       this.inputDevices = [];
+      this.outputDevices = [];
+    }
+    this.emit("transport");
+  }
+
+  supportsSinkId(): boolean {
+    const c = this.ctx as (AudioContext & { setSinkId?: unknown }) | null;
+    return typeof c?.setSinkId === "function" || typeof (AudioContext.prototype as unknown as { setSinkId?: unknown }).setSinkId === "function";
+  }
+
+  private async applyOutputSink() {
+    const c = this.ensureCtx() as AudioContext & {
+      setSinkId?: (id: string) => Promise<void>;
+    };
+    if (typeof c.setSinkId !== "function") return;
+    try {
+      await c.setSinkId(this.audioPrefs.outputDeviceId || "");
+    } catch {
+      this.audioPrefs.outputDeviceId = null;
+      this.persistAudioPrefs();
+      this.pushNudge({
+        id: "outputSink",
+        dismissible: true,
+        message:
+          "Could not switch output device — fell back to the browser default.",
+      });
+      try {
+        await c.setSinkId("");
+      } catch {
+        /* fine */
+      }
     }
     this.emit("transport");
   }
@@ -2152,6 +2376,7 @@ class AudioEngine {
         return this.openInput(true);
       }
       this.inputStatus = "denied";
+      this.maybeNudgeInputStatus();
       this.emit("transport");
       this.emit("clip");
       return false;
@@ -2291,17 +2516,107 @@ class AudioEngine {
 
   private setRecCapturing(on: boolean) {
     this._recCapturing = on;
-    if (this._recWorklet) {
-      try {
-        this._recWorklet.port.postMessage({
-          type: "config",
-          capturing: on,
-          bufferSize: this.audioPrefs.bufferSize,
-        });
-      } catch {
-        /* fine */
+    this.syncCaptureWorkletConfig();
+  }
+
+  private setCalibActive(on: boolean) {
+    this._calibActive = on;
+    this.syncCaptureWorkletConfig();
+  }
+
+  private syncCaptureWorkletConfig() {
+    if (!this._recWorklet) return;
+    try {
+      this._recWorklet.port.postMessage({
+        type: "config",
+        capturing: this._recCapturing || this._calibActive,
+        bufferSize: this.audioPrefs.bufferSize,
+      });
+    } catch {
+      /* fine */
+    }
+  }
+
+  /** Loop-brace punch: when loop is on, only keep audio inside [start, end). */
+  private inPunchWindow(beat?: number): boolean {
+    const l = this.arrangement.loop;
+    if (!l?.on) return true;
+    const b = beat ?? this.currentBeat();
+    return b >= l.start - 1e-9 && b < l.end - 1e-9;
+  }
+
+  private ingestInputChunk(L: Float32Array, R: Float32Array | null) {
+    const mapped = mapInputBlock(L, R, this.audioPrefs.inputChannels);
+    if (this._calibActive) {
+      this._calibChunks.push(mapped);
+      return;
+    }
+    if (!this._recCapturing || !this.recording || this._recMode !== "audio")
+      return;
+    if (!this.inPunchWindow()) return;
+    if (!this._punchStarted) {
+      this._punchStarted = true;
+      this._recStartBeat = this.currentBeat();
+      this._recChunks = [];
+      this.resetRecPeaks();
+    }
+    this._recChunks.push(mapped);
+    this.appendRecPeaks(mapped[0]!);
+  }
+
+  private resetRecPeaks() {
+    this._recPeaks = [];
+    this._recPeakCarry = 0;
+    this._recPeakCarryN = 0;
+  }
+
+  private appendRecPeaks(L: Float32Array) {
+    const hop = AudioEngine.REC_PEAK_HOP;
+    for (let i = 0; i < L.length; i++) {
+      const a = Math.abs(L[i]!);
+      if (a > this._recPeakCarry) this._recPeakCarry = a;
+      this._recPeakCarryN++;
+      if (this._recPeakCarryN >= hop) {
+        this._recPeaks.push(this._recPeakCarry);
+        this._recPeakCarry = 0;
+        this._recPeakCarryN = 0;
       }
     }
+  }
+
+  /**
+   * Live audio-take preview for the timeline (rAF). Null when not in an audio take,
+   * or still in count-in / waiting for the loop brace (light punch).
+   */
+  audioRecordPreview(): {
+    trackId: string;
+    startBeat: number;
+    endBeat: number;
+    peaks: number[];
+    waiting: boolean;
+  } | null {
+    if (!this.recording || this._recMode !== "audio" || !this._recTrackId)
+      return null;
+    const endBeat = this.sequencePlaying
+      ? this.currentBeat()
+      : this.insertBeat;
+    if (!this._punchStarted) {
+      // count-in or outside loop brace — show a thin waiting stub at the cursor
+      return {
+        trackId: this._recTrackId,
+        startBeat: endBeat,
+        endBeat: endBeat + 0.05,
+        peaks: [],
+        waiting: true,
+      };
+    }
+    return {
+      trackId: this._recTrackId,
+      startBeat: this._recStartBeat,
+      endBeat: Math.max(this._recStartBeat + 0.05, endBeat),
+      peaks: this._recPeaks,
+      waiting: false,
+    };
   }
 
   private ensureCaptureWorklet(): Promise<boolean> {
@@ -2319,6 +2634,34 @@ class AudioEngine {
       }
     })();
     return this._captureWorkletReady;
+  }
+
+  private _spectralWorkletsReady: Promise<boolean> | null = null;
+  /** Warm impartialer + speccomp STFT worklets so FxChain can construct nodes sync. */
+  ensureSpectralWorklets(): Promise<boolean> {
+    if (this._spectralWorkletsReady) return this._spectralWorkletsReady;
+    this._spectralWorkletsReady = (async () => {
+      try {
+        const c = this.ensureCtx();
+        await Promise.all([
+          c.audioWorklet.addModule(
+            new URL("./worklets/impartialer-processor.js", import.meta.url),
+          ),
+          c.audioWorklet.addModule(
+            new URL("./worklets/speccomp-processor.js", import.meta.url),
+          ),
+        ]);
+        return true;
+      } catch {
+        this._spectralWorkletsReady = null;
+        return false;
+      }
+    })();
+    return this._spectralWorkletsReady;
+  }
+  /** @deprecated use ensureSpectralWorklets */
+  ensureImpartialerWorklet(): Promise<boolean> {
+    return this.ensureSpectralWorklets();
   }
 
   // MediaStream → AudioWorklet (preferred) or ScriptProcessor fallback.
@@ -2344,21 +2687,14 @@ class AudioEngine {
         });
         node.port.onmessage = (ev) => {
           const d = ev.data;
-          if (!d || d.type !== "chunk" || !this._recCapturing || !this.recording)
-            return;
-          this._recChunks.push(
-            mapInputBlock(d.L, d.R, this.audioPrefs.inputChannels),
-          );
+          if (!d || d.type !== "chunk") return;
+          this.ingestInputChunk(d.L, d.R);
         };
-        node.port.postMessage({
-          type: "config",
-          bufferSize: size,
-          capturing: this._recCapturing,
-        });
+        this._recWorklet = node;
+        this.syncCaptureWorkletConfig();
         src.connect(node);
         node.connect(sink);
         sink.connect(c.destination);
-        this._recWorklet = node;
         this._recSink = sink;
         this._captureUsesWorklet = true;
         this.syncInputMonitor();
@@ -2370,12 +2706,12 @@ class AudioEngine {
 
     const proc = c.createScriptProcessor(size, 2, 2);
     proc.onaudioprocess = (ev) => {
-      if (!this._recCapturing || !this.recording) return;
+      if (!this._recCapturing && !this._calibActive) return;
       const n = ev.inputBuffer.numberOfChannels;
       const L = new Float32Array(ev.inputBuffer.getChannelData(0));
       const R =
         n > 1 ? new Float32Array(ev.inputBuffer.getChannelData(1)) : null;
-      this._recChunks.push(mapInputBlock(L, R, this.audioPrefs.inputChannels));
+      this.ingestInputChunk(L, R);
     };
     src.connect(proc);
     proc.connect(sink);
@@ -2383,6 +2719,12 @@ class AudioEngine {
     this._recProc = proc;
     this._recSink = sink;
     this._captureUsesWorklet = false;
+    this.pushNudge({
+      id: "scriptProcessor",
+      dismissible: true,
+      message:
+        "AudioWorklet capture unavailable — using ScriptProcessor (higher latency / main-thread load).",
+    });
     this.syncInputMonitor();
   }
 
@@ -2493,6 +2835,8 @@ class AudioEngine {
       this._recTrackId = audioTrackId;
       this._recTarget = null;
       this._recChunks = [];
+      this._punchStarted = false;
+      this.resetRecPeaks();
       this.setRecCapturing(false);
       this._recStartBeat = this.insertBeat;
       this.recording = true;
@@ -2524,6 +2868,7 @@ class AudioEngine {
     if (this._recMode !== "audio" || this._recCapturing) return;
     this._recStartBeat = this.currentBeat();
     this._recChunks = [];
+    this._punchStarted = false;
     this.setRecCapturing(true);
   }
 
@@ -2551,6 +2896,7 @@ class AudioEngine {
     this._recOpen.clear();
     this.setRecCapturing(false);
     this._recChunks = [];
+    this.resetRecPeaks();
     this.recording = false;
     this._recTarget = null;
     this._recMode = null;
@@ -2566,10 +2912,18 @@ class AudioEngine {
     const trackId = this._recTrackId;
     const c = this.ctx;
     if (!trackId || !c || this._recChunks.length === 0) return;
-    const startBeat = this._recStartBeat;
-    const lenBeats = Math.max(0.25, endBeat - startBeat);
+    const loop = this.arrangement.loop;
+    let startBeat = this._recStartBeat;
+    let end = endBeat;
+    if (loop?.on) {
+      startBeat = Math.max(startBeat, loop.start);
+      end = Math.min(end, loop.end);
+    }
+    const lenBeats = Math.max(0.25, end - startBeat);
     const compBeats =
       (this.effectiveLatencyMs() / 1000) * (this.arrangement.bpm / 60);
+    let place = Math.max(0, startBeat - compBeats);
+    if (loop?.on) place = Math.max(loop.start, place);
     let frames = 0;
     for (const block of this._recChunks) frames += block[0].length;
     if (frames < 64) return; // nothing useful
@@ -2584,14 +2938,14 @@ class AudioEngine {
     }
     const bufId = "rec" + ++this._importSeq + Date.now().toString(36);
     this._importBufs[bufId] = buf;
-    void putAudio(bufId, encodeWav(buf), "take");
+    void putAudioBuffer(bufId, buf, "take");
     const name =
       "take " +
       (Math.floor(startBeat / this.arrangement.beatsPerBar) + 1) +
       "." +
       (Math.floor(startBeat % this.arrangement.beatsPerBar) + 1);
     const created = this.addClip(trackId, {
-      startBeat: Math.max(0, startBeat - compBeats),
+      startBeat: place,
       lengthBeats: lenBeats,
       loop: false,
       content: {
@@ -2604,6 +2958,82 @@ class AudioEngine {
       },
     });
     if (created) this.selectClip(created.id);
+  }
+
+  /**
+   * Play a click, capture ~1s of input, measure peak delay → manual latencyMs.
+   * Needs mic permission (arm an audio track or allow input first).
+   */
+  async calibrateLatency(): Promise<number | null> {
+    if (this._calibActive || this.calibrateStatus === "running") return null;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.calibrateStatus = "unsupported";
+      this.emit("transport");
+      return null;
+    }
+    this.calibrateStatus = "running";
+    this.lastCalibrateMs = null;
+    this.emit("transport");
+
+    const ok = await this.enableInput();
+    if (!ok || !this._inputStream) {
+      this.calibrateStatus = "needInput";
+      this.emit("transport");
+      return null;
+    }
+    await this.ensureAudioCaptureGraph();
+    this._calibChunks = [];
+    const c = this.ensureCtx();
+    const t0 = c.currentTime;
+    const clickAt = t0 + 0.08;
+    this._calibClickAt = clickAt;
+    this.metroClick(clickAt, true);
+    this.setCalibActive(true);
+
+    await new Promise<void>((r) => setTimeout(r, 1100));
+    this.setCalibActive(false);
+
+    const sr = c.sampleRate;
+    let frames = 0;
+    for (const block of this._calibChunks) frames += block[0].length;
+    if (frames < sr * 0.05) {
+      this.calibrateStatus = "failed";
+      this._calibChunks = [];
+      this.emit("transport");
+      return null;
+    }
+    const mono = new Float32Array(frames);
+    let o = 0;
+    for (const block of this._calibChunks) {
+      const L = block[0];
+      mono.set(L, o);
+      o += L.length;
+    }
+    this._calibChunks = [];
+
+    let peakI = 0;
+    let peakAbs = 0;
+    const searchFrom = Math.max(0, Math.floor(0.02 * sr));
+    for (let i = searchFrom; i < mono.length; i++) {
+      const a = Math.abs(mono[i]!);
+      if (a > peakAbs) {
+        peakAbs = a;
+        peakI = i;
+      }
+    }
+    if (peakAbs < 0.02) {
+      this.calibrateStatus = "failed";
+      this.emit("transport");
+      return null;
+    }
+    const peakTime = t0 + peakI / sr;
+    let ms = Math.round((peakTime - clickAt) * 1000);
+    ms = Math.max(0, Math.min(500, ms));
+    this.setAudioPrefs({ latencyMode: "manual", latencyMs: ms });
+    this.lastCalibrateMs = ms;
+    this.calibrateStatus = "done";
+    this.emit("transport");
+    return ms;
   }
 
   private commitRecNote(midi: number, endBeat: number) {
@@ -2905,12 +3335,18 @@ class AudioEngine {
     );
   }
   addTrackDevice(id: string, type: FxDeviceType) {
+    if (type === "impartialer" || type === "speccomp") void this.ensureSpectralWorklets();
     const r = this.trackFx(id);
     if (!r) return;
     r.s.fx.addDevice(type);
     r.t.devices = r.s.fx.states();
     this.saveArr();
     this.emit("fx");
+    if (type === "impartialer" || type === "speccomp") {
+      void this.ensureSpectralWorklets().then((ok) => {
+        if (ok) r.s.fx.applyAll(this.bpm);
+      });
+    }
   }
   removeTrackDevice(id: string, deviceId: string) {
     const r = this.trackFx(id);
@@ -3496,7 +3932,12 @@ class AudioEngine {
       const buf = await c.decodeAudioData(ab);
       const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
       this._importBufs[bufId] = buf;
-      void putAudio(bufId, raw, file.name); // persist raw bytes for reload (best-effort)
+      void putAudio(
+        bufId,
+        raw,
+        file.name,
+        file.type || "application/octet-stream",
+      ); // persist original bytes for reload (best-effort)
       this.emit("arrange");
       const stem = file.name.replace(/\.[^.]+$/, ""); // drop the extension
       const meta = parseLoopMeta(stem);
@@ -3539,6 +3980,7 @@ class AudioEngine {
   // Re-hydrate persisted imports on boot: decode each stored file into _importBufs, then
   // prune any that no clip references. Called once from the arrangement page on mount.
   async loadPersistedAudio(): Promise<void> {
+    void this.probePersistCodec();
     const c = this.ensureCtx();
     const stored = await allAudio();
     for (const { bufId, bytes } of stored) {
@@ -4645,15 +5087,10 @@ class AudioEngine {
           () => null,
         );
         if (rendered) {
-          // a REAL bounce: new buffer in the import store (WAV bytes → IndexedDB), one
-          // clean full-width clip. Tempo-tagged at the bounce bpm so sync re-rates it.
+          // a REAL bounce: new buffer in the import store (Opus/WebM or WAV → IndexedDB)
           const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
           this._importBufs[bufId] = rendered;
-          void putAudio(
-            bufId,
-            encodeWav(rendered),
-            (sel[0].name || "bounce") + ".wav",
-          );
+          void putAudioBuffer(bufId, rendered, sel[0].name || "bounce");
           merged = {
             id: newClipId(),
             startBeat: start,

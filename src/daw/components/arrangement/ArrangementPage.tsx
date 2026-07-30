@@ -20,6 +20,7 @@ import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
 import { PlaybackPane } from "./PlaybackPane";
 import { TrackFader } from "./TrackFader";
+import { AudioAcceptSheet } from "./AudioAcceptSheet";
 import { openContextMenu } from "../context-menu-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
@@ -244,6 +245,27 @@ export function ArrangementPage() {
   const tracks = eng.arrangement.tracks;
   // which track's FX panel is open (toggled from the track header's fx chip)
   const [fxTrackId, setFxTrackId] = useState<string | null>(null);
+  const [acceptOpen, setAcceptOpen] = useState(false);
+  const acceptContinue = useRef<(() => void) | null>(null);
+  const requestAccept = (after: () => void) => {
+    acceptContinue.current = after;
+    setAcceptOpen(true);
+  };
+  const finishAccept = () => {
+    setAcceptOpen(false);
+    const fn = acceptContinue.current;
+    acceptContinue.current = null;
+    fn?.();
+  };
+  const tryArm = (id: string) => {
+    const next = eng.armedChannel === id ? null : id;
+    const t = next ? tracks.find((x) => x.id === next) : null;
+    if (t?.kind === "audio" && !engine.hasAudioAccepted()) {
+      requestAccept(() => engine.armChannel(next));
+      return;
+    }
+    engine.armChannel(next);
+  };
   const fxTrack = fxTrackId ? tracks.find((t) => t.id === fxTrackId) : undefined; // auto-hides if deleted
   const toggleFx = (id: string) => {
     if (id !== MASTER_ID) engine.selectTrack(id);
@@ -523,7 +545,7 @@ export function ArrangementPage() {
         <SectionHead num="05" title="studio" sub="linear timeline · place midi, drum + audio clips on tracks · runs through the fx rack" />
 
         <div className="flex flex-col gap-3 rounded-[5px] border border-line bg-panel p-4 max-[767px]:p-3" onPointerDownCapture={() => focusPane("timeline")}>
-          <PlaybackPane />
+          <PlaybackPane onRequestAccept={requestAccept} />
 
           {/* add-track toolbar (kept OUT of the ruler-aligned strip below) */}
           <div className="flex flex-wrap items-center gap-1.5">
@@ -569,7 +591,7 @@ export function ArrangementPage() {
                     }
                     selected={eng.selTrackId === t.id}
                     fxOpen={fxTrackId === t.id}
-                    onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)}
+                    onArm={tryArm}
                     onFx={toggleFx}
                   />
                 ))}
@@ -731,6 +753,12 @@ export function ArrangementPage() {
           </details>
         </div>
       </TrackSection>
+
+      {acceptOpen && (
+        <div data-audio-accept>
+          <AudioAcceptSheet onDone={finishAccept} />
+        </div>
+      )}
     </main>
   );
 }

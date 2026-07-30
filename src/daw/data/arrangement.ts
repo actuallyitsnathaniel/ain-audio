@@ -8,6 +8,7 @@
 import type { AutoLane, NoteClip } from "./clips";
 import type { SequenceClip } from "./kits";
 import type { FxDeviceState } from "../fx-chain";
+import { migrateFxDeviceStates } from "../fx-devices";
 
 // A clip wraps ONE content unit + a timeline position + a length.
 export type ClipContent =
@@ -177,7 +178,12 @@ export function loadArrangement(): Arrangement {
     const v = localStorage.getItem(LS);
     if (v) {
       const a = JSON.parse(v) as Arrangement;
-      if (a && Array.isArray(a.tracks)) return a;
+      if (a && Array.isArray(a.tracks)) {
+        for (const t of a.tracks) {
+          if (t.devices) t.devices = migrateFxDeviceStates(t.devices) as FxDeviceState[];
+        }
+        return a;
+      }
     }
   } catch {
     /* corrupt/unavailable → fresh */

@@ -9,6 +9,8 @@ import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { Knob } from "../Knob";
 import { AudioPrefsPanel } from "./AudioPrefsPanel";
+import { AudioAcceptSheet } from "./AudioAcceptSheet";
+import { AudioSessionNudges } from "./AudioSessionNudges";
 
 const SIGS: [number, string][] = [
   [4, "4/4"],
@@ -42,7 +44,12 @@ function Select({ value, onChange, title, children }: { value: number; onChange:
   );
 }
 
-export function PlaybackPane() {
+export function PlaybackPane({
+  onRequestAccept,
+}: {
+  /** Gate: open acceptance sheet; call afterContinue when user may proceed. */
+  onRequestAccept?: (afterContinue: () => void) => void;
+}) {
   const eng = useEngine(["transport", "arrange", "clip"]);
   const playing = eng.sequencePlaying && eng.arrangeMode;
   const bpb = eng.arrangement.beatsPerBar;
@@ -50,8 +57,10 @@ export function PlaybackPane() {
   const barBeat = useRef<HTMLSpanElement>(null);
   const timeStr = useRef<HTMLSpanElement>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  const [rereadAccept, setRereadAccept] = useState(false);
+  const lastSample = useRef(0);
 
-  // imperative readouts (rAF, no per-frame React render)
+  // imperative readouts (rAF, no per-frame React render) + UI hitch sampling
   useRafLoop(() => {
     const beat = engine.arrangementPosition();
     if (barBeat.current) {
@@ -67,6 +76,9 @@ export function PlaybackPane() {
       const ms = Math.floor((secs % 1) * 1000);
       timeStr.current.textContent = `${m}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
     }
+    const now = performance.now();
+    if (lastSample.current) engine.sampleUiFrame(now - lastSample.current);
+    lastSample.current = now;
   });
 
   // keyboard transport lives in ArrangementPage (the page-level key authority), so it
@@ -87,8 +99,18 @@ export function PlaybackPane() {
     engine.setArrangementLoop(start, end, l.on ?? true);
   };
 
+  const openPrefs = () => {
+    const go = () => setPrefsOpen(true);
+    if (!engine.hasAudioAccepted() && onRequestAccept) {
+      onRequestAccept(go);
+      return;
+    }
+    setPrefsOpen((o) => !o);
+  };
+
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-sm border border-line bg-[#0e0e12] px-3 py-2">
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-sm border border-line bg-[#0e0e12] px-3 py-2">
       {/* transport buttons */}
       <div className="flex items-center gap-1">
         <button className={iconBtn + idle} onClick={() => engine.returnToStart()} title="return to start (Home)">⏮</button>
@@ -203,13 +225,36 @@ export function PlaybackPane() {
             px +
             onOff(prefsOpen || eng.inputStatus === "live" || eng.inputStatus === "pending")
           }
-          onClick={() => setPrefsOpen((o) => !o)}
-          title="audio preferences — input device, buffer, latency, monitor"
+          onClick={() => {
+            if (prefsOpen) setPrefsOpen(false);
+            else openPrefs();
+          }}
+          title="audio preferences — input device, buffer, latency, monitor, system"
         >
           {eng.inputStatus === "pending" ? "audio…" : "audio"}
         </button>
-        {prefsOpen && <AudioPrefsPanel onClose={() => setPrefsOpen(false)} />}
+        {prefsOpen && (
+          <AudioPrefsPanel
+            onClose={() => setPrefsOpen(false)}
+            onRereadAccept={() => setRereadAccept(true)}
+          />
+        )}
       </span>
+      </div>
+
+      <AudioSessionNudges />
+
+      {eng.recording && eng.arrangement.loop?.on && (
+        <div className="font-mono text-[9.5px] text-faint" role="status">
+          punch = loop brace — audio only keeps PCM inside the loop
+        </div>
+      )}
+
+      {rereadAccept && (
+        <div data-audio-accept>
+          <AudioAcceptSheet reread onDone={() => setRereadAccept(false)} />
+        </div>
+      )}
     </div>
   );
 }
