@@ -1,6 +1,6 @@
-// ── SESSION CLUSTER — global I/O prefs + new project (not transport)
+// ── SESSION CLUSTER — global I/O prefs + project I/O (not transport)
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { AudioPrefsPanel } from "./AudioPrefsPanel";
@@ -31,6 +31,8 @@ export function SessionCluster({
 }) {
   const eng = useEngine(["transport"]);
   const [rereadAccept, setRereadAccept] = useState(false);
+  const [busy, setBusy] = useState<"save" | "open" | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const openPrefs = () => {
     const go = () => onPrefsOpenChange(true);
@@ -45,6 +47,43 @@ export function SessionCluster({
     prefsOpen ||
     eng.inputStatus === "live" ||
     eng.inputStatus === "pending";
+
+  const saveAin = async () => {
+    if (busy) return;
+    const name =
+      window.prompt("Save AIN project as…", "project")?.trim() || "project";
+    setBusy("save");
+    try {
+      await engine.exportAin(name);
+    } catch (e) {
+      window.alert(
+        e instanceof Error ? e.message : "Couldn't save AIN project",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openAin = async (file: File) => {
+    if (busy) return;
+    if (
+      !window.confirm(
+        `Open “${file.name}”? This replaces the current studio and imported audio (same as New project). Continue?`,
+      )
+    )
+      return;
+    setBusy("open");
+    try {
+      await engine.importAin(file);
+    } catch (e) {
+      window.alert(
+        e instanceof Error ? e.message : "Couldn't open AIN project",
+      );
+    } finally {
+      setBusy(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
 
   return (
     <div className="ml-auto flex flex-col items-end gap-1.5">
@@ -70,6 +109,34 @@ export function SessionCluster({
                 ? "I/O · denied"
                 : "I/O"}
         </button>
+        <button
+          type="button"
+          className={ctl + px + onOff(false)}
+          disabled={busy !== null}
+          onClick={() => void saveAin()}
+          title="Save AIN project (.ain) — arrangement + collected imports"
+        >
+          {busy === "save" ? "save…" : "save .ain"}
+        </button>
+        <button
+          type="button"
+          className={ctl + px + onOff(false)}
+          disabled={busy !== null}
+          onClick={() => fileRef.current?.click()}
+          title="Open AIN project (.ain) — replaces current studio"
+        >
+          {busy === "open" ? "open…" : "open .ain"}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".ain,application/vnd.ain.project+zip,application/zip"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void openAin(f);
+          }}
+        />
         <button
           type="button"
           className={ctl + px + danger}

@@ -418,6 +418,28 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
   `AudioBuffer` immediately; persistence is async via `putAudioBuffer` → IndexedDB
   (`ain-audio` / `imports`): **Opus in WebM** when WebCodecs can encode (Mediabunny
   mux), else float WAV. Dropped files keep their original encoded bytes + mime.
+
+### `.ain` — AIN project format
+
+Portable project file for actuallyitsnathaniel (extension invented here). Container
+is a zip (`fflate`) for storage-friendly size + inspectability; layout + manifest
+id are fixed — not a generic archive. Working copy stays `localStorage`
+(`ain-arrangement`) + IndexedDB; Save/Open live on the session cluster
+([SessionCluster](components/arrangement/SessionCluster.tsx)).
+
+| Path | Contents |
+|------|----------|
+| `README.txt` | Human identity card (app, homepage, format) |
+| `manifest.json` | `{ format: "ain", version, name, app, homepage, note, assets[] }` |
+| `arrangement.json` | Full arrangement doc (tracks, clips, per-track FX) |
+| `master-fx.json` | Optional master-bus device chain |
+| `assets/<bufId>.<ext>` | Every **imported / recorded** buffer referenced by an audio clip |
+
+MIME: `application/vnd.ain.project+zip`. Built-in catalog samples (URL / `loopId` refs)
+are **not** duplicated — recipients need the same site build. Engine: `exportAin` /
+`importAin` in [ain-pack.ts](ain-pack.ts) + [engine.ts](engine.ts). Open replaces the
+studio (same wipe as New project).
+
   **Audio prefs** (`ain-audio-prefs`, **I/O** chip in the session cluster → small panel):
   - **Input** — `enumerateDevices` list; `deviceId: { exact }` on open (falls back to
     Default if the device is gone). `devicechange` refreshes the list.

@@ -44,8 +44,17 @@ import {
   pruneAudio,
   clearAudio,
   canPersistOpus,
+  encodePersistable,
   lastPersistCodec,
+  sniffMime,
 } from "./data/audio-store";
+import {
+  downloadBlob,
+  packAin,
+  referencedImportIds,
+  safeAinFilename,
+  unpackAin,
+} from "./ain-pack";
 // pitch-preserving stretch (WASM/AudioWorklet) — see CREDITS.md "signalsmith-stretch"
 import SignalsmithStretch, { type StretchNode } from "signalsmith-stretch";
 import {
@@ -4109,24 +4118,139 @@ class AudioEngine {
   // sync so no clip is left with a dangling bufId) and reset to a blank studio. Stops
   // playback and clears selection/undo/clipboard.
   async newProject(): Promise<void> {
+    await this.wipeStudioSession();
+    this.arrangement = emptyArrangement();
+    saveArrangement(this.arrangement);
+    this.bpm = this.arrangement.bpm;
+    this.emit("arrange");
+    this.emit("select");
+    this.emit("transport");
+  }
+
+  /** Stop playback, clear imports/caches/strips/undo — shared by new + .ain open. */
+  private async wipeStudioSession(): Promise<void> {
     if (this.sequencePlaying) this.stopArrangement();
     this.stopAudioClips();
     this._importBufs = {};
     this._reverseBufs = {};
+    this._importPeaks = {};
     this._waveCache = {};
     this._warpCache.clear();
     for (const id in this._stretch) this.disposeStretch(id);
-    this.arrangement = emptyArrangement();
-    saveArrangement(this.arrangement);
+    for (const id of Object.keys(this._arrStrips)) {
+      const s = this._arrStrips[id];
+      if (!s) continue;
+      try {
+        s.fx.dispose();
+        s.in.disconnect();
+        s.adc.disconnect();
+        s.gain.disconnect();
+        s.pan.disconnect();
+        s.an.disconnect();
+      } catch {
+        /* fine */
+      }
+      delete this._arrStrips[id];
+    }
     this.insertBeat = 0;
     this.clearSelection();
     this._undo = [];
     this._redo = [];
     this._clipboard = null;
-    await clearAudio(); // wipe the persisted audio bytes
+    await clearAudio();
+  }
+
+  /**
+   * Collect-and-save: zip arrangement + every imported/recorded buffer (not built-in
+   * catalog samples) into a downloadable `.ain`. Working copy stays in LS + IndexedDB.
+   */
+  async exportAin(name = "project"): Promise<void> {
+    this.saveArr();
+    const ids = referencedImportIds(this.arrangement);
+    const stored = await allAudio();
+    const byId = new Map(stored.map((s) => [s.bufId, s]));
+    const assets: { bufId: string; bytes: ArrayBuffer; name?: string }[] = [];
+    for (const bufId of ids) {
+      const hit = byId.get(bufId);
+      if (hit) {
+        assets.push({ bufId, bytes: hit.bytes, name: hit.name });
+        continue;
+      }
+      const buf = this._importBufs[bufId];
+      if (!buf) continue;
+      const { bytes } = await encodePersistable(buf);
+      let clipName = "audio";
+      for (const t of this.arrangement.tracks)
+        for (const cl of t.clips)
+          if (cl.content.kind === "audio" && cl.content.bufId === bufId)
+            clipName = cl.content.name || cl.name || clipName;
+      assets.push({ bufId, bytes, name: clipName });
+    }
+    const blob = packAin({
+      name,
+      arrangement: this.arrangement,
+      assets,
+      masterFx: this.masterDevices(),
+    });
+    downloadBlob(blob, safeAinFilename(name));
+  }
+
+  /**
+   * Open a `.ain` pack: replaces the current studio (same as new project, then load).
+   * Returns the project name from the manifest.
+   */
+  async importAin(file: File | Blob): Promise<string> {
+    const pack = unpackAin(await file.arrayBuffer());
+    await this.wipeStudioSession();
+
+    for (const a of pack.assets) {
+      const mime = sniffMime(a.bytes, a.name ?? "");
+      await putAudio(a.bufId, a.bytes, a.name || a.bufId, mime);
+    }
+
+    const c = this.ensureCtx();
+    for (const a of pack.assets) {
+      try {
+        this._importBufs[a.bufId] = await c.decodeAudioData(a.bytes.slice(0));
+      } catch {
+        /* undecodable asset — clip stays silent until re-import */
+      }
+    }
+
+    const arr = pack.arrangement;
+    if (!arr || !Array.isArray(arr.tracks))
+      throw new Error("Invalid arrangement in .ain");
+    for (const t of arr.tracks) {
+      if (t.devices)
+        t.devices = migrateFxDeviceStates(t.devices) as typeof t.devices;
+    }
+    this.arrangement = arr;
+    saveArrangement(this.arrangement);
+    this.bpm = this.arrangement.bpm;
+
+    if (pack.masterFx) {
+      this._masterDevices = migrateFxDeviceStates(
+        pack.masterFx,
+      ) as FxDeviceState[];
+      if (this._masterFx) {
+        this._masterFx.setDevices(
+          this._masterDevices.map((d) => structuredClone(d)),
+        );
+        this._masterFx.applyAll(this.bpm);
+      }
+      this.saveMasterFx();
+    }
+
+    for (const t of this.arrangement.tracks)
+      for (const cl of t.clips)
+        if (cl.content.kind === "audio" && warpModeOf(cl.content) === "complex")
+          this.ensureStretchNode(cl);
+
     this.emit("arrange");
     this.emit("select");
     this.emit("transport");
+    this.emit("fx");
+    return pack.manifest.name || "project";
   }
 
   // Re-hydrate persisted imports on boot: decode each stored file into _importBufs, then

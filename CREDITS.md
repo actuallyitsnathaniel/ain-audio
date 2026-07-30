@@ -18,6 +18,8 @@ point of use in the code/docs.
   polyphonic pitch-shift / time-stretch (WASM + AudioWorklet). Powers the studio's per-clip
   WARP mode: pitch-preserving tempo-fit + duration-preserving transpose, rendered offline into
   cached buffers in `engine.ts` (`stretchRender`).
+- [fflate](https://github.com/101arrowz/fflate) — zip pack/unpack for the AIN
+  `.ain` project format (`src/daw/ain-pack.ts`: arrangement + collected import assets).
 
 ## Runtime libraries (other)
 

@@ -168,7 +168,7 @@ export async function allAudio(): Promise<StoredAudio[]> {
   return out;
 }
 
-function sniffMime(bytes: ArrayBuffer, name: string): PersistMime {
+export function sniffMime(bytes: ArrayBuffer, name: string): PersistMime {
   const u8 = new Uint8Array(bytes);
   // WebM / EBML
   if (
