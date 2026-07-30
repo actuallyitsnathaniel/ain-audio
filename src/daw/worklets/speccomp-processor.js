@@ -208,6 +208,35 @@ function identityFrame(ch, window, fftSize) {
   }
 }
 
+/** Update envelopes for viz while device is bypassed (no GR applied to audio). */
+function measureEnvOnly(ch, window, fftSize, edges, attack, release, hopSec) {
+  const { re, im, env, grDb } = ch;
+  const nBands = edges.length - 1;
+  for (let i = 0; i < fftSize; i++) {
+    re[i] = ch.inFifo[i] * window[i];
+    im[i] = 0;
+  }
+  fft(re, im, false);
+  const atkCoef = Math.exp((-hopSec) / Math.max(0.001, attack));
+  const relCoef = Math.exp((-hopSec) / Math.max(0.001, release));
+  for (let b = 0; b < nBands; b++) {
+    const i0 = edges[b];
+    const i1 = edges[b + 1];
+    let sum = 0;
+    let n = 0;
+    for (let k = i0; k < i1; k++) {
+      const mr = re[k];
+      const mi = im[k];
+      sum += mr * mr + mi * mi;
+      n++;
+    }
+    const rms = Math.sqrt(sum / Math.max(1, n));
+    const coef = rms > env[b] ? atkCoef : relCoef;
+    env[b] = coef * env[b] + (1 - coef) * rms;
+    grDb[b] = 0;
+  }
+}
+
 class AinSpeccompProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
@@ -285,14 +314,15 @@ class AinSpeccompProcessor extends AudioWorkletProcessor {
   }
 
   _emitViz(ch) {
+    // Absolute dB → 0..1 over −60..0 so the RTA shares the plot scale with threshold nodes.
     const n = this.nBands;
-    let peak = 1e-12;
+    const dbMin = -60;
+    const dbMax = 0;
+    const span = dbMax - dbMin;
     for (let b = 0; b < n; b++) {
-      peak = Math.max(peak, ch.env[b]);
-    }
-    const denom = Math.log10(1 + peak * 8);
-    for (let b = 0; b < n; b++) {
-      this._vizEnv[b] = denom > 0 ? Math.log10(1 + ch.env[b] * 8) / denom : 0;
+      const db = lin2db(ch.env[b]);
+      const t = (db - dbMin) / span;
+      this._vizEnv[b] = t < 0 ? 0 : t > 1 ? 1 : t;
       this._vizGr[b] = Math.min(1, (ch.grDb[b] || 0) / 24);
     }
     this.port.postMessage({
@@ -338,9 +368,23 @@ class AinSpeccompProcessor extends AudioWorkletProcessor {
         processFrame(ch, this.window, fftSize, hop, this.edges, frameParams, (freq, thr, tilt, bandT, ratio) =>
           this._curveAt(freq, thr, tilt, bandT, ratio),
         );
-      } else identityFrame(ch, this.window, fftSize);
+      } else {
+        identityFrame(ch, this.window, fftSize);
+        // Still measure input so viz works with the device powered off
+        if (emitViz && this._viz) {
+          measureEnvOnly(
+            ch,
+            this.window,
+            fftSize,
+            this.edges,
+            frameParams.attack,
+            frameParams.release,
+            frameParams.hopSec,
+          );
+        }
+      }
 
-      if (emitViz && this._viz && active) {
+      if (emitViz && this._viz) {
         this._vizCountdown--;
         if (this._vizCountdown <= 0) {
           this._vizCountdown = 3;

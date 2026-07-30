@@ -71,7 +71,7 @@ function fft(re, im, inverse) {
   }
 }
 
-const VIZ_BINS = 48;
+const VIZ_BINS = 96;
 
 function createChannel(fftSize, hop) {
   const half = fftSize / 2;
@@ -95,20 +95,36 @@ function createChannel(fftSize, hop) {
   };
 }
 
-/** Max-pool FFT bins into log-spaced viz columns. */
-function fillVizLog(src, half, out) {
-  const n = out.length;
+/** Max-pool FFT bins into log columns; posOut = log-freq 0..1 of the argmax bin. */
+function fillVizLog(src, half, magOut, posOut) {
+  const n = magOut.length;
+  const logHalf = Math.log(half);
   for (let i = 0; i < n; i++) {
     const t0 = i / n;
     const t1 = (i + 1) / n;
     const k0 = Math.max(1, Math.floor(Math.pow(half, t0)));
     const k1 = Math.max(k0 + 1, Math.min(half, Math.floor(Math.pow(half, t1))));
     let m = 0;
+    let bestK = k0;
     for (let k = k0; k < k1; k++) {
       const v = src[k];
-      if (v > m) m = v;
+      if (v > m) {
+        m = v;
+        bestK = k;
+      }
     }
-    out[i] = m;
+    magOut[i] = m;
+    posOut[i] = logHalf > 0 ? Math.log(Math.max(1, bestK)) / logHalf : t0;
+  }
+}
+
+/** Soft-log normalize one viz buffer in place → 0..1 against its own peak. */
+function softNorm(buf) {
+  let peak = 1e-12;
+  for (let i = 0; i < buf.length; i++) peak = Math.max(peak, buf[i]);
+  const denom = Math.log10(1 + peak * 8);
+  for (let i = 0; i < buf.length; i++) {
+    buf[i] = denom > 0 ? Math.log10(1 + buf[i] * 8) / denom : 0;
   }
 }
 
@@ -275,6 +291,8 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     this._vizCountdown = 0;
     this._vizDry = new Float32Array(VIZ_BINS);
     this._vizWet = new Float32Array(VIZ_BINS);
+    this._vizDryPos = new Float32Array(VIZ_BINS);
+    this._vizWetPos = new Float32Array(VIZ_BINS);
     this.port.onmessage = (ev) => {
       const d = ev.data || {};
       if (d.type !== "config") return;
@@ -304,25 +322,26 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     };
   }
 
-  _emitViz(ch) {
+  _emitViz(ch, strength) {
     const half = this.fftSize / 2;
-    fillVizLog(ch.mag, half, this._vizDry);
-    fillVizLog(ch.synMag, half, this._vizWet);
-    let peak = 1e-12;
+    const s = Math.min(1, Math.max(0, strength));
+    fillVizLog(ch.mag, half, this._vizDry, this._vizDryPos);
+    fillVizLog(ch.synMag, half, this._vizWet, this._vizWetPos);
+    // Normalize shapes first, THEN apply strength to wet only.
+    softNorm(this._vizDry);
+    softNorm(this._vizWet);
+    // Green = adjusted harmonics × strength: invisible at 0%, full at 100%.
     for (let i = 0; i < VIZ_BINS; i++) {
-      peak = Math.max(peak, this._vizDry[i], this._vizWet[i]);
-    }
-    // soft log compression → 0..1
-    const denom = Math.log10(1 + peak * 8);
-    for (let i = 0; i < VIZ_BINS; i++) {
-      this._vizDry[i] = denom > 0 ? Math.log10(1 + this._vizDry[i] * 8) / denom : 0;
-      this._vizWet[i] = denom > 0 ? Math.log10(1 + this._vizWet[i] * 8) / denom : 0;
+      this._vizWet[i] *= s;
     }
     this.port.postMessage({
       type: "viz",
       n: VIZ_BINS,
       a: this._vizDry,
       b: this._vizWet,
+      // true peak freq inside each log column — dry vs wet can diverge when snap moves energy
+      xa: this._vizDryPos,
+      xb: this._vizWetPos,
     });
   }
 
@@ -378,8 +397,9 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
         if (emitViz && this._viz) {
           this._vizCountdown--;
           if (this._vizCountdown <= 0) {
-            this._vizCountdown = 3;
-            this._emitViz(ch);
+            // every hop (~86 Hz @ 48k/512) — UI tweens between frames
+            this._vizCountdown = 1;
+            this._emitViz(ch, strength);
           }
         }
       } else {
@@ -388,7 +408,7 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
         if (emitViz && this._viz) {
           this._vizCountdown--;
           if (this._vizCountdown <= 0) {
-            this._vizCountdown = 3;
+            this._vizCountdown = 1;
             // analyze magnitudes without PV for the dry view
             const half = fftSize / 2;
             for (let i = 0; i < fftSize; i++) {
@@ -400,7 +420,7 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
               ch.mag[k] = Math.hypot(ch.re[k], ch.im[k]);
               ch.synMag[k] = ch.mag[k];
             }
-            this._emitViz(ch);
+            this._emitViz(ch, strength);
           }
         }
       }

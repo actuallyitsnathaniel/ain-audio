@@ -20,22 +20,42 @@ import { defaultEqBand } from "./eq-curve";
 export type FxDeviceType =
   | "filter"
   | "comp"
-  | "space"
+  | "delay"
+  | "chorus"
+  | "disperser"
   | "crush"
   | "reverb"
   | "impartialer"
   | "speccomp"
-  | "eq";
+  | "eq"
+  | "centinel";
 
 export type DelayFeel = "straight" | "dotted" | "triplet";
 export type ImpartialerScale = "major" | "minor" | "dorian" | "chromatic";
+export type CentinelScale = ImpartialerScale | "custom";
 export type ImpartialerMappingMode = "off" | "snap" | "remap";
 export type SpectralQuality = "low" | "high";
 
 export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;
 export const IMPARTIALER_SCALES: ImpartialerScale[] = ["major", "minor", "dorian", "chromatic"];
+/** Relative pitch classes for a custom centinel map (seeded from major). */
+export const DEFAULT_CENTINEL_CUSTOM_PCS = [0, 2, 4, 5, 7, 9, 11];
+export const SCALE_PCS: Record<ImpartialerScale, number[]> = {
+  major: [0, 2, 4, 5, 7, 9, 11],
+  minor: [0, 2, 3, 5, 7, 8, 10],
+  dorian: [0, 2, 3, 5, 7, 9, 10],
+  chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+};
 
-// tempo-sync divisions for the delay (space) device
+export function centinelScalePcs(scale: CentinelScale, customPcs?: number[]): number[] {
+  if (scale === "custom") {
+    const pcs = (customPcs ?? []).filter((n) => n >= 0 && n <= 11);
+    return pcs.length ? [...new Set(pcs)].sort((a, b) => a - b) : DEFAULT_CENTINEL_CUSTOM_PCS.slice();
+  }
+  return SCALE_PCS[scale] ?? SCALE_PCS.major;
+}
+
+// tempo-sync divisions for the delay device
 export const DELAY_DIVS: { label: string; beats: number }[] = [
   { label: "1/16", beats: 0.25 },
   { label: "1/8", beats: 0.5 },
@@ -59,7 +79,10 @@ const db2lin = (db: number) => Math.pow(10, db / 20);
 export interface FxParams {
   filter: { on: boolean; morph: number };
   comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number; makeup: number };
-  space: { on: boolean; time: number; fb: number; mix: number; sync: boolean; div: number; feel: DelayFeel };
+  delay: { on: boolean; time: number; fb: number; mix: number; sync: boolean; div: number; feel: DelayFeel };
+  chorus: { on: boolean; rate: number; depth: number; mix: number; feedback: number };
+  /** Phase disperser — cascaded allpasses; flat magnitude, rotates phase around `freq`. */
+  disperser: { on: boolean; freq: number; amount: number; viz: boolean };
   crush: { on: boolean; drive: number; autoGain: boolean };
   reverb: { on: boolean; decay: number; mix: number };
   impartialer: {
@@ -72,8 +95,10 @@ export interface FxParams {
     maxShift: number;
     quality: SpectralQuality;
     residual: number;
-    /** Toggleable dry/wet spectral heatmap assistant. */
+    /** Toggleable spectral assistant. */
     viz: boolean;
+    /** `rta` = live line spectrum (default) · `trail` = ~1s scrolling heatmap. */
+    vizMode: "rta" | "trail";
   };
   speccomp: {
     on: boolean;
@@ -100,6 +125,35 @@ export interface FxParams {
     /** Pro-Q–style parametric bands (static + optional per-band dynamics). */
     bands: EqBand[];
   };
+  /** Monophonic pitch sentinel — YIN + PV; speed/flex/humanize keep (or kill) the take. */
+  centinel: {
+    on: boolean;
+    key: number;
+    scale: CentinelScale;
+    /** Relative pitch classes when `scale === "custom"` (0 = key root). */
+    customPcs: number[];
+    /**
+     * When on: held MIDI (keyboard/hardware) + sounding arrangement MIDI notes
+     * become the retune targets; falls back to the scale map when none are held.
+     */
+    midiFollow: boolean;
+    /** Retune speed in ms — 0 = hard lock (robot), ~40–120 natural, 200+ very loose. */
+    speed: number;
+    /** 0..1 how far to pull toward the target. */
+    amount: number;
+    /** Cents dead-zone — leave human detune alone inside this window. */
+    flex: number;
+    /** 0..1 preserve vibrato / correct center only. */
+    humanize: number;
+    /** 0..1 pitch-detect gate (higher = pickier). */
+    tracking: number;
+    /** 0 = formants ride pitch · 1 = keep spectral envelope. */
+    formant: number;
+    mix: number;
+    transpose: number;
+    quality: SpectralQuality;
+    viz: boolean;
+  };
 }
 
 // A live device instance: the in/out boundary + an apply() closure over its own nodes.
@@ -111,6 +165,8 @@ export interface FxDeviceNodes {
   viz?: FxVizSlot;
   /** Continuous work (EQ dynamics + analyzer). Called ~30–60 Hz from the engine. */
   tick?: (ctx: AudioContext) => void;
+  /** Push held / sounding MIDI note numbers into devices that listen (centinel). */
+  setMidiTargets?: (notes: number[]) => void;
 }
 
 export type { FxVizSlot };
@@ -198,7 +254,7 @@ function buildComp(ctx: AudioContext): FxDeviceNodes {
   };
 }
 
-function buildSpace(ctx: AudioContext): FxDeviceNodes {
+function buildDelay(ctx: AudioContext): FxDeviceNodes {
   const inGain = ctx.createGain();
   const outGain = ctx.createGain();
   const dry = ctx.createGain();
@@ -218,7 +274,7 @@ function buildSpace(ctx: AudioContext): FxDeviceNodes {
     in: inGain,
     out: outGain,
     apply: (p, c, bpm) => {
-      const fx = p as FxParams["space"];
+      const fx = p as FxParams["delay"];
       const t = c.currentTime;
       const baseBeats = DELAY_DIVS[fx.div]?.beats ?? 0.5;
       const syncedSec = baseBeats * DELAY_FEEL_MULT[fx.feel] * (60 / bpm);
@@ -226,6 +282,140 @@ function buildSpace(ctx: AudioContext): FxDeviceNodes {
       delay.delayTime.setTargetAtTime(delaySec, t, 0.05);
       fb.gain.setTargetAtTime(fx.on ? fx.fb : 0, t, 0.05);
       wet.gain.setTargetAtTime(fx.on ? fx.mix : 0, t, 0.05);
+    },
+  };
+}
+
+/**
+ * Dual-voice stereo chorus — two modulated delays (L/R), light feedback, dry/wet mix.
+ * Native nodes only (no worklet). LFO depth is seconds of delay modulation.
+ */
+function buildChorus(ctx: AudioContext): FxDeviceNodes {
+  const inGain = ctx.createGain();
+  const outGain = ctx.createGain();
+  const dry = ctx.createGain();
+  const wet = ctx.createGain();
+  wet.gain.value = 0;
+
+  inGain.connect(dry);
+  dry.connect(outGain);
+
+  const split = ctx.createChannelSplitter(2);
+  const merge = ctx.createChannelMerger(2);
+  inGain.connect(split);
+
+  const mkVoice = (baseDelay: number, lfoHz: number, phase: number) => {
+    const d = ctx.createDelay(0.08);
+    d.delayTime.value = baseDelay;
+    const fb = ctx.createGain();
+    fb.gain.value = 0;
+    const lfo = ctx.createOscillator();
+    const lfoDepth = ctx.createGain();
+    lfo.frequency.value = lfoHz;
+    lfoDepth.gain.value = 0.002;
+    // offset phase via a constant+delay trick: start time offset
+    lfo.connect(lfoDepth);
+    lfoDepth.connect(d.delayTime);
+    lfo.start(ctx.currentTime + phase);
+    d.connect(fb);
+    fb.connect(d);
+    return { delay: d, fb, lfo, lfoDepth };
+  };
+
+  const vL = mkVoice(0.012, 0.85, 0);
+  const vR = mkVoice(0.017, 1.15, 0.37);
+  split.connect(vL.delay, 0);
+  split.connect(vR.delay, 1);
+  // also feed opposite channel lightly for width when input is mono-ish
+  split.connect(vL.delay, 1);
+  split.connect(vR.delay, 0);
+
+  vL.delay.connect(merge, 0, 0);
+  vR.delay.connect(merge, 0, 1);
+  merge.connect(wet);
+  wet.connect(outGain);
+
+  return {
+    in: inGain,
+    out: outGain,
+    apply: (p, c) => {
+      const fx = p as FxParams["chorus"];
+      const t = c.currentTime;
+      const on = fx.on;
+      const rate = Math.max(0.05, Math.min(8, fx.rate));
+      // depth 0..1 → ±0.4..6 ms around base delay
+      const depthSec = 0.0004 + Math.max(0, Math.min(1, fx.depth)) * 0.0055;
+      const fbAmt = on ? Math.max(0, Math.min(0.7, fx.feedback)) * 0.55 : 0;
+      const mix = on ? Math.max(0, Math.min(1, fx.mix)) : 0;
+
+      vL.lfo.frequency.setTargetAtTime(rate, t, 0.04);
+      vR.lfo.frequency.setTargetAtTime(rate * 1.27, t, 0.04);
+      vL.lfoDepth.gain.setTargetAtTime(depthSec, t, 0.04);
+      vR.lfoDepth.gain.setTargetAtTime(depthSec * 1.15, t, 0.04);
+      vL.fb.gain.setTargetAtTime(fbAmt, t, 0.05);
+      vR.fb.gain.setTargetAtTime(fbAmt, t, 0.05);
+      wet.gain.setTargetAtTime(mix, t, 0.05);
+      dry.gain.setTargetAtTime(on ? 1 - mix * 0.55 : 1, t, 0.05);
+    },
+  };
+}
+
+/**
+ * Phase disperser — cascade of allpass biquads sharing one center frequency.
+ * Magnitude stays flat; phase wraps around `freq`, which reshapes attack/transient
+ * energy without EQ. `amount` scales how many stages engage + each stage's Q.
+ * (Category of tool popularized by Kilohearts Disperser — original allpass cascade.)
+ */
+export const DISPERSER_STAGES = 12;
+
+/** Per-stage freq/Q matching `buildDisperser` apply — used by the phase viz. */
+export function disperserStageParams(
+  on: boolean,
+  freq: number,
+  amount: number,
+): { freq: number; q: number }[] {
+  const f = Math.max(20, Math.min(20000, freq));
+  const amt = Math.max(0, Math.min(1, amount));
+  const n = on ? amt * DISPERSER_STAGES : 0;
+  const qFull = 0.5 + amt * 9.5;
+  const out: { freq: number; q: number }[] = [];
+  for (let i = 0; i < DISPERSER_STAGES; i++) {
+    const w = Math.max(0, Math.min(1, n - i));
+    if (w <= 0.001) out.push({ freq: 20000, q: 0.0001 });
+    else out.push({ freq: f, q: 0.0001 + qFull * w });
+  }
+  return out;
+}
+
+function buildDisperser(ctx: AudioContext): FxDeviceNodes {
+  const inGain = ctx.createGain();
+  const outGain = ctx.createGain();
+  const stages: BiquadFilterNode[] = [];
+  let prev: AudioNode = inGain;
+  for (let i = 0; i < DISPERSER_STAGES; i++) {
+    const ap = ctx.createBiquadFilter();
+    ap.type = "allpass";
+    ap.frequency.value = 20000;
+    ap.Q.value = 0.0001;
+    prev.connect(ap);
+    stages.push(ap);
+    prev = ap;
+  }
+  prev.connect(outGain);
+
+  return {
+    in: inGain,
+    out: outGain,
+    apply: (p, c) => {
+      const fx = p as FxParams["disperser"];
+      const t = c.currentTime;
+      const tuned = disperserStageParams(fx.on, fx.freq, fx.amount);
+      for (let i = 0; i < DISPERSER_STAGES; i++) {
+        const ap = stages[i];
+        const s = tuned[i];
+        ap.frequency.setTargetAtTime(s.freq, t, 0.03);
+        ap.Q.setTargetAtTime(s.q, t, 0.03);
+      }
     },
   };
 }
@@ -373,6 +563,13 @@ function buildSpectralWorklet(
     in: inGain,
     out: outGain,
     viz,
+    setMidiTargets: (notes) => {
+      try {
+        node?.port.postMessage({ type: "midi", notes });
+      } catch {
+        /* node gone */
+      }
+    },
     apply: (p, c) => {
       const q = qualityOf(p);
       if (!node || passthrough) mount(q);
@@ -439,6 +636,36 @@ function buildSpeccomp(ctx: AudioContext): FxDeviceNodes {
       });
     },
     (p) => (p as FxParams["speccomp"]).quality,
+  );
+}
+
+function buildCentinel(ctx: AudioContext): FxDeviceNodes {
+  return buildSpectralWorklet(
+    ctx,
+    "ain-centinel",
+    "centinel",
+    (node, p, t) => {
+      const fx = p as FxParams["centinel"];
+      const mix = fx.on ? fx.mix : 0;
+      node.parameters.get("mix")?.setTargetAtTime(mix, t, 0.03);
+      node.parameters.get("amount")?.setTargetAtTime(fx.amount, t, 0.03);
+      node.parameters.get("speed")?.setTargetAtTime(fx.speed, t, 0.03);
+      node.parameters.get("flex")?.setTargetAtTime(fx.flex, t, 0.03);
+      node.parameters.get("humanize")?.setTargetAtTime(fx.humanize, t, 0.03);
+      node.parameters.get("tracking")?.setTargetAtTime(fx.tracking, t, 0.03);
+      node.parameters.get("formant")?.setTargetAtTime(fx.formant ?? 0.7, t, 0.03);
+      node.parameters.get("transpose")?.setTargetAtTime(fx.transpose, t, 0.03);
+      node.port.postMessage({
+        type: "config",
+        on: fx.on,
+        key: fx.key,
+        scale: fx.scale,
+        customPcs: fx.customPcs ?? DEFAULT_CENTINEL_CUSTOM_PCS,
+        midiFollow: !!fx.midiFollow,
+        viz: !!fx.viz,
+      });
+    },
+    (p) => (p as FxParams["centinel"]).quality,
   );
 }
 
@@ -801,7 +1028,19 @@ export interface FxDeviceDef {
 export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
   filter: { label: "filter", build: buildFilter, defaults: () => ({ on: false, morph: 0.5 }) as FxParams["filter"] },
   comp: { label: "comp", build: buildComp, defaults: () => ({ on: false, threshold: -18, ratio: 4, attack: 0.01, release: 0.18, makeup: 0 }) as FxParams["comp"] },
-  space: { label: "space", build: buildSpace, defaults: () => ({ on: false, time: 0.32, fb: 0.35, mix: 0.3, sync: false, div: DEFAULT_DELAY_DIV, feel: "dotted" }) as FxParams["space"] },
+  delay: { label: "delay", build: buildDelay, defaults: () => ({ on: false, time: 0.32, fb: 0.35, mix: 0.3, sync: false, div: DEFAULT_DELAY_DIV, feel: "dotted" }) as FxParams["delay"] },
+  chorus: {
+    label: "chorus",
+    build: buildChorus,
+    defaults: () =>
+      ({ on: false, rate: 0.9, depth: 0.45, mix: 0.35, feedback: 0.15 }) as FxParams["chorus"],
+  },
+  disperser: {
+    label: "disperser",
+    build: buildDisperser,
+    defaults: () =>
+      ({ on: false, freq: 180, amount: 0.55, viz: true }) as FxParams["disperser"],
+  },
   crush: { label: "crush", build: buildCrush, defaults: () => ({ on: false, drive: 0.35, autoGain: true }) as FxParams["crush"] },
   reverb: { label: "reverb", build: buildReverb, defaults: () => ({ on: false, decay: 2.2, mix: 0.25 }) as FxParams["reverb"] },
   impartialer: {
@@ -820,6 +1059,7 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         quality: "low",
         residual: 0.5,
         viz: false,
+        vizMode: "rta",
       }) as FxParams["impartialer"],
     latencySamples: (params) => spectralLatencySamples(params),
   },
@@ -861,19 +1101,49 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         ],
       }) as FxParams["eq"],
   },
+  centinel: {
+    label: "centinel",
+    category: "spectral",
+    build: buildCentinel,
+    defaults: () =>
+      ({
+        on: false,
+        key: 0,
+        scale: "major",
+        customPcs: DEFAULT_CENTINEL_CUSTOM_PCS.slice(),
+        midiFollow: false,
+        speed: 40,
+        amount: 1,
+        flex: 12,
+        humanize: 0.4,
+        tracking: 0.35,
+        formant: 0.7,
+        mix: 1,
+        transpose: 0,
+        quality: "low",
+        viz: true,
+      }) as FxParams["centinel"],
+    latencySamples: (params) => spectralLatencySamples(params),
+  },
 };
 
 export const FX_DEVICE_TYPES = Object.keys(FX_DEVICES) as FxDeviceType[];
 
 export type FxDeviceStateLike = { id: string; type: FxDeviceType; params: unknown };
 
-/** Migrate persisted device lists (`chroma` / `partialer` → `impartialer`; EQ solo/M/S defaults). */
+/** Migrate persisted device lists (`chroma`/`partialer`→`impartialer`, `space`→`delay`, `tuner`→`centinel`; EQ/impartialer defaults). */
 export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStateLike[] {
   return states
     .map((s) => {
       const raw = s.type as string;
       const type =
-        raw === "chroma" || raw === "partialer" ? "impartialer" : s.type;
+        raw === "chroma" || raw === "partialer"
+          ? "impartialer"
+          : raw === "space"
+            ? "delay"
+            : raw === "tuner"
+              ? "centinel"
+              : s.type;
       if (!(type in FX_DEVICES)) return null;
 
       const prev = (s.params && typeof s.params === "object" ? s.params : {}) as Record<
@@ -882,8 +1152,12 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
       >;
 
       if (type !== s.type) {
-        const defaults = FX_DEVICES.impartialer.defaults() as Record<string, unknown>;
-        return { ...s, type: "impartialer" as FxDeviceType, params: { ...defaults, ...prev } };
+        if (type === "impartialer") {
+          const defaults = FX_DEVICES.impartialer.defaults() as Record<string, unknown>;
+          return { ...s, type: "impartialer" as FxDeviceType, params: { ...defaults, ...prev } };
+        }
+        // space → delay / tuner → centinel: params shape compatible
+        return { ...s, type: type as FxDeviceType, params: prev };
       }
 
       if (type === "eq") {
@@ -896,6 +1170,42 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
             }))
           : prev.bands;
         return { ...s, params: { ...prev, stereoMode, bands } };
+      }
+
+      if (type === "impartialer") {
+        const vizMode = prev.vizMode === "trail" ? "trail" : "rta";
+        if (vizMode !== prev.vizMode) {
+          return { ...s, params: { ...prev, vizMode } };
+        }
+      }
+
+      if (type === "disperser" && prev.viz === undefined) {
+        return { ...s, params: { ...prev, viz: true } };
+      }
+
+      if (type === "centinel") {
+        const customPcs = Array.isArray(prev.customPcs)
+          ? (prev.customPcs as number[]).filter((n) => n >= 0 && n <= 11)
+          : DEFAULT_CENTINEL_CUSTOM_PCS.slice();
+        const scale =
+          prev.scale === "custom" ||
+          prev.scale === "major" ||
+          prev.scale === "minor" ||
+          prev.scale === "dorian" ||
+          prev.scale === "chromatic"
+            ? prev.scale
+            : "major";
+        return {
+          ...s,
+          params: {
+            ...prev,
+            scale,
+            customPcs: customPcs.length ? customPcs : DEFAULT_CENTINEL_CUSTOM_PCS.slice(),
+            midiFollow: !!prev.midiFollow,
+            formant: prev.formant === undefined ? 0.7 : prev.formant,
+            viz: prev.viz !== false,
+          },
+        };
       }
 
       return s;

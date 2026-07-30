@@ -112,7 +112,7 @@ Compressor v1 can ignore this entirely.
 ### 2.6. Dry/wet + residual
 
 - **Dry/wet (`strength` / `mix`):** always available at the device wrapper (GainNodes),
-  not inside the FFT — click-safe, automatable, matches reverb/space.
+  not inside the FFT — click-safe, automatable, matches reverb/delay.
 - **Residual / transient split** (optional Phase 2+): crude high-frequency or
   onset-weighted residual passed with less processing. Useful for both impartialer
   (keep drums) and spectral comp (preserve attacks). Same splitter, different wet mix.
@@ -278,7 +278,7 @@ decision; defer).
 ### 6.1. Architecture rule (from AUDIO.md)
 
 Native Web Audio nodes remain the default. Spectral devices are **AudioWorklet
-(+ optional WASM later) modules** hosted identically to filter/comp/space via:
+(+ optional WASM later) modules** hosted identically to filter/comp/delay via:
 
 ```ts
 build(ctx) → { in, out, apply }
@@ -304,8 +304,9 @@ Broadband `comp` stays zero-latency native. Spectral comp is a **separate** devi
 
 ```ts
 type FxDeviceType =
-  | "filter" | "comp" | "space" | "crush" | "reverb"
+  | "filter" | "comp" | "delay" | "chorus" | "disperser" | "crush" | "reverb"
   | "impartialer"    // pitch snap / remap
+  | "centinel"          // monophonic pitch sentinel (YIN + PV)
   | "speccomp"; // spectral compressor
 ```
 

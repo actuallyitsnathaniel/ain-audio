@@ -120,6 +120,11 @@ export class FxChain {
     for (const d of this.live) d.nodes.tick?.(this.ctx);
   }
 
+  /** Push MIDI note targets into listening devices (centinel midi-follow). */
+  setMidiTargets(notes: number[]) {
+    for (const d of this.live) d.nodes.setMidiTargets?.(notes);
+  }
+
   // tear down (track removed): disconnect everything from the graph
   dispose() {
     try { this.input.disconnect(); } catch { /* fine */ }

@@ -14,12 +14,15 @@ export function TrackFader({
   gain,
   getLevel,
   onChange,
-  width = 120,
+  width,
+  className = "",
 }: {
   gain: number; // stored linear gain
   getLevel: () => Levels; // live post-fader {rms, peak} dB
   onChange: (gain: number) => void;
+  /** Fixed width in px. Omit for fluid (pair with className flex-1). */
   width?: number;
+  className?: string;
 }) {
   const pos = gainToPos(gain);
   const drag = useRef<{ x: number; pos: number } | null>(null);
@@ -63,7 +66,7 @@ export function TrackFader({
     if (!drag.current) return;
     // shift = fine (¼ sensitivity) for surgical moves around unity
     const el = trackRef.current;
-    const w = el ? el.getBoundingClientRect().width : width;
+    const w = el ? el.getBoundingClientRect().width : width || 120;
     const dp = ((e.clientX - drag.current.x) / w) * (e.shiftKey ? 0.25 : 1);
     const next = Math.min(1, Math.max(0, drag.current.pos + dp));
     onChange(posToGain(next));
@@ -86,7 +89,10 @@ export function TrackFader({
 
   const unityPct = 75; // unity tick at ¾ travel
   return (
-    <div className="flex items-center gap-1.5" style={{ width }}>
+    <div
+      className={"flex min-w-0 items-center gap-1 " + className}
+      style={width != null ? { width } : undefined}
+    >
       <div className="relative flex-1">
         {/* the fader groove with the meter bar behind + unity tick */}
         <div

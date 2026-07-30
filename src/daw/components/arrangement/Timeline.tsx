@@ -15,7 +15,7 @@ import { clipBeats } from "../../data/clips";
 import { DRUM_BASE } from "../../data/drum-midi";
 import { type ArrClip, type ArrTrack, slippedLocals } from "../../data/arrangement";
 
-const HEAD_H = 22; // ruler height
+const HEAD_H = 26; // ruler height (must match ArrangementPage)
 const ROW_H = 64; // track lane height (must match ArrangementPage ROW_H)
 const KEY_W = 0; // no gutter (headers are a separate column)
 const MIN_PPB = 4;
@@ -504,33 +504,81 @@ export function Timeline({
       }
     }
 
-    // ruler bg + loop brace
-    g.fillStyle = "#141418";
+    // ruler bg + loop brace + ticks / labels
+    g.fillStyle = "#121216";
     g.fillRect(0, 0, w, HEAD_H);
-    g.fillStyle = "rgba(255,255,255,0.08)";
+    // subtle top edge + baseline
+    g.fillStyle = "rgba(255,255,255,0.04)";
+    g.fillRect(0, 0, w, 1);
+    g.fillStyle = "rgba(255,255,255,0.1)";
     g.fillRect(0, HEAD_H - 1, w, 1);
-    // bar.beat labels ON the ruler (1-based both) — bars always, beats when there's room
+
+    const loop = engine.arrangement.loop;
+    if (loop?.on) {
+      const lx = beatToX(loop.start);
+      const lw = Math.max(2, (loop.end - loop.start) * view.current.ppb);
+      g.fillStyle = "color-mix(in srgb, " + ac + " 22%, transparent)";
+      g.fillRect(lx, 1, lw, HEAD_H - 3);
+      g.strokeStyle = ac;
+      g.globalAlpha = 0.85;
+      g.lineWidth = 1;
+      g.strokeRect(lx + 0.5, 1.5, lw - 1, HEAD_H - 4);
+      // end grips (Ableton-ish brace handles)
+      g.globalAlpha = 1;
+      g.fillStyle = ac;
+      g.fillRect(lx, 3, 2, HEAD_H - 7);
+      g.fillRect(lx + lw - 2, 3, 2, HEAD_H - 7);
+    }
+
+    // ticks + bar.beat labels (1-based)
     g.font = "8px ui-monospace, monospace";
     for (let b = firstBeat; b <= lastBeat; b++) {
       const x = beatToX(b);
       if (x < KEY_W - 1 || x > w) continue;
       const isBar = b % bpb === 0;
+      if (!isBar && !showBeatLines) continue;
+      // tick marks from the baseline up
+      const tickH = isBar ? 8 : labelEveryBeat ? 5 : 3;
+      g.fillStyle = isBar ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.12)";
+      g.fillRect(x, HEAD_H - 1 - tickH, 1, tickH);
       if (!isBar && !labelEveryBeat) continue;
       const bar = Math.floor(b / bpb) + 1;
       const beat = (b % bpb) + 1;
-      g.fillStyle = isBar ? "#7a7a86" : "#4a4a52";
-      g.fillText(`${bar}.${beat}`, x + 3, HEAD_H - 6);
+      if (isBar) {
+        g.fillStyle = bar === 1 ? ac : "#8a8a96";
+        g.font = "bold 8px ui-monospace, monospace";
+        g.fillText(String(bar), x + 3, 11);
+        g.font = "8px ui-monospace, monospace";
+        if (labelEveryBeat) {
+          g.fillStyle = "#55555e";
+          g.fillText(".1", x + 3 + g.measureText(String(bar)).width, 11);
+        }
+      } else {
+        g.fillStyle = "#4a4a52";
+        g.fillText(String(beat), x + 2, 11);
+      }
     }
-    const loop = engine.arrangement.loop;
-    if (loop?.on) {
-      const lx = beatToX(loop.start);
-      const lw = (loop.end - loop.start) * view.current.ppb;
-      g.fillStyle = "color-mix(in srgb, " + ac + " 30%, transparent)";
-      g.fillRect(lx, 0, lw, HEAD_H - 2);
-      g.strokeStyle = ac;
-      g.lineWidth = 1;
-      g.strokeRect(lx + 0.5, 0.5, lw, HEAD_H - 3);
-    }
+
+    // snap cue — right edge of ruler
+    const snapLab =
+      snap === 0
+        ? "free"
+        : snap >= bpb
+          ? "bar"
+          : snap === 1
+            ? "1/4"
+            : snap === 0.5
+              ? "1/8"
+              : snap === 0.25
+                ? "1/16"
+                : snap === 0.125
+                  ? "1/32"
+                  : String(snap);
+    g.font = "7px ui-monospace, monospace";
+    g.fillStyle = "rgba(255,255,255,0.28)";
+    const cue = "snap " + snapLab;
+    const cwCue = g.measureText(cue).width;
+    g.fillText(cue, w - cwCue - 6, 10);
 
     // time selection band (the marquee / drag-select highlight over its track span)
     const ts = engine.timeSel;
@@ -549,6 +597,9 @@ export function Timeline({
       g.moveTo(tx + 0.5, HEAD_H); g.lineTo(tx + 0.5, h);
       g.moveTo(tx + tw + 0.5, HEAD_H); g.lineTo(tx + tw + 0.5, h);
       g.stroke();
+      // ruler highlight for the selection span
+      g.fillStyle = "color-mix(in srgb, " + ac + " 18%, transparent)";
+      g.fillRect(tx, 1, tw, HEAD_H - 3);
     }
 
     // clips
@@ -819,9 +870,9 @@ export function Timeline({
         // downward tag in the ruler so the stopped cursor reads as a marker
         g.fillStyle = ac;
         g.beginPath();
-        g.moveTo(px - 3.5, 0);
-        g.lineTo(px + 4.5, 0);
-        g.lineTo(px + 0.5, 5);
+        g.moveTo(px - 4, 0);
+        g.lineTo(px + 5, 0);
+        g.lineTo(px + 0.5, 7);
         g.closePath();
         g.fill();
       }

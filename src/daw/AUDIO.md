@@ -43,10 +43,13 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | -------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `filter` | BiquadFilter                        | bipolar morph: <0.5 lowpass, >0.5 highpass, ~0.5 off                                                                                                                                                                                                                                                                                   |
 | `comp`   | DynamicsCompressor + makeup gain    | _creative_ dynamics; manual makeup. Off ⇒ threshold 0/ratio 1 (neutral)                                                                                                                                                                                                                                                                |
-| `space`  | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the tempo: the `div` knob steps the straight divisions (`DELAY_DIVS`, 1/16→1/1); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies every chain. Off = free ms (`time`). |
+| `delay`  | Delay + feedback (internal dry/wet) | internal parallel/feedback branch. **SYNC** locks delay time to the tempo: the `div` knob steps the straight divisions (`DELAY_DIVS`, 1/16→1/1); separate **`.`/`T`** chips set `feel` dotted (×1.5) / triplet (×2/3). `delaySec = beats × feelMult × 60/bpm`, clamped to 2s; `setBpm` re-applies every chain. Off = free ms (`time`). Persisted `space` migrates → `delay`. |
+| `chorus` | Dual Delay + LFO + feedback (internal dry/wet) | Stereo dual-voice chorus; rate / depth / feedback / mix. Native nodes only. |
+| `disperser` | Cascade of allpass biquads | Flat magnitude; phase wraps around `freq`. `amount` engages up to 12 stages + Q. Transient reshape without EQ. Toggleable **phase-response viz** (`DisperserPhase`). |
 | `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
 | `reverb` | Convolver (internal dry/wet)        | synth IR, regenerated from the decay knob (device-owned `makeReverbIR`)                                                                                                                                                                                                                                                                |
 | `impartialer` | AudioWorklet (STFT) | Phase 1–3: global transpose, in-key snap, force-remap. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
+| `centinel` | AudioWorklet (YIN + STFT) | Monophonic auto-pitch. **speed** / **flex** / **humanize** / **formant** / amount / tracking / mix / key·scale·**custom map** / **midi follow** (held keys + arrangement MIDI under playhead) / transpose. Presets: nat · soft · robot. Pitch-graph viz (in / tgt / out). |
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
@@ -58,7 +61,7 @@ in place** via its `apply` (filter → 20 kHz, comp → neutral, wet gains → 0
 curve), so on/off never reconnects — only add/remove/reorder do.
 
 **Master chain** — `sum → [devices] → anOut`, persisted in localStorage (`ain-master-fx`);
-fresh visitors get the classic five (filter · comp · space · crush · reverb), all bypassed.
+fresh visitors get the classic five (filter · comp · delay · crush · reverb), all bypassed.
 Mutations: `engine.addMasterDevice(type)`, `removeMasterDevice(id)`, `moveMasterDevice(id, to)`,
 `setMasterDeviceParams(id, params)`; `engine.masterDevices()` reads. The safety limiter is NOT
 in the chain — it's the fixed tail, controlled by `engine.limiter` + `engine.setLimiter(patch)`.
@@ -411,7 +414,7 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
   `AudioBuffer` immediately; persistence is async via `putAudioBuffer` → IndexedDB
   (`ain-audio` / `imports`): **Opus in WebM** when WebCodecs can encode (Mediabunny
   mux), else float WAV. Dropped files keep their original encoded bytes + mime.
-  **Audio prefs** (`ain-audio-prefs`, **audio** chip on the playback pane → small panel):
+  **Audio prefs** (`ain-audio-prefs`, **I/O** chip in the session cluster → small panel):
   - **Input** — `enumerateDevices` list; `deviceId: { exact }` on open (falls back to
     Default if the device is gone). `devicechange` refreshes the list.
   - **Output** — `audiooutput` list + `AudioContext.setSinkId(id)` when supported
@@ -441,9 +444,9 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
     or not monitor is on. Speakers can feedback; headphones recommended. Stream stays
     warm while armed either way.
 
-**Capability / acceptance** — first arm of an audio track (or first open of **audio** prefs)
+**Capability / acceptance** — first arm of an audio track (or first open of **I/O** prefs)
 shows a one-time **Before you record** sheet (`ain-audio-accept` v1). Checklist must be
-acked before Continue. **audio → system** shows a live `engine.audioCapabilityReport()`
+acked before Continue. **I/O → system** shows a live `engine.audioCapabilityReport()`
 (browser/OS, chosen input/output labels when set, sample rate, capture path, persist codec
 Opus/WebM vs WAV, latency estimate, UI frame load — labeled as UI not DSP; Safari note when
 `setSinkId` is missing). Soft

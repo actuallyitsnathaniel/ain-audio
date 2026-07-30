@@ -14,7 +14,7 @@ const CHECKS = [
   },
   {
     id: "prefs",
-    label: "I know audio prefs control device, channels, buffer, compensation",
+    label: "I know I/O prefs control device, channels, buffer, compensation",
   },
   {
     id: "machine",
@@ -61,7 +61,7 @@ export function AudioAcceptSheet({
           match an audio interface’s hardware direct-monitor loop. Glitches under heavy FX, many
           tracks, or a tiny buffer are often a machine/browser limit, not a
           silent bug. Mic permission and the correct input device live in{" "}
-          <span className="text-daw-text">audio</span> prefs. Takes stay in this
+          <span className="text-daw-text">I/O</span> prefs. Takes stay in this
           browser (IndexedDB); clearing site data deletes them.
         </p>
 

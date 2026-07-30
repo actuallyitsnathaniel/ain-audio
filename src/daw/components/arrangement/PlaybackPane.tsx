@@ -2,15 +2,14 @@
 // Standard DAW playback controls: ⏮ return-to-start · ▶/⏸ play/pause · ⏹ stop,
 // bars.beats + mm:ss readout, tempo (+ tap), time signature, loop (toggle + numeric
 // range), metronome (+ count-in), follow-playhead. Spacebar/Home/L keyboard transport.
+// Session I/O + new project live in SessionCluster (not here).
 
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { Knob } from "../Knob";
-import { AudioPrefsPanel } from "./AudioPrefsPanel";
-import { AudioAcceptSheet } from "./AudioAcceptSheet";
-import { AudioSessionNudges } from "./AudioSessionNudges";
+import { GridMenu } from "./GridMenu";
 
 const SIGS: [number, string][] = [
   [4, "4/4"],
@@ -44,20 +43,13 @@ function Select({ value, onChange, title, children }: { value: number; onChange:
   );
 }
 
-export function PlaybackPane({
-  onRequestAccept,
-}: {
-  /** Gate: open acceptance sheet; call afterContinue when user may proceed. */
-  onRequestAccept?: (afterContinue: () => void) => void;
-}) {
+export function PlaybackPane() {
   const eng = useEngine(["transport", "arrange", "clip"]);
   const playing = eng.sequencePlaying && eng.arrangeMode;
   const bpb = eng.arrangement.beatsPerBar;
   const loop = eng.arrangement.loop;
   const barBeat = useRef<HTMLSpanElement>(null);
   const timeStr = useRef<HTMLSpanElement>(null);
-  const [prefsOpen, setPrefsOpen] = useState(false);
-  const [rereadAccept, setRereadAccept] = useState(false);
   const lastSample = useRef(0);
 
   // imperative readouts (rAF, no per-frame React render) + UI hitch sampling
@@ -97,15 +89,6 @@ export function PlaybackPane({
     const start = which === "start" ? beat : l.start;
     const end = which === "end" ? beat : l.end;
     engine.setArrangementLoop(start, end, l.on ?? true);
-  };
-
-  const openPrefs = () => {
-    const go = () => setPrefsOpen(true);
-    if (!engine.hasAudioAccepted() && onRequestAccept) {
-      onRequestAccept(go);
-      return;
-    }
-    setPrefsOpen((o) => !o);
   };
 
   return (
@@ -172,87 +155,21 @@ export function PlaybackPane({
         </label>
       </div>
 
-      {/* snap grid */}
-      <label className="flex items-center gap-1.25">
-        <span className={cap}>snap</span>
-        <Select value={eng.snapBeats} onChange={(n) => engine.setSnapBeats(n)} title="clip snap grid (⌘1 finer · ⌘2 coarser)">
-          <option value={bpb}>bar</option>
-          <option value={1}>1/4</option>
-          <option value={0.5}>1/8</option>
-          <option value={0.25}>1/16</option>
-          <option value={0.125}>1/32</option>
-          <option value={0}>off</option>
-        </Select>
-      </label>
+      {/* snap / launch / follow / keys — folded out of the primary bar */}
+      <GridMenu />
 
-      {/* launch quantize — a seek while playing waits for the next boundary */}
-      <label className="flex items-center gap-1.25">
-        <span className={cap}>launch</span>
-        <Select value={eng.launchQuant} onChange={(n) => engine.setLaunchQuant(n)} title="launch quantize: while playing, a jump waits for the next boundary so the phase never breaks">
-          <option value={0}>off</option>
-          <option value={0.5}>1/8</option>
-          <option value={1}>1/4</option>
-          <option value={bpb}>bar</option>
-          <option value={bpb * 2}>2 bar</option>
-        </Select>
-      </label>
-
-      {/* follow playhead */}
-      <button className={ctl + px + onOff(eng.followPlayhead)} onClick={() => engine.setFollowPlayhead(!eng.followPlayhead)} title="auto-scroll the timeline to follow the playhead">
-        follow
-      </button>
-
-      {/* Ableton Computer MIDI Keyboard (M) — letter keys play the armed track */}
-      <button
-        className={ctl + px + onOff(eng.midiKeys)}
-        onClick={() => engine.toggleMidiKeys()}
-        title="Computer MIDI Keyboard (M): ON = A–; play the armed/selected track · OFF = single-key shortcuts (L loop, R reverse…)"
-      >
-        keys {eng.midiKeys ? "on" : "off"}
-      </button>
-
-      {/* tempo + tap + audio prefs */}
-      <span className="relative ml-auto flex items-center gap-2.5">
+      {/* tempo + tap — stay with transport (session I/O is SessionCluster) */}
+      <span className="ml-auto flex items-center gap-2.5">
         <button className={ctl + px + idle} onClick={() => engine.tapTempo()} title="tap tempo — hit repeatedly to set the BPM">
           tap
         </button>
         <Knob value={eng.arrangement.bpm} min={40} max={220} defaultValue={120} size={40} onChange={(v) => engine.setArrangementBpm(v)} label="tempo" fmt={(v) => Math.round(v) + " bpm"} />
-        <button
-          type="button"
-          data-audio-prefs-open
-          className={
-            ctl +
-            px +
-            onOff(prefsOpen || eng.inputStatus === "live" || eng.inputStatus === "pending")
-          }
-          onClick={() => {
-            if (prefsOpen) setPrefsOpen(false);
-            else openPrefs();
-          }}
-          title="audio preferences — input device, buffer, latency, monitor, system"
-        >
-          {eng.inputStatus === "pending" ? "audio…" : "audio"}
-        </button>
-        {prefsOpen && (
-          <AudioPrefsPanel
-            onClose={() => setPrefsOpen(false)}
-            onRereadAccept={() => setRereadAccept(true)}
-          />
-        )}
       </span>
       </div>
-
-      <AudioSessionNudges />
 
       {eng.recording && eng.arrangement.loop?.on && (
         <div className="font-mono text-[9.5px] text-faint" role="status">
           punch = loop brace — audio only keeps PCM inside the loop
-        </div>
-      )}
-
-      {rereadAccept && (
-        <div data-audio-accept>
-          <AudioAcceptSheet reread onDone={() => setRereadAccept(false)} />
         </div>
       )}
     </div>

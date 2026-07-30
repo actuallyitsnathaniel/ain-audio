@@ -27,7 +27,11 @@ function coeffs(type: BiquadFilterType, cut: number, q: number, sr: number): [nu
       b0 = 1; b1 = -2 * cw; b2 = 1;
       a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
       break;
-    default: // lowshelf/highshelf/peaking/allpass not exposed — flat
+    case "allpass":
+      b0 = 1 - alpha; b1 = -2 * cw; b2 = 1 + alpha;
+      a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+      break;
+    default: // lowshelf/highshelf/peaking — flat
       break;
   }
   return [b0, b1, b2, a0, a1, a2];
@@ -46,4 +50,26 @@ export function biquadMagDb(type: BiquadFilterType, cut: number, q: number, f: n
   const numMag = Math.hypot(numRe, numIm);
   const denMag = Math.hypot(denRe, denIm) || 1e-9;
   return 20 * Math.log10(numMag / denMag);
+}
+
+/** Phase of H(e^jw) in radians (−π..π per call; unwrap along frequency for cascades). */
+export function biquadPhaseRad(
+  type: BiquadFilterType,
+  cut: number,
+  q: number,
+  f: number,
+  sr: number,
+): number {
+  const [b0, b1, b2, a0, a1, a2] = coeffs(type, cut, q, sr);
+  const w = (2 * Math.PI * f) / sr;
+  const cos1 = Math.cos(w),
+    sin1 = Math.sin(w);
+  const cos2 = Math.cos(2 * w),
+    sin2 = Math.sin(2 * w);
+  const numRe = b0 + b1 * cos1 + b2 * cos2;
+  const numIm = -(b1 * sin1 + b2 * sin2);
+  const denRe = a0 + a1 * cos1 + a2 * cos2;
+  const denIm = -(a1 * sin1 + a2 * sin2);
+  // H = num/den → arg(num) − arg(den)
+  return Math.atan2(numIm, numRe) - Math.atan2(denIm, denRe);
 }

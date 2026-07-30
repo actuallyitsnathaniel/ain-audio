@@ -42,6 +42,9 @@ Implemented from scratch, following these published techniques:
 - **[Audio EQ Cookbook](https://www.w3.org/TR/audio-eq-cookbook/)** — Robert Bristow-Johnson.
   Biquad coefficients + magnitude response for the filter graphs
   (`src/daw/components/audio-lab/filter-math.ts`, `FilterGraph.tsx`).
+- **[YIN](http://auditory.org/postings/2002/26.html)** — Alain de Cheveigné & Hideki Kawahara.
+  Fundamental-frequency estimator used by the centinel worklet
+  (`src/daw/worklets/centinel-processor.js`).
 - **[Paul Kellet's refined pink-noise method](https://www.firstpr.com.au/dsp/pink-noise/)** —
   the pink-noise filter coefficients in the synth's noise oscillator (`src/daw/engine.ts` → `noiseBuf`).
 - **["A Tale of Two Clocks"](https://web.dev/articles/audio-scheduling)** — Chris Wilson.
@@ -49,6 +52,8 @@ Implemented from scratch, following these published techniques:
 - **REAPER** — names the transport-declick behavior ("tiny fade at play and stop") our engine mirrors.
 - **Xfer Serum** (unison voicing style), **FL Studio** (portamento/legato behavior),
   **Ableton Live** (session/arrangement UX) — behavioral inspiration only, no code.
+- **Kilohearts Disperser** (product category) — phase-dispersal via cascaded allpasses;
+  our `disperser` device is an original Web Audio allpass cascade, not their DSP.
 
 ## Fonts
 

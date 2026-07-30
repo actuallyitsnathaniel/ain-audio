@@ -21,6 +21,7 @@ import {
   type EqBand,
   type SpecCurve,
 } from "../../eq-curve";
+import { VIZ_DRY, VIZ_WET } from "./fx-viz-colors";
 
 type DragKind = "move" | null;
 
@@ -164,16 +165,17 @@ export function BandCurveEditor({
     g.fillRect(0, 0, w, h);
 
     const accent = getComputedStyle(cv).getPropertyValue("--accent").trim() || "#54ADBD";
-    const padL = mode === "eq" ? 22 : 0;
-    const padB = mode === "eq" ? 14 : 0;
+    // SPECCOMP dry/wet: cool blue = input (untouched), muted green = GR / tuned.
+    // Brand cyan stays on EQ + controls; this pair is only for spectral dynamics.
+    const DRY = VIZ_DRY;
+    const WET = VIZ_WET;
+    const padL = 22;
+    const padB = 14;
     const plotW = w - padL;
     const plotH = h - padB;
 
-    // EQ: muted plot well; SPECCOMP: flat inset (already bg)
-    if (mode === "eq") {
-      g.fillStyle = "#0a0a0e";
-      g.fillRect(padL, 0, plotW, plotH);
-    }
+    g.fillStyle = "#0a0a0e";
+    g.fillRect(padL, 0, plotW, plotH);
 
     // grid
     g.strokeStyle = mode === "eq" ? "rgba(50,50,58,0.7)" : "rgba(36,36,41,0.9)";
@@ -192,25 +194,24 @@ export function BandCurveEditor({
     g.lineTo(w, zeroY);
     g.stroke();
 
-    // EQ axis labels
-    if (mode === "eq") {
-      g.fillStyle = "#5c5c66";
-      g.font = "8px JetBrains Mono, ui-monospace, monospace";
-      g.textAlign = "right";
-      for (const db of [12, 0, -12]) {
-        const y = dbToY(db, plotH, minDb, maxDb);
-        g.fillText((db > 0 ? "+" : "") + db, padL - 3, y + 3);
-      }
-      g.textAlign = "center";
-      for (const [hz, lab] of [
-        [100, "100"],
-        [1000, "1k"],
-        [10000, "10k"],
-      ] as const) {
-        g.fillText(lab, padL + freqToX(hz, plotW), h - 3);
-      }
-      g.textAlign = "left";
+    // axis labels (dB + freq) — shared chrome for EQ + SPECCOMP
+    g.fillStyle = "#5c5c66";
+    g.font = "8px JetBrains Mono, ui-monospace, monospace";
+    g.textAlign = "right";
+    const dbTicks = mode === "eq" ? [12, 0, -12] : [0, -24, -48];
+    for (const db of dbTicks) {
+      const y = dbToY(db, plotH, minDb, maxDb);
+      g.fillText((db > 0 ? "+" : "") + db, padL - 3, y + 3);
     }
+    g.textAlign = "center";
+    for (const [hz, lab] of [
+      [100, "100"],
+      [1000, "1k"],
+      [10000, "10k"],
+    ] as const) {
+      g.fillText(lab, padL + freqToX(hz, plotW), h - 3);
+    }
+    g.textAlign = "left";
 
     // RTA behind the curve
     if (deviceId && readViz) {
@@ -236,21 +237,33 @@ export function BandCurveEditor({
               g.fillRect(x, zeroY - 2, bw, 3);
             }
           } else {
-            const barH = Math.max(1, env * (plotH - 4));
-            g.globalAlpha = 0.35;
-            g.fillStyle = accent;
-            g.fillRect(x, plotH - barH - 1, bw, barH);
-            if (gr > 0.02) {
-              g.fillStyle = "rgba(12,12,14,0.55)";
-              g.fillRect(x, plotH - barH - 1, bw, barH * Math.min(1, gr));
-            }
+            // a = dry input (−60..0 → 0..1); b = GR (0..1 ≈ 0..24 dB).
+            // Blue = dry; green = wet (post-GR level). Green always shows with signal;
+            // blue peeks above green when compressing.
+            const dryT = Math.min(1, Math.max(0, env));
+            const grDb = Math.min(24, Math.max(0, gr * 24));
+            const dryDb = minDb + dryT * (maxDb - minDb);
+            const wetDb = Math.max(minDb, dryDb - grDb);
+            const wetT = (wetDb - minDb) / (maxDb - minDb);
+            const dryTop = plotH * (1 - dryT);
+            const wetTop = plotH * (1 - Math.min(1, Math.max(0, wetT)));
+            const dryH = Math.max(1, plotH - dryTop);
+            const wetH = Math.max(1, plotH - wetTop);
+            // dry (full input) — only the tip peeks when GR is active
+            g.globalAlpha = 0.5;
+            g.fillStyle = DRY;
+            g.fillRect(x, dryTop, bw, dryH);
+            // wet (post-GR) — primary visible color
+            g.globalAlpha = 0.88;
+            g.fillStyle = WET;
+            g.fillRect(x, wetTop, bw, wetH);
           }
         }
         g.globalAlpha = 1;
       }
     }
 
-    // SPECCOMP: dashed global thresh + solid effective thresh
+    // SPECCOMP: dashed global thresh (dry blue) + solid effective (wet green)
     if (mode === "speccomp") {
       g.beginPath();
       for (let i = 0; i <= 64; i++) {
@@ -258,41 +271,47 @@ export function BandCurveEditor({
         const freq = FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, t);
         const bandT = t * 2 - 1;
         const thr = globalThreshold + globalTilt * bandT * 12;
-        const x = freqToX(freq, plotW);
+        const x = padL + freqToX(freq, plotW);
         const y = dbToY(thr, plotH, minDb, maxDb);
         if (i === 0) g.moveTo(x, y);
         else g.lineTo(x, y);
       }
-      g.strokeStyle = "rgba(142,142,152,0.35)";
+      g.strokeStyle = "rgba(74,122,176,0.45)";
       g.setLineDash([3, 3]);
       g.lineWidth = 1;
       g.stroke();
       g.setLineDash([]);
 
-      if (curves && curves.length) {
-        g.beginPath();
-        for (let i = 0; i <= 96; i++) {
-          const t = i / 96;
-          const freq = FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, t);
-          const bandT = t * 2 - 1;
-          const { threshold: thr } = specThresholdAt(
-            freq,
-            globalThreshold,
-            globalTilt,
-            bandT,
-            curves,
-          );
-          const x = freqToX(freq, plotW);
-          const y = dbToY(thr, plotH, minDb, maxDb);
-          if (i === 0) g.moveTo(x, y);
-          else g.lineTo(x, y);
-        }
-        g.strokeStyle = accent;
-        g.globalAlpha = 0.75;
-        g.lineWidth = 1.25;
-        g.stroke();
-        g.globalAlpha = 1;
+      const hasNodes = !!(curves && curves.some((c) => c.on));
+      g.beginPath();
+      for (let i = 0; i <= 96; i++) {
+        const t = i / 96;
+        const freq = FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, t);
+        const bandT = t * 2 - 1;
+        const { threshold: thr } = specThresholdAt(
+          freq,
+          globalThreshold,
+          globalTilt,
+          bandT,
+          curves ?? [],
+        );
+        const x = padL + freqToX(freq, plotW);
+        const y = dbToY(thr, plotH, minDb, maxDb);
+        if (i === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
       }
+      g.strokeStyle = WET;
+      g.globalAlpha = 1;
+      g.lineWidth = hasNodes ? 2.25 : 1.75;
+      g.stroke();
+      // soft fill above threshold (compression region)
+      g.lineTo(w, 0);
+      g.lineTo(padL, 0);
+      g.closePath();
+      g.fillStyle = WET;
+      g.globalAlpha = hasNodes ? 0.14 : 0.08;
+      g.fill();
+      g.globalAlpha = 1;
     }
 
     // EQ composite response (accurate biquad magnitude)
@@ -320,6 +339,7 @@ export function BandCurveEditor({
     // node handles
     for (const n of nodes) {
       const band = mode === "eq" ? bands?.find((b) => b.id === n.id) : null;
+      const curve = mode === "speccomp" ? curves?.find((c) => c.id === n.id) : null;
       const x = padL + freqToX(n.freq, plotW);
       const y = dbToY(n.yDb, plotH, minDb, maxDb);
       const active = n.id === sel;
@@ -339,6 +359,28 @@ export function BandCurveEditor({
         );
         g.strokeStyle = accent;
         g.globalAlpha = 0.45;
+        g.setLineDash([2, 3]);
+        g.beginPath();
+        g.moveTo(x, y);
+        g.lineTo(x, ty);
+        g.stroke();
+        g.setLineDash([]);
+        g.beginPath();
+        g.arc(x, ty, 3, 0, Math.PI * 2);
+        g.stroke();
+        g.globalAlpha = 1;
+      }
+
+      // SPECCOMP: ghost at threshold − range (max GR this node allows)
+      if (mode === "speccomp" && curve && active && curve.on) {
+        const ty = dbToY(
+          Math.min(DYN_DB_MAX, Math.max(DYN_DB_MIN, curve.threshold - curve.range)),
+          plotH,
+          minDb,
+          maxDb,
+        );
+        g.strokeStyle = "#e8c070";
+        g.globalAlpha = 0.5;
         g.setLineDash([2, 3]);
         g.beginPath();
         g.moveTo(x, y);
@@ -376,8 +418,17 @@ export function BandCurveEditor({
           g.stroke();
         }
       } else {
+        g.fillStyle = n.on ? WET : "#5c5c66";
+        g.globalAlpha = n.on ? 1 : 0.45;
+        g.beginPath();
         g.arc(x, y, active ? 5.5 : 4, 0, Math.PI * 2);
         g.fill();
+        // gold ring = has local range/ratio sculpting
+        if (curve && curve.range > 0) {
+          g.strokeStyle = "#e8c070";
+          g.lineWidth = 1.25;
+          g.stroke();
+        }
       }
       g.globalAlpha = 1;
       if (active) {
@@ -386,7 +437,7 @@ export function BandCurveEditor({
         g.stroke();
       }
       const qSpan = Math.min(80, 28 / Math.max(0.2, n.q));
-      g.strokeStyle = n.on ? accent : "#5c5c66";
+      g.strokeStyle = n.on ? (mode === "speccomp" ? WET : accent) : "#5c5c66";
       g.globalAlpha = 0.35;
       g.beginPath();
       g.moveTo(x - qSpan, y);
@@ -400,14 +451,20 @@ export function BandCurveEditor({
     if (mode === "eq") {
       g.fillText("dbl-click empty = add · Delete = remove · gold = dyn", padL + 4, 11);
     } else {
-      g.fillText("DYN · dbl-click empty = add · Delete = remove · wheel Q", 4, 11);
+      // always-on color key (so wet green is visible even before audio)
+      g.fillStyle = DRY;
+      g.fillRect(padL + 4, 4, 8, 8);
+      g.fillStyle = WET;
+      g.fillRect(padL + 16, 4, 8, 8);
+      g.fillStyle = "#8e8e98";
+      g.fillText("dry / wet · gold = range", padL + 28, 11);
     }
   });
 
   const plotGeom = (cv: HTMLCanvasElement) => {
     const r = cv.getBoundingClientRect();
-    const padL = mode === "eq" ? 22 : 0;
-    const padB = mode === "eq" ? 14 : 0;
+    const padL = 22;
+    const padB = 14;
     return {
       r,
       padL,
@@ -553,7 +610,7 @@ export function BandCurveEditor({
       data-tip={
         mode === "eq"
           ? "Parametric EQ — double-click empty space to add a band. Drag handles for freq/gain. Wheel = Q. Delete/Backspace or the del chip removes the selected band (⌥-click also deletes)."
-          : "Spectral dynamics — double-click empty space to add a threshold node. Drag, wheel for Q. Delete/Backspace or del chip removes the selection (⌥-click also deletes)."
+          : "Spectral dynamics — blue = dry input, green = wet output (post-compression). When compressing, blue peeks above green. Double-click to add a threshold node."
       }
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

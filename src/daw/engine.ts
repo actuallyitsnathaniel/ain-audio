@@ -664,7 +664,46 @@ class AudioEngine {
       for (const id of Object.keys(this._arrStrips)) {
         this._arrStrips[id]?.fx.tick();
       }
+      this.syncCentinelMidiTargets();
     }, 16);
+  }
+
+  private _centinelMidiSig = "";
+  /** Held keyboard/hardware notes + arrangement MIDI under the playhead → centinel. */
+  private collectCentinelMidiTargets(): number[] {
+    const out = new Set<number>();
+    for (const k of Object.keys(this._liveVoices)) {
+      const colon = k.indexOf(":");
+      const midi = Number(k.slice(colon + 1));
+      if (Number.isFinite(midi)) out.add(midi | 0);
+    }
+    if (this.sequencePlaying && this.arrangeMode) {
+      const beat = this.currentBeat();
+      for (const t of this.arrangement.tracks) {
+        if (t.kind !== "midi") continue;
+        for (const c of t.clips) {
+          if (c.content.kind !== "midi") continue;
+          const rel = beat - c.startBeat;
+          if (rel < 0 || rel >= c.lengthBeats) continue;
+          for (const n of c.content.clip.notes) {
+            if (n.muted) continue;
+            if (rel >= n.start && rel < n.start + n.length) out.add(n.pitch | 0);
+          }
+        }
+      }
+    }
+    return [...out].sort((a, b) => a - b);
+  }
+
+  private syncCentinelMidiTargets() {
+    const notes = this.collectCentinelMidiTargets();
+    const sig = notes.join(",");
+    if (sig === this._centinelMidiSig) return;
+    this._centinelMidiSig = sig;
+    this._masterFx?.setMidiTargets(notes);
+    for (const id of Object.keys(this._arrStrips)) {
+      this._arrStrips[id]?.fx.setMidiTargets(notes);
+    }
   }
 
   // ── master-bus device chain API (same shape as the per-track one below) ──
@@ -687,10 +726,11 @@ class AudioEngine {
   }
   addMasterDevice(type: FxDeviceType) {
     this.ensureCtx();
-    if (type === "impartialer" || type === "speccomp") void this.ensureSpectralWorklets();
+    if (type === "impartialer" || type === "speccomp" || type === "centinel")
+      void this.ensureSpectralWorklets();
     this._masterFx!.addDevice(type);
     this.saveMasterFx();
-    if (type === "impartialer" || type === "speccomp") {
+    if (type === "impartialer" || type === "speccomp" || type === "centinel") {
       void this.ensureSpectralWorklets().then((ok) => {
         if (ok) this._masterFx?.applyAll(this.bpm);
       });
@@ -1842,6 +1882,8 @@ class AudioEngine {
     );
     this.recordNoteOn(midi, vel);
     this.emit("synth");
+    this._centinelMidiSig = ""; // force push on next sync
+    this.syncCentinelMidiTargets();
   }
   // the kit a drum track's clips use (from the first drum clip, else the current kit)
   private drumTrackKitId(t: ArrTrack): string {
@@ -1870,6 +1912,8 @@ class AudioEngine {
     delete this._liveVoices[this.liveKey(midi, undefined)];
     this.releaseVoice(h, this.ctx!.currentTime, instant);
     this.emit("synth");
+    this._centinelMidiSig = "";
+    this.syncCentinelMidiTargets();
   }
 
   // held pitches, optionally scoped to one channel (for that grid's key glow)
@@ -2668,6 +2712,9 @@ class AudioEngine {
           c.audioWorklet.addModule(
             new URL("./worklets/speccomp-processor.js", import.meta.url),
           ),
+          c.audioWorklet.addModule(
+            new URL("./worklets/centinel-processor.js", import.meta.url),
+          ),
         ]);
         return true;
       } catch {
@@ -3353,14 +3400,15 @@ class AudioEngine {
     );
   }
   addTrackDevice(id: string, type: FxDeviceType) {
-    if (type === "impartialer" || type === "speccomp") void this.ensureSpectralWorklets();
+    if (type === "impartialer" || type === "speccomp" || type === "centinel")
+      void this.ensureSpectralWorklets();
     const r = this.trackFx(id);
     if (!r) return;
     r.s.fx.addDevice(type);
     r.t.devices = r.s.fx.states();
     this.saveArr();
     this.emit("fx");
-    if (type === "impartialer" || type === "speccomp") {
+    if (type === "impartialer" || type === "speccomp" || type === "centinel") {
       void this.ensureSpectralWorklets().then((ok) => {
         if (ok) r.s.fx.applyAll(this.bpm);
       });

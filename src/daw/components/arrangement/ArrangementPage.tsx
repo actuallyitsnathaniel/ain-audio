@@ -19,15 +19,23 @@ import { PL_KEYMAP } from "../audio-lab/synth-ui";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
 import { PlaybackPane } from "./PlaybackPane";
+import { SessionCluster } from "./SessionCluster";
+import { StudioStatusStrip } from "./StudioStatusStrip";
+import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TrackFader } from "./TrackFader";
 import { AudioAcceptSheet } from "./AudioAcceptSheet";
 import { openContextMenu } from "../context-menu-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
-const HEAD_H = 22; // must match Timeline
+const HEAD_H = 26; // must match Timeline
 const ROW_H = 64; // must match Timeline ROW_H
+const KIND_BAR: Record<TrackKind, string> = {
+  midi: "#4a7fd4",
+  drum: "#5aa0b8",
+  audio: "#7a9a4a",
+};
 const chip = (active: boolean, danger?: boolean) =>
-  "rounded-[3px] border px-1.5 py-0.5 font-mono text-[9px] tracking-[0.05em] transition-colors duration-150 " +
+  "rounded-[3px] border px-1 py-px font-mono text-[8.5px] tracking-[0.04em] transition-colors duration-150 " +
   (active
     ? danger
       ? "border-[color-mix(in_srgb,#e0654f_60%,transparent)] bg-[color-mix(in_srgb,#e0654f_22%,transparent)] text-[#e98c79]"
@@ -36,7 +44,7 @@ const chip = (active: boolean, danger?: boolean) =>
 
 /** Track arm — same vocabulary as transport ●: square chip + red disk (not a naked circle). */
 const armChip = (armed: boolean, arming?: boolean) =>
-  "flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[3px] border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/60 " +
+  "flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-[3px] border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/60 " +
   (arming
     ? "border-red-500/70 bg-[color-mix(in_srgb,#ef4444_18%,transparent)]"
     : armed
@@ -44,9 +52,9 @@ const armChip = (armed: boolean, arming?: boolean) =>
       : "border-line hover:border-[color-mix(in_srgb,#ef4444_55%,transparent)]");
 
 const armDot = (armed: boolean) =>
-  "inline-block size-2 rounded-full transition-[background-color,box-shadow] duration-150 " +
+  "inline-block size-1.5 rounded-full transition-[background-color,box-shadow] duration-150 " +
   (armed
-    ? "bg-red-500 shadow-[0_0_6px_color-mix(in_srgb,#ef4444_55%,transparent)]"
+    ? "bg-red-500 shadow-[0_0_5px_color-mix(in_srgb,#ef4444_55%,transparent)]"
     : "bg-[color-mix(in_srgb,#ef4444_40%,#5c5c66)]");
 
 function TrackHeader({
@@ -70,7 +78,10 @@ function TrackHeader({
   const hasFx = !!t.devices?.length;
   return (
     <div
-      className={"flex flex-col justify-center gap-1 border-b border-line px-2 transition-colors " + (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")}
+      className={
+        "relative flex flex-col justify-center gap-0.5 border-b border-line py-1 pr-1.5 pl-2.5 transition-colors " +
+        (selected ? "bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]" : "")
+      }
       style={{ height: ROW_H }}
       onPointerDown={(e) => {
         // click the header background (not a button/input/knob/fader) → select the track
@@ -97,7 +108,13 @@ function TrackHeader({
         });
       }}
     >
-      <div className="flex items-center gap-1.25">
+      {/* kind color rail */}
+      <span
+        className="absolute inset-y-1 left-0 w-0.75 rounded-r-[1px]"
+        style={{ background: KIND_BAR[t.kind] }}
+        aria-hidden
+      />
+      <div className="flex items-center gap-1">
         {editing ? (
           <input
             autoFocus
@@ -110,15 +127,18 @@ function TrackHeader({
               if (e.key === "Enter") e.currentTarget.blur();
               if (e.key === "Escape") setEditing(false);
             }}
-            className="w-20 rounded-xs border border-accent bg-panel2 px-1 py-px font-mono text-[9px] text-daw-text focus:outline-none"
+            className="w-18 rounded-xs border border-accent bg-panel2 px-1 py-px font-mono text-[9px] text-daw-text focus:outline-none"
           />
         ) : (
-          <button onClick={() => setEditing(true)} className="min-w-13 truncate text-left font-mono text-[9.5px] tracking-[0.03em] text-dim transition-colors hover:text-daw-text" title="rename">
+          <button
+            onClick={() => setEditing(true)}
+            className="min-w-0 flex-1 truncate text-left font-mono text-[9px] tracking-[0.03em] text-dim transition-colors hover:text-daw-text"
+            title="rename"
+          >
             {t.name}
           </button>
         )}
-        <span className="ml-auto flex items-center gap-0.75">
-          {/* arm sits with M/S — same square chrome as transport ● */}
+        <span className="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
             aria-pressed={armed}
@@ -144,7 +164,7 @@ function TrackHeader({
           >
             {arming ? (
               <span
-                className="size-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-red-500/35 border-t-red-500"
+                className="size-2 shrink-0 animate-spin rounded-full border-[1.5px] border-red-500/35 border-t-red-500"
                 aria-hidden
               />
             ) : (
@@ -157,26 +177,56 @@ function TrackHeader({
           <button className={chip(t.solo)} onClick={() => engine.toggleTrackSolo(t.id)} title="solo">
             S
           </button>
-          <button className="rounded-[3px] border border-line px-1.25 py-0.5 font-mono text-[9px] text-faint transition-colors duration-150 hover:border-[#e0654f] hover:text-[#e98c79]" onClick={() => engine.removeTrack(t.id)} title="remove track">
+          <button
+            className="rounded-[3px] border border-line px-1 py-px font-mono text-[8.5px] text-faint transition-colors duration-150 hover:border-[#e0654f] hover:text-[#e98c79]"
+            onClick={() => engine.removeTrack(t.id)}
+            title="remove track"
+          >
             ✕
           </button>
         </span>
       </div>
-      {/* fader + live meter (fills the row) */}
-      <TrackFader gain={t.vol} getLevel={() => engine.trackLevel(t.id)} onChange={(g) => engine.setTrackVol(t.id, g)} width={126} />
-      <div className="flex items-center gap-1.5">
-        <Knob value={t.pan} min={-1} max={1} defaultValue={0} size={20} bipolar onChange={(v) => engine.setTrackPan(t.id, v)} label="" fmt={() => ""} />
-        {/* glows ONLY while this track's fx pane is open (the glow = "keys/edits go here";
-            a has-devices glow on every track made it easy to edit the wrong one) */}
-        <button className={chip(fxOpen)} onClick={() => onFx(t.id)} title={hasFx ? "track fx (" + t.devices!.length + " device" + (t.devices!.length > 1 ? "s" : "") + ")" : "track fx"}>
+      {/* fader row: pan · fader · fx · instrument/kind */}
+      <div className="flex min-w-0 items-center gap-1">
+        <Knob
+          value={t.pan}
+          min={-1}
+          max={1}
+          defaultValue={0}
+          size={18}
+          bipolar
+          onChange={(v) => engine.setTrackPan(t.id, v)}
+          label=""
+          fmt={() => ""}
+        />
+        <TrackFader
+          gain={t.vol}
+          getLevel={() => engine.trackLevel(t.id)}
+          onChange={(g) => engine.setTrackVol(t.id, g)}
+          className="min-w-0 flex-1"
+        />
+        <button
+          className={chip(fxOpen)}
+          onClick={() => onFx(t.id)}
+          title={
+            hasFx
+              ? "track fx (" +
+                t.devices!.length +
+                " device" +
+                (t.devices!.length > 1 ? "s" : "") +
+                ")"
+              : "track fx"
+          }
+        >
           fx
         </button>
-        {t.kind === "midi" && (
+        {t.kind === "midi" ? (
           <select
             value={t.presetId}
             onChange={(e) => engine.setTrackPreset(t.id, e.target.value)}
-            className="min-w-0 flex-1 cursor-pointer appearance-none rounded-xs border border-line2 bg-panel2 px-1 py-px font-mono text-[8.5px] text-daw-text hover:border-accent focus:outline-none"
+            className="max-w-22 min-w-0 flex-1 cursor-pointer appearance-none truncate rounded-xs border border-line2 bg-panel2 px-0.75 py-px font-mono text-[8px] text-daw-text hover:border-accent focus:outline-none"
             aria-label="instrument"
+            title={t.presetId}
           >
             {engine.synthPatches.map((key) => (
               <option key={key} value={key} className="bg-panel2">
@@ -184,8 +234,9 @@ function TrackHeader({
               </option>
             ))}
           </select>
+        ) : (
+          <span className="shrink-0 font-mono text-[8px] text-faint">{t.kind}</span>
         )}
-        {t.kind !== "midi" && <span className="font-mono text-[8px] text-faint">{t.kind}</span>}
       </div>
     </div>
   );
@@ -194,29 +245,25 @@ function TrackHeader({
 // the master row's fx-panel key in fxTrackId (can't collide with newTrackId ids)
 const MASTER_ID = "__master__";
 
-// The MASTER track's header — the mix bus pinned under the track list, Ableton-style.
-// Same vocabulary as TrackHeader: name row, then fader + fx chip.
+// The MASTER track's header — denser 2-row strip matching TrackHeader.
+// pre/post meter tap lives on StudioStatusStrip (don't duplicate here).
 function MasterHeader({ fxOpen, onFx }: { fxOpen: boolean; onFx: () => void }) {
   const eng = useEngine(["fx"]);
   return (
-    <div className="flex flex-col justify-center gap-1 px-2" style={{ height: ROW_H }}>
-      <div className="flex items-center gap-1.25">
-        <span className="font-mono text-[9.5px] tracking-[0.03em] text-accent">master</span>
+    <div className="flex flex-col justify-center gap-0.5 px-2 py-1" style={{ height: ROW_H }}>
+      <div className="flex items-center gap-1">
+        <span className="font-mono text-[9px] tracking-[0.03em] text-accent">master</span>
         <span className="font-mono text-[8px] text-faint">bus</span>
-        {/* meter tap: pre = program level before the safety limiter; post = final output */}
-        <button
-          className={"ml-auto " + chip(false)}
-          onClick={() => engine.setMasterMeterPost(!eng.masterMeterPost)}
-          title="master meter tap — pre = before the safety limiter · post = final output"
-        >
-          {eng.masterMeterPost ? "post" : "pre"}
-        </button>
-        <button className={chip(fxOpen)} onClick={onFx} title="master fx">
+        <button className={"ml-auto " + chip(fxOpen)} onClick={onFx} title="master fx">
           fx
         </button>
       </div>
-      {/* same fader + meter treatment as a track, reading the master bus level */}
-      <TrackFader gain={eng.masterVol} getLevel={() => engine.masterLevel()} onChange={(g) => engine.setMasterVol(g)} width={126} />
+      <TrackFader
+        gain={eng.masterVol}
+        getLevel={() => engine.masterLevel()}
+        onChange={(g) => engine.setMasterVol(g)}
+        className="w-full"
+      />
     </div>
   );
 }
@@ -246,6 +293,7 @@ export function ArrangementPage() {
   const tracks = eng.arrangement.tracks;
   // which track's FX panel is open (toggled from the track header's fx chip)
   const [fxTrackId, setFxTrackId] = useState<string | null>(null);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const [acceptOpen, setAcceptOpen] = useState(false);
   const acceptContinue = useRef<(() => void) | null>(null);
   const requestAccept = (after: () => void) => {
@@ -546,38 +594,61 @@ export function ArrangementPage() {
         <SectionHead num="05" title="studio" sub="linear timeline · place midi, drum + audio clips on tracks · runs through the fx rack" />
 
         <div className="flex flex-col gap-3 rounded-[5px] border border-line bg-panel p-4 max-[767px]:p-3" onPointerDownCapture={() => focusPane("timeline")}>
-          <PlaybackPane onRequestAccept={requestAccept} />
+          <PlaybackPane />
 
-          {/* add-track toolbar (kept OUT of the ruler-aligned strip below) */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-[9px] tracking-widest text-faint">TRACKS</span>
-            <button className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("midi")}>
-              + midi
-            </button>
-            <button className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("drum")}>
-              + drum
-            </button>
-            <button className="rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent" onClick={() => addTrack("audio")}>
-              + audio
-            </button>
-            <button
-              className="ml-auto rounded-[3px] border border-line px-2.25 py-1 font-mono text-[10px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]"
-              onClick={() => {
+          {/* tracks (left) · session I/O + new project (right) */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-mono text-[9px] tracking-widest text-faint">TRACKS</span>
+              <button
+                type="button"
+                className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+                onClick={() => addTrack("midi")}
+              >
+                + midi
+              </button>
+              <button
+                type="button"
+                className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+                onClick={() => addTrack("drum")}
+              >
+                + drum
+              </button>
+              <button
+                type="button"
+                className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+                onClick={() => addTrack("audio")}
+              >
+                + audio
+              </button>
+            </div>
+            <SessionCluster
+              prefsOpen={prefsOpen}
+              onPrefsOpenChange={setPrefsOpen}
+              onRequestAccept={requestAccept}
+              onNewProject={() => {
                 if (window.confirm("New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?")) {
                   void engine.newProject();
                   setEditSel(null);
                 }
               }}
-              title="clear the studio + all imported audio, start fresh"
-            >
-              new project
-            </button>
+            />
           </div>
+
+          <StudioStatusStrip
+            onOpenIo={() => {
+              if (!engine.hasAudioAccepted()) {
+                requestAccept(() => setPrefsOpen(true));
+                return;
+              }
+              setPrefsOpen(true);
+            }}
+          />
 
           {/* track headers (left) + timeline (right), with the MASTER row pinned below */}
           <div className={"overflow-hidden rounded-sm border border-line" + (editorOpen && paneShown === "timeline" ? focusRing : "")}>
             <div className="flex">
-              <div className="w-55 shrink-0 border-r border-line bg-[#0e0e12]">
+              <div className="w-60 shrink-0 border-r border-line bg-[#0e0e12]">
                 {/* spacer strip aligns the header column with the timeline's ruler */}
                 <div className="border-b border-line" style={{ height: HEAD_H }} />
                 {tracks.map((t) => (
@@ -596,7 +667,11 @@ export function ArrangementPage() {
                     onFx={toggleFx}
                   />
                 ))}
-                {tracks.length === 0 && <div className="p-2.5 font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
+                {tracks.length === 0 && (
+                  <div className="px-2.5 py-3 font-mono text-[9px] leading-snug text-faint">
+                    no tracks — add midi / drum / audio above, then double-click a lane.
+                  </div>
+                )}
               </div>
               <div className="min-w-0 flex-1">
                 <Timeline
@@ -611,147 +686,60 @@ export function ArrangementPage() {
             </div>
             {/* MASTER — the mix bus as its own pinned track row (Ableton-style) */}
             <div className="flex border-t border-line">
-              <div className="w-55 shrink-0 border-r border-line bg-[color-mix(in_srgb,var(--accent)_7%,#0e0e12)]">
+              <div className="w-60 shrink-0 border-r border-line bg-[color-mix(in_srgb,var(--accent)_7%,#0e0e12)]">
                 <MasterHeader fxOpen={fxTrackId === MASTER_ID} onFx={() => toggleFx(MASTER_ID)} />
               </div>
-              <div className="min-w-0 flex-1 bg-[#0c0c10]" />
+              <div className="flex min-w-0 flex-1 items-center bg-[#0c0c10] px-3">
+                <span className="font-mono text-[9px] tracking-[0.08em] text-faint">
+                  sum bus · all tracks → master fx → out
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* ── EDITOR pane (instrument · clip editor · fx) — clicking here takes key
-              focus away from the timeline, so piano-roll keys never move clips ── */}
+          {/* ── EDITOR pane (instrument · clip editor · fx) ── */}
           {editorOpen && (
-            <div className={"flex flex-col gap-3 rounded-sm" + (paneShown === "editor" ? focusRing : "")} onPointerDownCapture={() => focusPane("editor")}>
-              {/* selected-clip editor (piano roll) sits directly under the timeline */}
+            <div
+              className={
+                "flex flex-col gap-2.5 rounded-sm border border-line2 bg-[#0c0c10] p-2.5 " +
+                (paneShown === "editor" ? focusRing : "")
+              }
+              onPointerDownCapture={() => focusPane("editor")}
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="font-mono text-[9px] tracking-widest text-faint">EDITOR</span>
+                <span className="min-w-0 truncate font-mono text-[9.5px] text-dim">
+                  {[
+                    sel &&
+                      (engine.getArrClip(sel.trackId, sel.clipId)?.name ||
+                        selTrack?.name ||
+                        "clip"),
+                    selMidiTrack && `${selMidiTrack.name} · instrument`,
+                    fxTrack && `${fxTrack.name} fx`,
+                    fxTrackId === MASTER_ID && "master fx",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "select a clip or open fx"}
+                </span>
+              </div>
               {sel && <ClipEditor trackId={sel.trackId} clipId={sel.clipId} />}
-              {/* selected MIDI track's instrument designer (edits that track's patch) */}
               {selMidiTrack && <Instrument enableTypingKeys={false} />}
-              {/* the open FX chain: a track's, or the master's (from the MASTER row's fx chip) */}
               {fxTrack && <TrackFxPanel t={fxTrack} />}
-              {fxTrackId === MASTER_ID && <FxRack hint="master fx — every track sums into this chain · add devices, drag ⠿ to reorder" />}
+              {fxTrackId === MASTER_ID && (
+                <FxRack hint="master fx — every track sums into this chain · add devices, drag ⠿ to reorder" />
+              )}
             </div>
           )}
         </div>
 
-        <div className="mt-3.5 flex items-start gap-3 font-mono text-[10.5px] leading-[1.55] tracking-[0.03em] text-faint">
+        <div className="mt-3.5 flex flex-wrap items-center gap-2 font-mono text-[10.5px] tracking-[0.03em] text-faint">
           <Link
             to="/"
-            className="shrink-0 rounded-[3px] border border-line px-2.5 py-1.25 text-dim transition-colors hover:border-accent hover:text-accent"
+            className="flex h-7 shrink-0 items-center rounded-sm border border-line2 px-2.5 text-dim transition-colors hover:border-accent hover:text-accent"
           >
             ← back to the lab
           </Link>
-
-          <details className="min-w-0">
-            <summary className="cursor-pointer select-none text-faint transition-colors hover:text-accent">
-              arrangement view shortcuts
-            </summary>
-            {/* .keycap (index.css) inflates unicode key glyphs to match this mono size */}
-            <div className="mt-1.5 ml-0.5 flex flex-col gap-y-2.5">
-              <div>
-                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">focus & navigation</div>
-                <ul className="flex flex-col gap-y-1">
-                  <li>
-                    <span className="text-dim">focus</span> · click a pane to key-focus (edit keys follow focused pane;
-                    space/undo are global)
-                  </li>
-                  <li>
-                    <span className="text-dim">no selection</span> · <span className="keycap">←</span>/
-                    <span className="keycap">→</span> move cursor · <span className="keycap">⌘</span> fine ·{" "}
-                    <span className="keycap">⌘⇧</span> edge jump · Home/End
-                  </li>
-                  <li>
-                    <span className="text-dim">with selection</span> · <span className="keycap">←</span>/
-                    <span className="keycap">→</span> nudge · Shift+<span className="keycap">←</span>/
-                    <span className="keycap">→</span> resize · <span className="keycap">↑</span>/
-                    <span className="keycap">↓</span> change track · R reverse · 0 mute
-                  </li>
-                  <li>
-                    <span className="text-dim">play</span> · Space (from cursor)
-                  </li>
-                  <li>
-                    <span className="text-dim">zoom</span> · + / <span className="keycap">−</span>
-                  </li>
-                  <li>
-                    <span className="text-dim">grid</span> · <span className="keycap">⌘</span>1 /{" "}
-                    <span className="keycap">⌘</span>2
-                  </li>
-                </ul>
-              </div>
-              <div>
-                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">selection, creation & clipboard</div>
-                <ul className="flex flex-col gap-y-1">
-                  <li>
-                    <span className="text-dim">multi-select</span> · Shift+click
-                  </li>
-                  <li>
-                    <span className="text-dim">marquee</span> · drag empty area
-                  </li>
-                  <li>
-                    <span className="text-dim">create clip</span> · double-click empty lane
-                  </li>
-                  <li>
-                    <span className="text-dim">insert</span> · <span className="keycap">⌘</span>I
-                  </li>
-                  <li>
-                    <span className="text-dim">duplicate</span> · <span className="keycap">⌘</span>D or{" "}
-                    <span className="keycap">⌥</span>-drag
-                  </li>
-                  <li>
-                    <span className="text-dim">copy/cut/paste</span> · <span className="keycap">⌘</span>C /{" "}
-                    <span className="keycap">⌘</span>X / <span className="keycap">⌘</span>V
-                  </li>
-                  <li>
-                    <span className="text-dim">delete</span> · <span className="keycap">⌫</span>
-                  </li>
-                  <li>
-                    <span className="text-dim">undo</span> · <span className="keycap">⌘</span>Z
-                  </li>
-                </ul>
-              </div>
-              <div>
-                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">editing, movement & arrangement</div>
-                <ul className="flex flex-col gap-y-1">
-                  <li>
-                    <span className="text-dim">move clip</span> · drag (<span className="keycap">⌘</span> = free,
-                    multi-select drags together)
-                  </li>
-                  <li>
-                    <span className="text-dim">slip content</span> · Shift+<span className="keycap">⌥</span>-drag
-                  </li>
-                  <li>
-                    <span className="text-dim">resize clip</span> · drag edge (<span className="keycap">⌥</span> = stretch
-                    content)
-                  </li>
-                  <li>
-                    <span className="text-dim">split</span> · <span className="keycap">⌘</span>E
-                  </li>
-                  <li>
-                    <span className="text-dim">consolidate</span> · <span className="keycap">⌘</span>J{" "}
-                    <span className="text-faint">(audio = real bounce)</span>
-                  </li>
-                </ul>
-              </div>
-              <div>
-                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">midi, instruments & special</div>
-                <ul className="flex flex-col gap-y-1">
-                  <li>
-                    <span className="text-dim">record midi</span> · Shift+R
-                  </li>
-                  <li>
-                    <span className="text-dim">computer keys as midi</span> · M
-                  </li>
-                </ul>
-              </div>
-              <div>
-                <div className="mb-0.5 text-[9px] tracking-widest text-faint uppercase">miscellaneous</div>
-                <ul className="flex flex-col gap-y-1">
-                  <li>
-                    <span className="text-dim">move cursor</span> · click timeline
-                  </li>
-                </ul>
-              </div>
-            </div>
-          </details>
+          <ShortcutsHelp />
         </div>
       </TrackSection>
 

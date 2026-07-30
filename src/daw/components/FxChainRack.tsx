@@ -14,9 +14,12 @@ import {
   FX_DEVICE_TYPES,
   NOTE_NAMES,
   IMPARTIALER_SCALES,
+  SCALE_PCS,
+  DEFAULT_CENTINEL_CUSTOM_PCS,
   type FxDeviceType,
   type FxParams,
   type ImpartialerScale,
+  type CentinelScale,
 } from "../fx-devices";
 import type { FxDeviceState } from "../fx-chain";
 import type { FxVizSlot } from "../spectral-viz";
@@ -24,7 +27,10 @@ import { Knob } from "./Knob";
 import { DeviceShell } from "./DeviceShell";
 import { openContextMenu } from "./context-menu-bus";
 import { ImpartialerHeatmap } from "./fx-viz/ImpartialerHeatmap";
+import { ImpartialerRta } from "./fx-viz/ImpartialerRta";
 import { BandCurveEditor } from "./fx-viz/BandCurveEditor";
+import { DisperserPhase } from "./fx-viz/DisperserPhase";
+import { CentinelPitch } from "./fx-viz/CentinelPitch";
 import { EQ_SHAPES, type EqShape } from "../eq-curve";
 
 // Small labelled toggle chip with a glowing dot — used for sync / feel / auto-gain.
@@ -136,10 +142,10 @@ function DevicePanel({
         </DeviceShell>
       );
     }
-    case "space": {
-      const p = d.params as FxParams["space"];
+    case "delay": {
+      const p = d.params as FxParams["delay"];
       return (
-        <DeviceShell name="SPACE" on={p.on} onToggle={(v) => set({ on: v })}>
+        <DeviceShell name="DELAY" on={p.on} onToggle={(v) => set({ on: v })}>
           {p.sync ? (
             <Knob
               value={p.div}
@@ -214,6 +220,110 @@ function DevicePanel({
         </DeviceShell>
       );
     }
+    case "chorus": {
+      const p = d.params as FxParams["chorus"];
+      return (
+        <DeviceShell name="CHORUS" on={p.on} onToggle={(v) => set({ on: v })}>
+          <Knob
+            value={p.rate}
+            min={0.1}
+            max={5}
+            defaultValue={0.9}
+            onChange={(v) => set({ rate: v })}
+            label="rate"
+            disabled={!p.on}
+            fmt={(v) => v.toFixed(2) + "Hz"}
+          />
+          <Knob
+            value={p.depth}
+            min={0}
+            max={1}
+            defaultValue={0.45}
+            onChange={(v) => set({ depth: v })}
+            label="depth"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.feedback}
+            min={0}
+            max={0.7}
+            defaultValue={0.15}
+            onChange={(v) => set({ feedback: v })}
+            label="fdbk"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.mix}
+            min={0}
+            max={1}
+            defaultValue={0.35}
+            onChange={(v) => set({ mix: v })}
+            label="mix"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+        </DeviceShell>
+      );
+    }
+    case "disperser": {
+      const p = d.params as FxParams["disperser"];
+      const vizOn = p.viz !== false;
+      return (
+        <DeviceShell
+          name="DISPERSER"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide={vizOn}
+          headerExtra={
+            <FxChip
+              label="viz"
+              on={vizOn}
+              enabled
+              title="Phase-response assistant — allpass cascade unwrap around the pin frequency"
+              onClick={() => set({ viz: !vizOn })}
+            />
+          }
+          footer={
+            vizOn ? (
+              <DisperserPhase
+                on={p.on}
+                freq={p.freq}
+                amount={p.amount}
+                enabled={vizOn}
+                height={120}
+              />
+            ) : null
+          }
+        >
+          <Knob
+            value={Math.log2(p.freq / 20)}
+            min={0}
+            max={Math.log2(1000)}
+            defaultValue={Math.log2(180 / 20)}
+            onChange={(v) => set({ freq: 20 * Math.pow(2, v) })}
+            label="freq"
+            disabled={!p.on}
+            fmt={() =>
+              p.freq >= 1000
+                ? (p.freq / 1000).toFixed(1) + "k"
+                : Math.round(p.freq) + "Hz"
+            }
+          />
+          <Knob
+            value={p.amount}
+            min={0}
+            max={1}
+            defaultValue={0.55}
+            onChange={(v) => set({ amount: v })}
+            label="amount"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+        </DeviceShell>
+      );
+    }
     case "crush": {
       const p = d.params as FxParams["crush"];
       return (
@@ -269,6 +379,7 @@ function DevicePanel({
       const p = d.params as FxParams["impartialer"];
       const mapOn = p.mode === "snap" || p.mode === "remap";
       const vizOn = !!p.viz;
+      const vizMode = p.vizMode === "trail" ? "trail" : "rta";
       return (
         <DeviceShell
           name="IMPARTIALER"
@@ -276,21 +387,52 @@ function DevicePanel({
           onToggle={(v) => set({ on: v })}
           wide={vizOn}
           headerExtra={
-            <FxChip
-              label="viz"
-              on={vizOn}
-              enabled
-              title="spectral heatmap — dry (cool) vs wet (accent)"
-              onClick={() => set({ viz: !vizOn })}
-            />
+            <div className="flex items-center gap-1">
+              <FxChip
+                label="viz"
+                on={vizOn}
+                enabled
+                title="Spectral assistant — blue = raw harmonics, green = quantized × strength."
+                onClick={() => set({ viz: !vizOn })}
+              />
+              {vizOn ? (
+                <>
+                  <FxChip
+                    label="rta"
+                    on={vizMode === "rta"}
+                    enabled
+                    title="Live mirrored line-spectrum — raw vs quantized"
+                    onClick={() => set({ vizMode: "rta" })}
+                  />
+                  <FxChip
+                    label="trail"
+                    on={vizMode === "trail"}
+                    enabled
+                    title="~1s scrolling harmonic heatmap"
+                    onClick={() => set({ vizMode: "trail" })}
+                  />
+                </>
+              ) : null}
+            </div>
           }
           footer={
             vizOn ? (
-              <ImpartialerHeatmap
-                deviceId={d.id}
-                readViz={vizReader}
-                enabled={vizOn}
-              />
+              vizMode === "trail" ? (
+                <ImpartialerHeatmap
+                  deviceId={d.id}
+                  readViz={vizReader}
+                  enabled={vizOn}
+                  height={100}
+                  historySec={1}
+                />
+              ) : (
+                <ImpartialerRta
+                  deviceId={d.id}
+                  readViz={vizReader}
+                  enabled={vizOn}
+                  height={140}
+                />
+              )
             ) : null
           }
         >
@@ -417,6 +559,285 @@ function DevicePanel({
         />
       );
     }
+    case "centinel": {
+      const p = d.params as FxParams["centinel"];
+      const vizOn = p.viz !== false;
+      const formant = p.formant ?? 0.7;
+      return (
+        <DeviceShell
+          name="CENTINEL"
+          on={p.on}
+          onToggle={(v) => set({ on: v })}
+          wide={vizOn}
+          headerExtra={
+            <div className="flex items-center gap-1">
+              <FxChip
+                label="viz"
+                on={vizOn}
+                enabled
+                title="Pitch graph — blue in · green target · accent corrected"
+                onClick={() => set({ viz: !vizOn })}
+              />
+              <FxChip
+                label="nat"
+                on={
+                  Math.abs(p.speed - 40) < 1 &&
+                  Math.abs(p.flex - 12) < 1 &&
+                  Math.abs(p.humanize - 0.4) < 0.05 &&
+                  Math.abs(formant - 0.7) < 0.05
+                }
+                enabled={p.on}
+                title="Natural — soft retune, keep vibrato + formants"
+                onClick={() =>
+                  set({
+                    speed: 40,
+                    flex: 12,
+                    humanize: 0.4,
+                    amount: 1,
+                    formant: 0.7,
+                    tracking: 0.35,
+                  })
+                }
+              />
+              <FxChip
+                label="soft"
+                on={
+                  Math.abs(p.speed - 120) < 1 &&
+                  Math.abs(p.humanize - 0.7) < 0.05
+                }
+                enabled={p.on}
+                title="Subtle — slow pull, wide flex, mostly human"
+                onClick={() =>
+                  set({
+                    speed: 120,
+                    flex: 25,
+                    humanize: 0.7,
+                    amount: 0.7,
+                    formant: 0.85,
+                    tracking: 0.3,
+                  })
+                }
+              />
+              <FxChip
+                label="robot"
+                on={p.speed < 0.5 && p.flex < 0.5 && p.humanize < 0.05}
+                enabled={p.on}
+                title="Hard lock — instant retune, kill vibrato (classic Auto-Tune)"
+                onClick={() =>
+                  set({
+                    speed: 0,
+                    flex: 0,
+                    humanize: 0,
+                    amount: 1,
+                    formant: 0.35,
+                    tracking: 0.25,
+                  })
+                }
+              />
+            </div>
+          }
+          footer={
+            <>
+              {vizOn ? (
+                <CentinelPitch
+                  deviceId={d.id}
+                  readViz={vizReader}
+                  enabled={vizOn}
+                  height={140}
+                />
+              ) : null}
+              <div
+                className={
+                  "mt-1.5 flex flex-wrap gap-1 " + (vizOn ? "border-t border-line pt-1.5" : "")
+                }
+              >
+                <span className="mr-1 self-center font-mono text-[8px] tracking-widest text-faint">
+                  map
+                </span>
+                {Array.from({ length: 12 }, (_, pc) => {
+                  const abs = (p.key + pc) % 12;
+                  const active =
+                    p.scale === "custom"
+                      ? (p.customPcs ?? DEFAULT_CENTINEL_CUSTOM_PCS).includes(pc)
+                      : (SCALE_PCS[p.scale as ImpartialerScale] ?? SCALE_PCS.major).includes(pc);
+                  return (
+                    <FxChip
+                      key={pc}
+                      label={NOTE_NAMES[abs] ?? String(pc)}
+                      on={active}
+                      enabled={p.on}
+                      title={
+                        "Toggle " +
+                        (NOTE_NAMES[abs] ?? pc) +
+                        " in the custom scale map (switches to custom)"
+                      }
+                      onClick={() => {
+                        const base =
+                          p.scale === "custom"
+                            ? (p.customPcs ?? DEFAULT_CENTINEL_CUSTOM_PCS).slice()
+                            : (SCALE_PCS[p.scale as ImpartialerScale] ?? SCALE_PCS.major).slice();
+                        const idx = base.indexOf(pc);
+                        if (idx >= 0) {
+                          if (base.length <= 1) return; // keep at least one degree
+                          base.splice(idx, 1);
+                        } else base.push(pc);
+                        base.sort((a, b) => a - b);
+                        set({ scale: "custom" as CentinelScale, customPcs: base });
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </>
+          }
+        >
+          <Knob
+            value={p.key}
+            min={0}
+            max={11}
+            defaultValue={0}
+            onChange={(v) => set({ key: Math.round(v) })}
+            label="key"
+            disabled={!p.on}
+            fmt={(v) => NOTE_NAMES[Math.round(v)] ?? "C"}
+          />
+          <Knob
+            value={p.speed}
+            min={0}
+            max={400}
+            defaultValue={40}
+            onChange={(v) => set({ speed: v })}
+            label="speed"
+            disabled={!p.on}
+            fmt={(v) => (v < 0.5 ? "lock" : Math.round(v) + "ms")}
+          />
+          <Knob
+            value={p.amount}
+            min={0}
+            max={1}
+            defaultValue={1}
+            onChange={(v) => set({ amount: v })}
+            label="amount"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.flex}
+            min={0}
+            max={100}
+            defaultValue={12}
+            onChange={(v) => set({ flex: v })}
+            label="flex"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v) + "¢"}
+          />
+          <Knob
+            value={p.humanize}
+            min={0}
+            max={1}
+            defaultValue={0.4}
+            onChange={(v) => set({ humanize: v })}
+            label="human"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={formant}
+            min={0}
+            max={1}
+            defaultValue={0.7}
+            onChange={(v) => set({ formant: v })}
+            label="formant"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.tracking}
+            min={0}
+            max={1}
+            defaultValue={0.35}
+            onChange={(v) => set({ tracking: v })}
+            label="track"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.mix}
+            min={0}
+            max={1}
+            defaultValue={1}
+            onChange={(v) => set({ mix: v })}
+            label="mix"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+          />
+          <Knob
+            value={p.transpose}
+            min={-12}
+            max={12}
+            defaultValue={0}
+            bipolar
+            onChange={(v) => set({ transpose: Math.round(v) })}
+            label="trans"
+            disabled={!p.on}
+            fmt={(v) => (v > 0 ? "+" : "") + Math.round(v)}
+          />
+          <div className="flex flex-col gap-1 self-center">
+            <FxChip
+              label="midi"
+              on={!!p.midiFollow}
+              enabled={p.on}
+              title="MIDI follow — retune to held keys / hardware / sounding MIDI clips; scale is the fallback"
+              onClick={() => set({ midiFollow: !p.midiFollow })}
+            />
+            {IMPARTIALER_SCALES.map((sc) => (
+              <FxChip
+                key={sc}
+                label={sc === "chromatic" ? "chr" : sc.slice(0, 3)}
+                on={p.scale === sc}
+                enabled={p.on}
+                title={sc}
+                onClick={() =>
+                  set({
+                    scale: sc as CentinelScale,
+                    customPcs: SCALE_PCS[sc].slice(),
+                  })
+                }
+              />
+            ))}
+            <FxChip
+              label="map"
+              on={p.scale === "custom"}
+              enabled={p.on}
+              title="Custom scale map — edit degrees with the note chips below"
+              onClick={() =>
+                set({
+                  scale: "custom" as CentinelScale,
+                  customPcs: (p.customPcs?.length
+                    ? p.customPcs
+                    : DEFAULT_CENTINEL_CUSTOM_PCS
+                  ).slice(),
+                })
+              }
+            />
+            <FxChip
+              label="lo"
+              on={p.quality === "low"}
+              enabled={p.on}
+              title="low latency (2048 FFT)"
+              onClick={() => set({ quality: "low" })}
+            />
+            <FxChip
+              label="hi"
+              on={p.quality === "high"}
+              enabled={p.on}
+              title="high quality (4096 FFT, more latency)"
+              onClick={() => set({ quality: "high" })}
+            />
+          </div>
+        </DeviceShell>
+      );
+    }
   }
 }
 
@@ -436,8 +857,11 @@ function SpeccompPanel({
   set: (patch: object) => void;
   vizReader: (id: string) => FxVizSlot | null;
 }) {
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useState<string | null>(curves[0]?.id ?? null);
   const selected = curves.find((c) => c.id === sel) ?? null;
+  const patchCurve = (id: string, patch: Partial<import("../eq-curve").SpecCurve>) =>
+    set({ curves: curves.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+
   return (
     <DeviceShell
       name="SPECCOMP"
@@ -449,98 +873,151 @@ function SpeccompPanel({
           label="viz"
           on={vizOn}
           enabled
-          title="RTA + dynamic threshold nodes — this is spectral compression, not an EQ. Nodes pull the threshold around a frequency."
+          title="RTA + dynamic threshold nodes — spectral compression, not an EQ. Nodes pull the threshold around a frequency; gold ghost = max GR (range)."
           onClick={() => set({ viz: !vizOn })}
         />
       }
       footer={
         vizOn ? (
-          <div className="flex flex-col gap-1.5">
-            <div className="px-0.5 font-mono text-[8.5px] text-faint">
-              spectral dynamics · threshold sculptor (not boost/cut)
-            </div>
+          <div className="flex min-h-70 flex-col gap-1.5 [overflow-anchor:none]">
             <BandCurveEditor
               mode="speccomp"
               deviceId={dId}
               readViz={vizReader}
               enabled={vizOn}
-              height={148}
+              height={168}
               curves={curves}
-              onCurvesChange={(next) =>
-                set({ curves: next, viz: true })
-              }
+              onCurvesChange={(next) => set({ curves: next, viz: true })}
               globalThreshold={p.threshold}
               globalTilt={p.tilt}
               selectedId={sel}
               onSelect={setSel}
             />
             {selected ? (
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <Knob
-                  value={selected.range}
-                  min={1}
-                  max={24}
-                  defaultValue={12}
-                  onChange={(v) =>
-                    set({
-                      curves: curves.map((c) =>
-                        c.id === selected.id ? { ...c, range: v } : c,
-                      ),
-                    })
-                  }
-                  label="range"
-                  disabled={!p.on}
-                  fmt={(v) => Math.round(v) + "dB"}
-                />
-                <Knob
-                  value={selected.ratio}
-                  min={1}
-                  max={12}
-                  defaultValue={4}
-                  onChange={(v) =>
-                    set({
-                      curves: curves.map((c) =>
-                        c.id === selected.id ? { ...c, ratio: v } : c,
-                      ),
-                    })
-                  }
-                  label="ratio"
-                  disabled={!p.on}
-                  fmt={(v) => v.toFixed(1) + ":1"}
-                />
-                <FxChip
-                  label={selected.on ? "on" : "off"}
-                  on={selected.on}
-                  enabled={p.on}
-                  title="bypass this node"
-                  onClick={() =>
-                    set({
-                      curves: curves.map((c) =>
-                        c.id === selected.id ? { ...c, on: !c.on } : c,
-                      ),
-                    })
-                  }
-                />
-                <FxChip
-                  label="del"
-                  on={false}
-                  enabled
-                  title="Remove this node (or press Delete / Backspace). ⌥-click a handle also deletes."
-                  onClick={() => {
-                    set({ curves: curves.filter((c) => c.id !== selected.id) });
-                    setSel(null);
-                  }}
-                />
-              </div>
+              <>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <span title="Node center frequency">
+                    <Knob
+                      value={Math.log2(selected.freq / 20)}
+                      min={0}
+                      max={Math.log2(20000 / 20)}
+                      defaultValue={Math.log2(1000 / 20)}
+                      onChange={(v) => patchCurve(selected.id, { freq: 20 * Math.pow(2, v) })}
+                      label="freq"
+                      disabled={!p.on}
+                      fmt={() =>
+                        selected.freq >= 1000
+                          ? (selected.freq / 1000).toFixed(1) + "k"
+                          : Math.round(selected.freq) + "Hz"
+                      }
+                    />
+                  </span>
+                  <span title="Local threshold this node pulls toward (dB)">
+                    <Knob
+                      value={selected.threshold}
+                      min={-60}
+                      max={0}
+                      defaultValue={-24}
+                      onChange={(v) => patchCurve(selected.id, { threshold: v })}
+                      label="thresh"
+                      disabled={!p.on}
+                      fmt={(v) => Math.round(v) + "dB"}
+                    />
+                  </span>
+                  <span title="Bandwidth of the threshold pull (Q). Higher = narrower.">
+                    <Knob
+                      value={selected.q}
+                      min={0.15}
+                      max={8}
+                      defaultValue={1.2}
+                      onChange={(v) => patchCurve(selected.id, { q: v })}
+                      label="Q"
+                      disabled={!p.on}
+                      fmt={(v) => v.toFixed(2)}
+                    />
+                  </span>
+                  <FxChip
+                    label={selected.on ? "on" : "off"}
+                    on={selected.on}
+                    enabled={p.on}
+                    title="Bypass this node only"
+                    onClick={() => patchCurve(selected.id, { on: !selected.on })}
+                  />
+                  <FxChip
+                    label="del"
+                    on={false}
+                    enabled
+                    title="Remove this node (or press Delete / Backspace). ⌥-click a handle also deletes."
+                    onClick={() => {
+                      set({ curves: curves.filter((c) => c.id !== selected.id) });
+                      setSel(null);
+                    }}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-2 border-t border-line pt-1.5">
+                  <span title="Max gain reduction this node may apply (dB). Ghost handle on the plot = thresh − range.">
+                    <Knob
+                      value={selected.range}
+                      min={1}
+                      max={24}
+                      defaultValue={12}
+                      onChange={(v) => patchCurve(selected.id, { range: v })}
+                      label="range"
+                      disabled={!p.on}
+                      fmt={(v) => Math.round(v) + "dB"}
+                    />
+                  </span>
+                  <span title="Local ratio when this node dominates the blend">
+                    <Knob
+                      value={selected.ratio}
+                      min={1}
+                      max={12}
+                      defaultValue={4}
+                      onChange={(v) => patchCurve(selected.id, { ratio: v })}
+                      label="ratio"
+                      disabled={!p.on}
+                      fmt={(v) => v.toFixed(1) + ":1"}
+                    />
+                  </span>
+                  <div className="max-w-44 font-mono text-[8.5px] leading-snug text-faint">
+                    pulls threshold · caps GR at range
+                    <br />
+                    gold ghost = thresh − range
+                  </div>
+                </div>
+              </>
             ) : (
               <div className="text-center font-mono text-[8.5px] text-faint">
-                double-click analyzer to add a node · Delete removes selection
+                double-click analyzer to sculpt a threshold · Delete removes selection
               </div>
             )}
           </div>
         ) : null
       }
     >
+      <div
+        className="max-w-44 px-1 font-mono text-[9px] leading-snug text-dim"
+        data-tip="Spectral compressor — sculpts a frequency-dependent threshold. Unlike EQ, this does not boost/cut statically; it only compresses when energy crosses the curve."
+      >
+        spectral dyn · {curves.length} node{curves.length === 1 ? "" : "s"}
+        {selected ? (
+          <>
+            <br />
+            <span className="text-faint">
+              {selected.freq >= 1000
+                ? (selected.freq / 1000).toFixed(1) + "k"
+                : Math.round(selected.freq) + "Hz"}{" "}
+              · {Math.round(selected.threshold)}dB · Q{selected.q.toFixed(1)}
+              {!selected.on ? " · OFF" : ""}
+            </span>
+          </>
+        ) : (
+          <>
+            <br />
+            <span className="text-faint">{vizOn ? "select a node" : "open viz to sculpt"}</span>
+          </>
+        )}
+      </div>
       <Knob
         value={p.threshold}
         min={-48}
@@ -581,6 +1058,18 @@ function SpeccompPanel({
         disabled={!p.on}
         fmt={(v) => Math.round(v * 1000) + "ms"}
       />
+      <span title="Soft-knee width — how gradually compression engages around threshold">
+        <Knob
+          value={p.knee}
+          min={0}
+          max={24}
+          defaultValue={6}
+          onChange={(v) => set({ knee: v })}
+          label="knee"
+          disabled={!p.on}
+          fmt={(v) => Math.round(v) + "dB"}
+        />
+      </span>
       <Knob
         value={p.makeup}
         min={0}
