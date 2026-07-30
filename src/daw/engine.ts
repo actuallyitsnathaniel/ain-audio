@@ -27,6 +27,7 @@ import {
   newClipId,
   newTrackId,
   saveArrangement,
+  slippedLocals,
   swingDelay,
   warpModeOf,
   type ArrClip,
@@ -116,10 +117,13 @@ interface LimiterState {
   ceiling: number;
 }
 
-// an undo step: the arrangement + the mixer state ⌘Z should restore with it
+// an undo step: the arrangement + the mixer state ⌘Z should restore with it.
+// `scope` tags the edit source so the editor pane can prefer content undos
+// (piano-roll / clip edits) without a second stack — see undo(preferredScope).
 interface UndoSnap {
   a: Arrangement;
   masterVol: number;
+  scope?: string; // "arrange" (default) · "content:<clipId>" · coalesce keys
 }
 
 // A live voice handle returned by startVoiceAt. The voice gain `vg` carries the
@@ -374,8 +378,14 @@ class AudioEngine {
   arrangement: Arrangement = loadArrangement();
   private _arrStrips: Record<
     string,
-    { gain: GainNode; pan: StereoPannerNode; fx: FxChain; an: AnalyserNode }
-  > = {}; // per-track vol/pan strip + FX chain + post-fader meter tap
+    {
+      in: GainNode; // unity junction sources connect to
+      gain: GainNode; // post-FX fader
+      pan: StereoPannerNode;
+      fx: FxChain;
+      an: AnalyserNode;
+    }
+  > = {}; // per-track FX → vol → pan strip + post-fader meter tap
   kit: DrumKit = DEFAULT_KIT;
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   private _drumBufs: Record<string, AudioBuffer | null> = {}; // laneId → decoded one-shot (null = use synth)
@@ -1692,6 +1702,7 @@ class AudioEngine {
           vel > 0.85 ? 1 : 0.7,
           this.trackStrip(dt),
         );
+      this.recordNoteOn(midi, vel); // drum hits still capture when recording
       return;
     }
     this.noteOff(midi, true, cid);
@@ -1704,6 +1715,7 @@ class AudioEngine {
       this.ctx!.currentTime,
       sel,
     );
+    this.recordNoteOn(midi, vel);
     this.emit("synth");
   }
   // the kit a drum track's clips use (from the first drum clip, else the current kit)
@@ -1722,6 +1734,7 @@ class AudioEngine {
   }
 
   noteOff(midi: number, instant?: boolean, channelId?: string) {
+    this.recordNoteOff(midi); // close a recorded note even for drum one-shots (no live voice)
     const cid = this.liveCid(channelId); // must mirror noteOn or the release misses its key
     const key = this.liveKey(midi, cid);
     // fall back to the global slot in case the note was pressed before arming
@@ -1762,15 +1775,450 @@ class AudioEngine {
   // Grow/shrink the step grid (16/32/48/64), preserving existing steps. Resizes
   // ── live keyboard routing ──
   armedChannel: string | null = null; // which track the keyboard/MIDI plays into
+  // Ableton "Computer MIDI Keyboard" (M): when on, letter keys play the armed /
+  // selected track; when off, they stay single-key shortcuts (L loop, R reverse…).
+  // Default OFF so the studio's shortcut set works until the user opts in.
+  midiKeys = (() => {
+    try {
+      return localStorage.getItem("ain-midi-keys") === "1";
+    } catch {
+      return false;
+    }
+  })();
+  midiOctave = 0; // Z/X while midiKeys is on (−3…+3)
+  midiVel = 0.85; // C/V while midiKeys is on
 
-  // Arm an arrangement TRACK for keyboard input (one at a time; null = the global
-  // Audio-Lab voice). Toggling the armed track off reverts to the global voice.
+  // Arm an arrangement TRACK for keyboard / audio input (one at a time).
+  // midi/drum → computer keys + Web MIDI into that track; audio → mic on ● record.
   armChannel(id: string | null) {
-    this.armedChannel =
-      id && this.arrangement.tracks.some((t) => t.id === id && t.kind === "midi")
-        ? id
-        : null;
+    const t = id ? this.arrangement.tracks.find((x) => x.id === id) : null;
+    const ok = t && (t.kind === "midi" || t.kind === "drum" || t.kind === "audio");
+    const prev = this.armedChannel;
+    this.armedChannel = ok ? t!.id : null;
+    // warm the armed MIDI track's instrument so the first note isn't silent
+    if (this.armedChannel && t?.kind === "midi" && t.presetId)
+      this.warmPatch(this.resolvePatch(t.presetId));
+    // leaving an audio arm → release the mic (privacy); arming audio → request it
+    if (prev && prev !== this.armedChannel) this.teardownInput();
+    if (this.armedChannel && t?.kind === "audio") void this.enableInput();
     this.emit("clip");
+  }
+
+  toggleMidiKeys() {
+    this.midiKeys = !this.midiKeys;
+    try {
+      localStorage.setItem("ain-midi-keys", this.midiKeys ? "1" : "0");
+    } catch {
+      /* fine */
+    }
+    this.emit("transport");
+    this.emit("clip");
+  }
+  setMidiOctave(n: number) {
+    this.midiOctave = Math.min(3, Math.max(-3, Math.round(n)));
+    this.emit("transport");
+  }
+  setMidiVel(v: number) {
+    this.midiVel = Math.min(1, Math.max(0.1, Math.round(v * 100) / 100));
+    this.emit("transport");
+  }
+
+  // ── Record (MIDI notes + live audio input) ──
+  // ● / Shift+R. Reuses count-in from playSequence — capture is monitor-only until
+  // the anchor. MIDI → noteOn/Off into a midi/drum clip. Audio → getUserMedia PCM
+  // into a new audio clip on the armed audio track. No punch markers / takes yet.
+  recording = false;
+  recordStamp = 0; // bumped when a take finishes → ClipEditor remounts
+  inputStatus: "idle" | "live" | "denied" | "unsupported" = "idle";
+  private _recTarget: { trackId: string; clipId: string } | null = null;
+  private _recOpen = new Map<number, { startBeat: number; vel: number }>(); // midi holds
+  private _recMode: "midi" | "audio" | null = null;
+  private _recTrackId: string | null = null; // audio takes land on this track
+  private _recStartBeat = 0;
+  private _recCapturing = false;
+  private _inputStream: MediaStream | null = null;
+  private _inputSource: MediaStreamAudioSourceNode | null = null;
+  private _recProc: ScriptProcessorNode | null = null;
+  private _recSink: GainNode | null = null; // mute sink so the processor runs
+  private _recChunks: Float32Array[][] = []; // each callback: per-channel copies
+
+  // true while playSequence's count-in clicks are still running (anchor is in the future)
+  private inCountIn(): boolean {
+    return !!(
+      this.ctx &&
+      this.sequencePlaying &&
+      this.ctx.currentTime < this._seqAnchorTime - 1e-4
+    );
+  }
+
+  // Request mic/interface access and keep the stream warm while an audio track is armed.
+  async enableInput(): Promise<boolean> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.inputStatus = "unsupported";
+      this.emit("transport");
+      return false;
+    }
+    if (this._inputStream) {
+      this.inputStatus = "live";
+      this.emit("transport");
+      return true;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+      this._inputStream = stream;
+      this.inputStatus = "live";
+      this.emit("transport");
+      return true;
+    } catch {
+      this.inputStatus = "denied";
+      this.emit("transport");
+      return false;
+    }
+  }
+
+  private teardownInput() {
+    this.stopAudioCaptureGraph();
+    if (this._inputStream) {
+      for (const t of this._inputStream.getTracks()) t.stop();
+      this._inputStream = null;
+    }
+    this.inputStatus = "idle";
+  }
+
+  private stopAudioCaptureGraph() {
+    this._recCapturing = false;
+    try {
+      this._recProc?.disconnect();
+    } catch {
+      /* fine */
+    }
+    try {
+      this._inputSource?.disconnect();
+    } catch {
+      /* fine */
+    }
+    try {
+      this._recSink?.disconnect();
+    } catch {
+      /* fine */
+    }
+    this._recProc = null;
+    this._inputSource = null;
+    this._recSink = null;
+  }
+
+  // Wire MediaStream → ScriptProcessor (silent sink). Chunks append only while
+  // `_recCapturing` (after count-in). No input monitoring — avoids speaker feedback.
+  private ensureAudioCaptureGraph() {
+    if (!this._inputStream || this._recProc) return;
+    const c = this.ensureCtx();
+    const src = c.createMediaStreamSource(this._inputStream);
+    // 4096 = decent latency/CPU tradeoff; stereo in, stereo out (out is silenced)
+    const proc = c.createScriptProcessor(4096, 2, 2);
+    const sink = c.createGain();
+    sink.gain.value = 0;
+    proc.onaudioprocess = (ev) => {
+      if (!this._recCapturing || !this.recording) return;
+      const n = ev.inputBuffer.numberOfChannels;
+      const block: Float32Array[] = [];
+      for (let ch = 0; ch < Math.min(2, n); ch++)
+        block.push(new Float32Array(ev.inputBuffer.getChannelData(ch)));
+      if (block.length === 1) block.push(new Float32Array(block[0])); // force stereo store
+      this._recChunks.push(block);
+    };
+    src.connect(proc);
+    proc.connect(sink);
+    sink.connect(c.destination); // processor only runs when connected to the graph
+    this._inputSource = src;
+    this._recProc = proc;
+    this._recSink = sink;
+  }
+
+  // Resolve which clip/track receives the take.
+  private ensureRecTarget(): { trackId: string; clipId: string } | null {
+    const beat =
+      this.arrangeMode && this.sequencePlaying
+        ? this.currentBeat()
+        : this.insertBeat;
+    const primary = this.primaryClip();
+    if (primary) {
+      const found = this.findClip(primary.trackId, primary.clipId);
+      if (
+        found &&
+        (found[0].kind === "midi" || found[0].kind === "drum") &&
+        found[1].content.kind !== "audio"
+      )
+        return primary;
+    }
+    const trackId =
+      this.armedChannel ||
+      (this._selTrackId &&
+      this.arrangement.tracks.some(
+        (t) =>
+          t.id === this._selTrackId &&
+          (t.kind === "midi" || t.kind === "drum"),
+      )
+        ? this._selTrackId
+        : null) ||
+      this.arrangement.tracks.find((t) => t.kind === "midi" || t.kind === "drum")
+        ?.id ||
+      null;
+    if (!trackId) return null;
+    const t = this.findTrack(trackId);
+    if (!t) return null;
+    const hit = t.clips.find(
+      (c) =>
+        c.content.kind !== "audio" &&
+        beat >= c.startBeat - 1e-6 &&
+        beat < c.startBeat + c.lengthBeats + 1e-6,
+    );
+    if (hit) return { trackId, clipId: hit.id };
+    const bpb = this.arrangement.beatsPerBar;
+    const start = Math.max(0, Math.floor(beat / bpb) * bpb);
+    const content =
+      t.kind === "drum"
+        ? {
+            kind: "drum" as const,
+            pattern: {
+              steps: 16,
+              beatsPerBar: bpb,
+              kitId: this.kit.id,
+              bpm: this.arrangement.bpm,
+              swing: 0,
+              on: {},
+              accent: {},
+              laneMix: {},
+            },
+            notes: { bars: 1, beatsPerBar: bpb, notes: [] },
+          }
+        : {
+            kind: "midi" as const,
+            clip: { bars: 1, beatsPerBar: bpb, notes: [] },
+          };
+    const created = this.addClip(trackId, {
+      startBeat: start,
+      lengthBeats: bpb,
+      loop: false,
+      content,
+    });
+    if (!created) return null;
+    this.selectClip(created.id);
+    return { trackId, clipId: created.id };
+  }
+
+  // ● record: start a take (and play from the cursor if stopped), or finish the
+  // current take without stopping playback.
+  toggleRecord() {
+    if (this.recording) {
+      this.finishRecording();
+      return;
+    }
+    void this.beginRecord();
+  }
+
+  private async beginRecord() {
+    this.arrangeMode = true;
+    const armed = this.armedChannel
+      ? this.findTrack(this.armedChannel)
+      : null;
+    const selAudio =
+      this._selTrackId &&
+      this.findTrack(this._selTrackId)?.kind === "audio"
+        ? this._selTrackId
+        : null;
+    const audioTrackId =
+      armed?.kind === "audio" ? armed.id : !armed ? selAudio : null;
+
+    if (audioTrackId) {
+      const ok = await this.enableInput();
+      if (!ok || !this._inputStream) {
+        this.emit("transport");
+        return;
+      }
+      this.ensureAudioCaptureGraph();
+      this.pushUndo("arrange");
+      this._recMode = "audio";
+      this._recTrackId = audioTrackId;
+      this._recTarget = null;
+      this._recChunks = [];
+      this._recCapturing = false;
+      this._recStartBeat = this.insertBeat;
+      this.recording = true;
+      if (!(this.sequencePlaying && this.arrangeMode))
+        this.playArrangement(this.insertBeat);
+      else this.emit("transport");
+      if (!this.inCountIn()) this.beginAudioCapture();
+      return;
+    }
+
+    void this.enableMidi();
+    const target = this.ensureRecTarget();
+    if (!target) {
+      this.emit("transport");
+      return;
+    }
+    this.pushUndo("content:" + target.clipId);
+    this._recMode = "midi";
+    this._recTrackId = null;
+    this._recTarget = target;
+    this._recOpen.clear();
+    this.recording = true;
+    if (!(this.sequencePlaying && this.arrangeMode))
+      this.playArrangement(this.insertBeat);
+    else this.emit("transport");
+  }
+
+  private beginAudioCapture() {
+    if (this._recMode !== "audio" || this._recCapturing) return;
+    this._recStartBeat = this.currentBeat();
+    this._recChunks = [];
+    this._recCapturing = true;
+  }
+
+  // called from schedTick so count-in → capture is transport-clock accurate
+  private maybeStartAudioCapture() {
+    if (
+      this.recording &&
+      this._recMode === "audio" &&
+      !this._recCapturing &&
+      !this.inCountIn()
+    )
+      this.beginAudioCapture();
+  }
+
+  private finishRecording(endBeat?: number) {
+    if (!this.recording) return;
+    const at =
+      endBeat ??
+      (this.sequencePlaying ? this.currentBeat() : this.insertBeat);
+    if (this._recMode === "audio") {
+      this.bakeAudioTake(at);
+    } else if (!this.inCountIn()) {
+      for (const midi of [...this._recOpen.keys()]) this.commitRecNote(midi, at);
+    }
+    this._recOpen.clear();
+    this._recCapturing = false;
+    this._recChunks = [];
+    this.recording = false;
+    this._recTarget = null;
+    this._recMode = null;
+    this._recTrackId = null;
+    this.recordStamp++;
+    this.saveArr();
+    this.emit("transport");
+  }
+
+  // Concatenate ScriptProcessor chunks → AudioBuffer → imported clip on the track.
+  private bakeAudioTake(endBeat: number) {
+    this._recCapturing = false;
+    const trackId = this._recTrackId;
+    const c = this.ctx;
+    if (!trackId || !c || this._recChunks.length === 0) return;
+    const startBeat = this._recStartBeat;
+    const lenBeats = Math.max(0.25, endBeat - startBeat);
+    let frames = 0;
+    for (const block of this._recChunks) frames += block[0].length;
+    if (frames < 64) return; // nothing useful
+    const nCh = this._recChunks[0].length;
+    const buf = c.createBuffer(nCh, frames, c.sampleRate);
+    let o = 0;
+    for (const block of this._recChunks) {
+      const n = block[0].length;
+      for (let ch = 0; ch < nCh; ch++) buf.copyToChannel(block[ch], ch, o);
+      o += n;
+    }
+    const bufId = "rec" + ++this._importSeq + Date.now().toString(36);
+    this._importBufs[bufId] = buf;
+    void putAudio(bufId, encodeWav(buf), "take");
+    const name =
+      "take " +
+      (Math.floor(startBeat / this.arrangement.beatsPerBar) + 1) +
+      "." +
+      (Math.floor(startBeat % this.arrangement.beatsPerBar) + 1);
+    const created = this.addClip(trackId, {
+      startBeat: Math.max(0, startBeat),
+      lengthBeats: lenBeats,
+      loop: false,
+      content: {
+        kind: "audio",
+        bufId,
+        name,
+        rootBpm: this.arrangement.bpm,
+        norm: true,
+        loop: false,
+      },
+    });
+    if (created) this.selectClip(created.id);
+  }
+
+  private commitRecNote(midi: number, endBeat: number) {
+    const open = this._recOpen.get(midi);
+    const target = this._recTarget;
+    if (!open || !target) return;
+    this._recOpen.delete(midi);
+    const found = this.findClip(target.trackId, target.clipId);
+    if (!found) return;
+    const [tr, clip] = found;
+    const localStart = open.startBeat - clip.startBeat;
+    if (localStart < -1e-6) return; // landed before the clip window
+    const start = Math.max(0, localStart);
+    const length = Math.max(0.05, endBeat - open.startBeat);
+    // grow the clip window if the note runs past its end
+    if (start + length > clip.lengthBeats) {
+      clip.lengthBeats = start + length;
+      this.resolveOverlaps(tr, clip);
+    }
+    const note = {
+      id: newNoteId(),
+      pitch: midi,
+      start,
+      length,
+      vel: open.vel,
+    };
+    if (clip.content.kind === "midi") {
+      const nc = clip.content.clip;
+      nc.notes.push(note);
+      const need = Math.ceil((start + length) / Math.max(1, nc.beatsPerBar));
+      if (need > nc.bars) nc.bars = need;
+    } else if (clip.content.kind === "drum") {
+      const bpb = this.arrangement.beatsPerBar;
+      if (!clip.content.notes)
+        clip.content.notes = { bars: 1, beatsPerBar: bpb, notes: [] };
+      const nc = clip.content.notes;
+      nc.notes.push(note);
+      const need = Math.ceil((start + length) / Math.max(1, nc.beatsPerBar));
+      if (need > nc.bars) nc.bars = need;
+    }
+    this.saveArr();
+  }
+
+  private recordNoteOn(midi: number, vel: number) {
+    if (!this.recording || this._recMode !== "midi") return;
+    if (!this.arrangeMode || !this.sequencePlaying) return;
+    if (this.inCountIn()) return; // monitor-only during count-in
+    if (!this._recTarget) return;
+    // retrigger: close the previous hold for this pitch first
+    if (this._recOpen.has(midi)) this.commitRecNote(midi, this.currentBeat());
+    this._recOpen.set(midi, {
+      startBeat: this.currentBeat(),
+      vel: Math.min(1, Math.max(0.05, vel)),
+    });
+  }
+
+  private recordNoteOff(midi: number) {
+    if (!this.recording || this._recMode !== "midi" || !this._recOpen.has(midi))
+      return;
+    if (this.inCountIn()) {
+      this._recOpen.delete(midi); // never started a recorded note
+      return;
+    }
+    this.commitRecNote(midi, this.currentBeat());
   }
 
   // resolve an instrument id (a patch key OR a legacy sampled-preset id) to a live
@@ -1830,14 +2278,19 @@ class AudioEngine {
     saveArrangement(this.arrangement);
     this.emit("arrange");
   }
-  // lazily build a track's vol→pan→sum strip (mirrors channelStrip); returns the input gain
+  // lazily build a track's FX→vol→pan→sum strip; returns the unity input junction.
+  // Fader is POST-FX so level-dependent devices (crush waveshaper, filter resonance,
+  // delay feedback) keep their character when the track volume moves — standard
+  // channel-strip order. Mute/solo still ride the same post-FX gain node.
   private trackStrip(t: ArrTrack): GainNode {
     const c = this.ensureCtx();
     const n = this.nodes!;
     let s = this._arrStrips[t.id];
     if (!s) {
-      const gain = c.createGain();
+      const input = c.createGain(); // unity; sources land here
+      const gain = c.createGain(); // post-FX fader
       const pan = c.createStereoPanner();
+      gain.connect(pan);
       pan.connect(n.sum);
       // post-strip meter tap: pan → analyser (measure only; also → sum). Reflects the
       // true post-fader, post-FX signal this track contributes.
@@ -1845,16 +2298,16 @@ class AudioEngine {
       an.fftSize = 2048;
       an.smoothingTimeConstant = 0;
       pan.connect(an);
-      // per-track FX chain inserted between gain and pan: gain → [devices] → pan → sum.
-      // Seeded from the track's persisted device list (empty = clean passthrough).
-      const fx = new FxChain(c, gain, pan);
+      // in → [devices] → gain → pan → sum. Seeded from the track's persisted device
+      // list (empty = clean passthrough).
+      const fx = new FxChain(c, input, gain);
       fx.setDevices((t.devices || []).map((d) => structuredClone(d)));
       fx.applyAll(this.bpm);
-      s = this._arrStrips[t.id] = { gain, pan, fx, an };
+      s = this._arrStrips[t.id] = { in: input, gain, pan, fx, an };
     }
     s.gain.gain.value = t.vol * this.trackGain(t);
     s.pan.pan.value = t.pan;
-    return s.gain;
+    return s.in;
   }
   private anyTrackSolo(): boolean {
     return this.arrangement.tracks.some((t) => t.solo);
@@ -1915,6 +2368,7 @@ class AudioEngine {
     if (s) {
       try {
         s.fx.dispose();
+        s.in.disconnect();
         s.gain.disconnect();
         s.pan.disconnect();
         s.an.disconnect();
@@ -1971,7 +2425,12 @@ class AudioEngine {
   private trackFx(
     id: string,
   ): {
-    s: { gain: GainNode; pan: StereoPannerNode; fx: FxChain };
+    s: {
+      in: GainNode;
+      gain: GainNode;
+      pan: StereoPannerNode;
+      fx: FxChain;
+    };
     t: ArrTrack;
   } | null {
     const t = this.findTrack(id);
@@ -2233,6 +2692,18 @@ class AudioEngine {
     this.pushUndoCoalesced("swing:" + clipId);
     const v = Math.min(0.75, Math.max(0.5, swing));
     found[1].swing = v > 0.505 ? v : undefined;
+    this.saveArr();
+  }
+
+  // Slip edit: shift content under fixed clip bounds (beats). Coalesced per clip so
+  // a Shift+⌥ drag is one ⌘Z. Live audio re-fires (structural — offset into buffer).
+  setClipSlip(trackId: string, clipId: string, slip: number) {
+    const found = this.findClip(trackId, clipId);
+    if (!found) return;
+    this.pushUndoCoalesced("slip:" + clipId);
+    const v = Number.isFinite(slip) ? slip : 0;
+    found[1].slip = Math.abs(v) < 1e-9 ? undefined : v;
+    this.stopAudioForClip(clipId); // offset into the buffer can't patch a live node
     this.saveArr();
   }
 
@@ -2947,6 +3418,11 @@ class AudioEngine {
   }
 
   stopSequence() {
+    // capture the stop beat BEFORE clearing the playing flag (finishRecording needs it)
+    const endBeat =
+      this.arrangeMode && this.sequencePlaying && this.ctx
+        ? this.currentBeat()
+        : this.insertBeat;
     if (this._schedTimer) {
       clearInterval(this._schedTimer);
       this._schedTimer = 0;
@@ -2959,6 +3435,7 @@ class AudioEngine {
     this._seqVoices.forEach((h) => this.releaseVoice(h, now, true));
     this._seqVoices = [];
     this.stopAudioClips();
+    if (this.recording) this.finishRecording(endBeat); // transport stop ends the take
     this.emit("transport");
     this.emit("state");
   }
@@ -3387,19 +3864,25 @@ class AudioEngine {
   // Call pushUndo() BEFORE a mutation to make it undoable. Discrete ops call it once;
   // drag gestures call it at pointer-down (so the whole drag is one undo step). Any
   // pushUndo clears the redo stack (new branch of history).
-  private _snapshot(): UndoSnap {
-    return { a: structuredClone(this.arrangement), masterVol: this.masterVol };
+  private _snapshot(scope?: string): UndoSnap {
+    return {
+      a: structuredClone(this.arrangement),
+      masterVol: this.masterVol,
+      scope,
+    };
   }
-  pushUndo() {
+  // Discrete undo push. Optional `scope` tags the edit ("arrange" default, or
+  // "content:<clipId>" for roll/clip commits) so pane-focused undo can prefer it.
+  pushUndo(scope = "arrange") {
     this._coalesceKey = null; // a discrete op breaks any continuous-param run
-    this._undo.push(this._snapshot());
+    this._undo.push(this._snapshot(scope));
     if (this._undo.length > AudioEngine.UNDO_MAX) this._undo.shift();
     this._redo = [];
   }
   // Coalesced pushUndo for CONTINUOUS params whose UI has no gesture hook (knob
   // onChange fires per pointermove): rapid same-key calls collapse into ONE undo step —
   // the pre-gesture snapshot. A pause (>1.2s), a different key, any discrete pushUndo,
-  // or an undo/redo starts a fresh step.
+  // or an undo/redo starts a fresh step. The coalesce key IS the snap scope.
   private _coalesceKey: string | null = null;
   private _coalesceAt = 0;
   pushUndoCoalesced(key: string) {
@@ -3408,27 +3891,49 @@ class AudioEngine {
       this._coalesceAt = now; // same gesture — keep the original snapshot
       return;
     }
-    this.pushUndo();
+    this.pushUndo(key);
     this._coalesceKey = key;
     this._coalesceAt = now;
   }
-  canUndo() {
-    return this._undo.length > 0;
+  canUndo(preferredScope?: string) {
+    if (!preferredScope) return this._undo.length > 0;
+    const top = this._undo[this._undo.length - 1];
+    return !!top && this._scopeMatches(top.scope, preferredScope);
   }
-  canRedo() {
-    return this._redo.length > 0;
+  canRedo(preferredScope?: string) {
+    if (!preferredScope) return this._redo.length > 0;
+    const top = this._redo[this._redo.length - 1];
+    return !!top && this._scopeMatches(top.scope, preferredScope);
   }
-  undo() {
-    const prev = this._undo.pop();
-    if (!prev) return;
-    this._redo.push(this._snapshot());
-    this._restoreArrangement(prev);
+  // When `preferredScope` is set (editor pane focused on a clip), only pop if the
+  // TOP snap matches that scope — roll-local undo without a second stack. Timeline
+  // focus passes no scope → undoes anything. Content scopes: "content:<id>" also
+  // matches slip/swing coalesced keys for the same clip.
+  private _scopeMatches(snapScope: string | undefined, preferred: string) {
+    const s = snapScope || "arrange";
+    if (s === preferred) return true;
+    // content:<id> preference also accepts slip:<id> / swing:<id> for that clip
+    if (preferred.startsWith("content:")) {
+      const id = preferred.slice("content:".length);
+      return s === "slip:" + id || s === "swing:" + id;
+    }
+    return false;
   }
-  redo() {
-    const next = this._redo.pop();
-    if (!next) return;
-    this._undo.push(this._snapshot());
-    this._restoreArrangement(next);
+  undo(preferredScope?: string) {
+    const top = this._undo[this._undo.length - 1];
+    if (!top) return;
+    if (preferredScope && !this._scopeMatches(top.scope, preferredScope)) return;
+    this._undo.pop();
+    this._redo.push(this._snapshot(top.scope));
+    this._restoreArrangement(top);
+  }
+  redo(preferredScope?: string) {
+    const top = this._redo[this._redo.length - 1];
+    if (!top) return;
+    if (preferredScope && !this._scopeMatches(top.scope, preferredScope)) return;
+    this._redo.pop();
+    this._undo.push(this._snapshot(top.scope));
+    this._restoreArrangement(top);
   }
   // bumped on every undo/redo restore — editors key on it to remount with the
   // restored content (a piano roll must never keep a stale working copy)
@@ -4417,6 +4922,7 @@ class AudioEngine {
       cc.loop,
       cc.norm,
       cc.stretch,
+      clip.slip,
       mode === "beats" || mode === "complex" ? this._warpGen : 0,
       this.arrangement.bpm,
       clip.lengthBeats,
@@ -4465,7 +4971,8 @@ class AudioEngine {
         const catchUp = Math.max(0, clipOffsetBeats) * bd;
         const when = Math.max(c.currentTime, whenOf(sb + clipOffsetBeats));
         const stopAt = whenOf(sb + clip.lengthBeats);
-        const input = s.startSec + catchUp * s.rate;
+        const slipSec = (clip.slip ?? 0) * bd;
+        const input = s.startSec + (catchUp + slipSec) * s.rate;
         // one-shot content may run out before the clip's edge (silence after)
         const contentOut = s.rate > 0 ? (s.endSec - input) / s.rate : 0;
         const off = s.looping
@@ -4516,20 +5023,27 @@ class AudioEngine {
       src.connect(g);
       const catchUp = Math.max(0, clipOffsetBeats) * bd; // seconds into the clip already elapsed
       const when = Math.max(c.currentTime, whenOf(sb + clipOffsetBeats));
-      // buffer offset advances at `rate` (buffer seconds per clip second)
-      const offSec = s.startSec + catchUp * s.rate;
+      // buffer offset advances at `rate` (buffer seconds per clip second); slip shifts
+      // content under fixed clip bounds (same concept as MIDI slippedLocals)
+      const slipSec = (clip.slip ?? 0) * bd;
+      let offSec = s.startSec + (catchUp + slipSec) * s.rate;
       // both paths are hard-cut at the clip's end on the timeline
       const stopAt = whenOf(sb + clip.lengthBeats);
       if (s.looping) {
         src.loop = true;
         src.loopStart = s.loopStartSec;
         src.loopEnd = s.loopEndSec;
+        // wrap slip+catchUp into the loop region so a large slip doesn't start past loopEnd
+        const loopLen = s.loopEndSec - s.loopStartSec;
+        if (loopLen > 0 && offSec >= s.loopEndSec) {
+          offSec = s.loopStartSec + ((offSec - s.loopStartSec) % loopLen);
+        }
         src.start(when, Math.min(offSec, s.endSec - 0.001));
         if (stopAt > when) src.stop(stopAt);
       } else {
         // one-shot: play the trimmed region, but never past the clip end (cut). The
         // buffer duration to schedule is the smaller of (content left) and (clip left).
-        const bufLeft = s.trimmedSec - catchUp * s.rate; // buffer seconds remaining in [a,b]
+        const bufLeft = s.trimmedSec - (catchUp + slipSec) * s.rate; // buffer seconds remaining in [a,b]
         const clipLeft = (stopAt - when) * s.rate; // buffer seconds until the clip end
         const remain = Math.min(bufLeft, clipLeft);
         if (remain <= 0.001) return;
@@ -4602,6 +5116,8 @@ class AudioEngine {
   private schedTick() {
     const c = this.ctx;
     if (!c || !this.sequencePlaying) return;
+    // audio record: roll past count-in → start PCM capture on the transport clock
+    this.maybeStartAudioCapture();
     // fire a pending quantized launch once the song reaches its boundary. Do it BEFORE
     // scheduling this window so the jump re-anchors first. `_doSeek` clears + re-ticks,
     // so null the queue first to avoid re-entry.
@@ -4717,19 +5233,17 @@ class AudioEngine {
             );
             const runs = this.buildRuns(clip.content.clip.notes);
             const contentLen = Math.max(0.25, clipBeats(clip.content.clip));
-            // song rule: content tiles to fill the clip length automatically (no loop flag)
-            const reps = Math.max(1, Math.ceil(clip.lengthBeats / contentLen));
-            for (let r = 0; r < reps; r++) {
-              const repOffset = r * contentLen;
-              for (const run of runs) {
-                if (run.startBeat + repOffset >= clip.lengthBeats) continue; // past the clip length
+            for (const run of runs) {
+              for (const local of slippedLocals(
+                run.startBeat,
+                clip.slip,
+                contentLen,
+                clip.lengthBeats,
+              )) {
                 // swing delays the run's head; the run rides along rigidly (bends/length unwarped)
                 emitRun(
                   run,
-                  clip.startBeat +
-                    run.startBeat +
-                    repOffset +
-                    swingDelay(run.startBeat + repOffset, clip.swing),
+                  clip.startBeat + local + swingDelay(local, clip.swing),
                   sel,
                   vibLane,
                 );
@@ -4740,8 +5254,6 @@ class AudioEngine {
             const kit = KITS.find((kt) => kt.id === pat.kitId) || this.kit;
             const dest = this.trackStrip(t);
             const contentLen = Math.max(0.25, pat.steps * STEP_BEATS);
-            // song rule: content tiles to fill the clip length automatically
-            const reps = Math.max(1, Math.ceil(clip.lengthBeats / contentLen));
             const notes = clip.content.notes; // lossless source of truth when present
             // per-lane mute/solo within THIS clip's pattern: a lane is audible unless
             // muted, or a solo is up on some lane and this isn't one.
@@ -4752,33 +5264,41 @@ class AudioEngine {
               if (m?.mute) return false;
               return !anySolo || !!m?.solo;
             };
-            for (let r = 0; r < reps; r++) {
-              const repOffset = r * contentLen;
-              if (notes) {
-                for (const nt of notes.notes) {
-                  if (nt.muted) continue; // deactivated hit
-                  const beat = repOffset + nt.start;
-                  if (beat >= clip.lengthBeats) continue;
-                  const lane = kit.lanes[nt.pitch - DRUM_BASE];
-                  if (lane && audible(lane.id))
-                    emitDrum(
-                      lane,
-                      clip.startBeat + beat + swingDelay(beat, clip.swing),
-                      nt.vel,
-                      dest,
-                    );
+            if (notes) {
+              for (const nt of notes.notes) {
+                if (nt.muted) continue; // deactivated hit
+                const lane = kit.lanes[nt.pitch - DRUM_BASE];
+                if (!lane || !audible(lane.id)) continue;
+                for (const local of slippedLocals(
+                  nt.start,
+                  clip.slip,
+                  contentLen,
+                  clip.lengthBeats,
+                )) {
+                  emitDrum(
+                    lane,
+                    clip.startBeat + local + swingDelay(local, clip.swing),
+                    nt.vel,
+                    dest,
+                  );
                 }
-              } else {
-                for (let s = 0; s < pat.steps; s++) {
-                  const stepBeat = repOffset + s * STEP_BEATS;
-                  if (stepBeat >= clip.lengthBeats) continue;
+              }
+            } else {
+              for (let s = 0; s < pat.steps; s++) {
+                const stepBeat = s * STEP_BEATS;
+                for (const local of slippedLocals(
+                  stepBeat,
+                  clip.slip,
+                  contentLen,
+                  clip.lengthBeats,
+                )) {
                   for (const lane of kit.lanes) {
                     if (!pat.on[lane.id]?.[s] || !audible(lane.id)) continue;
                     emitDrum(
                       lane,
                       clip.startBeat +
-                        stepBeat +
-                        swingDelay(stepBeat, clip.swing),
+                        local +
+                        swingDelay(local, clip.swing),
                       pat.accent[lane.id]?.[s] ? 1 : 0.7,
                       dest,
                     );

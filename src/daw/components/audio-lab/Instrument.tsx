@@ -55,8 +55,8 @@ const TABS = [
   { id: "voices", label: "VOICES" },
 ] as const;
 
-export function Instrument() {
-  const eng = useEngine(["patch", "synth", "preset", "midi"]);
+export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boolean } = {}) {
+  const eng = useEngine(["patch", "synth", "preset", "midi", "transport"]);
   const id = eng.synthPatch;
   const p: SynthPatch = eng.currentPatch();
   const builtin = eng.isBuiltinPatch(id);
@@ -64,16 +64,21 @@ export function Instrument() {
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<"sources" | "filter" | "amp" | "lfo" | "voices">("sources");
 
-  // computer-keyboard state (Ableton convention): Z/X octave, C/V velocity
-  const [octave, setOctave] = useState(0);
-  const [vel, setVel] = useState(0.85);
+  // computer-keyboard state (Ableton convention): Z/X octave, C/V velocity.
+  // Studio ArrangementPage owns typing keys when `enableTypingKeys` is false (M toggle)
+  // — then oct/vel chips read engine.midiOctave / midiVel instead.
+  const [localOctave, setLocalOctave] = useState(0);
+  const [localVel, setLocalVel] = useState(0.85);
   const octaveRef = useRef(0);
   const velRef = useRef(0.85);
+  const octave = enableTypingKeys ? localOctave : eng.midiOctave;
+  const vel = enableTypingKeys ? localVel : eng.midiVel;
   useEffect(() => {
     octaveRef.current = octave;
     velRef.current = vel;
   }, [octave, vel]);
   useEffect(() => {
+    if (!enableTypingKeys) return;
     const held: Record<string, number> = {};
     const dn = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -81,10 +86,10 @@ export function Instrument() {
       const tag = (target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || target.isContentEditable) return;
       const key = e.key.toLowerCase();
-      if (key === "z") return setOctave((o) => Math.max(-3, o - 1));
-      if (key === "x") return setOctave((o) => Math.min(3, o + 1));
-      if (key === "c") return setVel((v) => Math.max(0.1, Math.round((v - 0.1) * 100) / 100));
-      if (key === "v") return setVel((v) => Math.min(1, Math.round((v + 0.1) * 100) / 100));
+      if (key === "z") return setLocalOctave((o) => Math.max(-3, o - 1));
+      if (key === "x") return setLocalOctave((o) => Math.min(3, o + 1));
+      if (key === "c") return setLocalVel((v) => Math.max(0.1, Math.round((v - 0.1) * 100) / 100));
+      if (key === "v") return setLocalVel((v) => Math.min(1, Math.round((v + 0.1) * 100) / 100));
       const base = PL_KEYMAP[key];
       if (base !== undefined && held[key] === undefined) {
         const m = base + octaveRef.current * 12;
@@ -105,7 +110,7 @@ export function Instrument() {
       window.removeEventListener("keydown", dn);
       window.removeEventListener("keyup", up);
     };
-  }, []);
+  }, [enableTypingKeys]);
 
   const u = (partial: Parameters<typeof engine.updateActivePatch>[0]) => engine.updateActivePatch(partial);
   // voicing (poly/mono + unison): read with UX-friendly defaults so raising the voices

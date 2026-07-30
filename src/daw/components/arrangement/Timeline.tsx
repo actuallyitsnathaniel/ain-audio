@@ -13,7 +13,7 @@ import { useRafLoop } from "../../hooks/useRafLoop";
 import { openContextMenu } from "../context-menu-bus";
 import { clipBeats } from "../../data/clips";
 import { DRUM_BASE } from "../../data/drum-midi";
-import { type ArrClip, type ArrTrack } from "../../data/arrangement";
+import { type ArrClip, type ArrTrack, slippedLocals } from "../../data/arrangement";
 
 const HEAD_H = 22; // ruler height
 const ROW_H = 64; // track lane height (must match ArrangementPage ROW_H)
@@ -31,6 +31,8 @@ type Drag =
   // selected clip's gesture-start position → the whole selection drags as one unit
   | { mode: "move"; trackId: string; clipId: string; grabBeat: number; base: number; moved: boolean; dup: boolean; multi?: { trackId: string; clipId: string; base: number }[] }
   | { mode: "resize"; trackId: string; clipId: string; moved?: boolean }
+  // Shift+⌥ drag: slip content under fixed clip bounds (does NOT move startBeat)
+  | { mode: "slip"; trackId: string; clipId: string; grabBeat: number; baseSlip: number; moved: boolean }
   | { mode: "seek"; last: number }
   | { mode: "brace"; anchor: number }
   // drag over empty lane space: paint a time selection + marquee-select intersecting clips
@@ -113,6 +115,20 @@ export function Timeline({
 
     const hit = hitClip(x, y);
     if (hit) {
+      // Shift+⌥ on the clip body = SLIP (content slides; bounds stay). Must beat
+      // shift-toggle and ⌥-dup so the modifiers compose into one dedicated gesture.
+      if (e.shiftKey && e.altKey && !hit.edge) {
+        if (!engine.isClipSelected(hit.c.id)) engine.selectClip(hit.c.id);
+        drag.current = {
+          mode: "slip",
+          trackId: hit.t.id,
+          clipId: hit.c.id,
+          grabBeat: xToBeat(x),
+          baseSlip: hit.c.slip ?? 0,
+          moved: false,
+        };
+        return;
+      }
       // shift+click toggles in the multi-selection; a bare click selects just this clip
       if (e.shiftKey) engine.toggleClipInSel(hit.c.id);
       else if (!engine.isClipSelected(hit.c.id)) engine.selectClip(hit.c.id);
@@ -160,7 +176,7 @@ export function Timeline({
     if (hit) return hit.edge ? "ew-resize" : "grab";
     return yToTrackIndex(y) < tracks().length ? "crosshair" : "default"; // lane: marquee/insert
   };
-  const DRAG_CURSOR: Record<string, string> = { move: "grabbing", resize: "ew-resize", marquee: "crosshair", seek: "pointer", brace: "col-resize" };
+  const DRAG_CURSOR: Record<string, string> = { move: "grabbing", resize: "ew-resize", slip: "ew-resize", marquee: "crosshair", seek: "pointer", brace: "col-resize" };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const d = drag.current;
@@ -206,6 +222,12 @@ export function Timeline({
         engine.moveClip(d.trackId, d.clipId, d.base + dBeat, toTrack?.id);
         if (toTrack && toTrack.id !== d.trackId && toTrack.kind === tracks().find((t) => t.id === d.trackId)?.kind) d.trackId = toTrack.id;
       }
+    } else if (d.mode === "slip") {
+      d.moved = true;
+      // drag right → content slides right under the window → deeper into the sample/phrase
+      // (setClipSlip coalesces the whole gesture into one undo step)
+      const dBeat = (cmd(e) ? xToBeat(x) : snapBeat(xToBeat(x), false)) - (cmd(e) ? d.grabBeat : snapBeat(d.grabBeat, false));
+      engine.setClipSlip(d.trackId, d.clipId, d.baseSlip + dBeat);
     } else if (d.mode === "resize") {
       if (!d.moved) { engine.pushUndo(); d.moved = true; } // snapshot once
       const c = tracks().find((t) => t.id === d.trackId)?.clips.find((x) => x.id === d.clipId);
@@ -566,14 +588,17 @@ export function Timeline({
             // content end. The wave TAPERS into each one so a repeat reads before the
             // seam line does. linear beats of a buffer position = (sec−start)/rate/spb.
             const contentBeat = (sec: number) => (sec - wv.startSec) / wv.rate / wv.secPerBeat;
+            const slip = c.slip ?? 0;
             const boundaries: number[] = [];
             let oneShotEnd: number | null = null;
             if (wv.looping) {
               const period = loopLen / wv.rate / wv.secPerBeat;
-              if (period > 0.05) for (let b = contentBeat(wv.loopEndSec); b < c.lengthBeats - 1e-6; b += period) boundaries.push(b);
+              if (period > 0.05) for (let b = contentBeat(wv.loopEndSec) - slip; b < c.lengthBeats - 1e-6; b += period) {
+                if (b > 1e-6) boundaries.push(b);
+              }
             } else {
-              const e = contentBeat(wv.endSec);
-              if (e < c.lengthBeats - 1e-6) { oneShotEnd = e; boundaries.push(e); }
+              const e = contentBeat(wv.endSec) - slip;
+              if (e < c.lengthBeats - 1e-6) { oneShotEnd = e; if (e > 1e-6) boundaries.push(e); }
             }
             const bpx = boundaries.map((b) => beatToX(c.startBeat + b));
             const TAPER_PX = 12;
@@ -585,7 +610,8 @@ export function Timeline({
             for (let px = px0; px < px1; px++) {
               const clipBeat = xToBeat(px) - c.startBeat;
               if (clipBeat < 0) continue;
-              let pos = wv.startSec + clipBeat * wv.secPerBeat * wv.rate;
+              // slip: play deeper into the buffer at the left edge (matches scheduleAudioClip)
+              let pos = wv.startSec + (clipBeat + slip) * wv.secPerBeat * wv.rate;
               if (wv.looping) {
                 if (pos > wv.loopEndSec && loopLen > 0) pos = wv.loopStartSec + ((pos - wv.loopStartSec) % loopLen);
               } else if (pos >= wv.endSec) {
@@ -623,20 +649,16 @@ export function Timeline({
           });
           const span = Math.max(1, hi - lo);
           const clen = Math.max(0.25, clipBeats(c.content.clip));
-          const reps = Math.min(64, Math.max(1, Math.ceil(c.lengthBeats / clen)));
           g.fillStyle = "rgba(255,255,255,0.55)";
-          for (let r = 0; r < reps; r++) {
-            const off = r * clen;
-            notes.forEach((n) => {
-              const sb2 = off + n.start;
-              if (sb2 >= c.lengthBeats) return;
+          notes.forEach((n) => {
+            for (const sb2 of slippedLocals(n.start, c.slip, clen, c.lengthBeats)) {
               const nx = x + (sb2 / c.lengthBeats) * cw;
               const nw = Math.max(1, (n.length / c.lengthBeats) * cw);
               const ny = y + 6 + (1 - (n.pitch - lo) / span) * (ROW_H - 16);
-              if (nx > x + cw) return;
+              if (nx > x + cw) continue;
               g.fillRect(nx, ny, Math.min(nw, x + cw - nx), 2);
-            });
-          }
+            }
+          });
         }
         // end-corner marker (Ableton-style): ◥ = the clip simply ends here;
         // ◥◥ doubled = the content loops/tiles to fill the clip
@@ -668,19 +690,15 @@ export function Timeline({
             let lo = Infinity, hi = -Infinity;
             dots.forEach((d) => { lo = Math.min(lo, d.lane); hi = Math.max(hi, d.lane); });
             const span = Math.max(1, hi - lo);
-            const reps = Math.min(64, Math.max(1, Math.ceil(c.lengthBeats / clen)));
             g.fillStyle = "rgba(255,255,255,0.55)";
-            for (let r = 0; r < reps; r++) {
-              const off = r * clen;
-              dots.forEach((d) => {
-                const sb2 = off + d.beat;
-                if (sb2 >= c.lengthBeats) return;
+            dots.forEach((d) => {
+              for (const sb2 of slippedLocals(d.beat, c.slip, clen, c.lengthBeats)) {
                 const dx = x + (sb2 / c.lengthBeats) * cw;
                 const dy = y + 6 + (1 - (d.lane - lo) / span) * (ROW_H - 16);
-                if (dx > x + cw - 2) return;
+                if (dx > x + cw - 2) continue;
                 g.fillRect(dx, dy, 2, 2);
-              });
-            }
+              }
+            });
           }
         }
         // name + selection outline (always full alpha)

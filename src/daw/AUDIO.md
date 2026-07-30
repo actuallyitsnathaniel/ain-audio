@@ -63,15 +63,18 @@ in the chain — it's the fixed tail, controlled by `engine.limiter` + `engine.s
 The MASTER track's fader is `engine.masterVol` / `setMasterVol(v)` (the final `master` gain,
 persisted in `ain-master-vol`).
 
-**Per-track chains** — each arrangement track strip is `gain → [devices] → pan → sum`,
-persisted on the track (`ArrTrack.devices`, absent = no FX). Mutations mirror the master:
+**Per-track chains** — each arrangement track strip is `in → [devices] → gain → pan → sum`
+(fader **post-FX** so level-dependent devices like crush keep their character when volume
+moves; mute/solo ride the same post-FX gain), persisted on the track (`ArrTrack.devices`,
+absent = no FX). Mutations mirror the master:
 `addTrackDevice(trackId, type)`, `removeTrackDevice(trackId, id)`, `moveTrackDevice(trackId,
 id, to)`, `setTrackDeviceParams(trackId, id, params)`; `trackDevices(trackId)` reads. All
 mutations emit `"fx"`.
 
 **Gain staging + metering (channel-strip mixer).** Track/master volume is **linear gain in
 `[0, GAIN_MAX]`** where `GAIN_MAX = db2lin(6)` (≈ +6 dB headroom above unity). New tracks default
-to **unity (`vol: 1`, 0 dB)**. Faders use a **dB taper** ([db-fader.ts](db-fader.ts), self-checked
+to **unity (`vol: 1`, 0 dB)**. Track faders sit **after** the per-track FX chain (see strip
+order above). Faders use a **dB taper** ([db-fader.ts](db-fader.ts), self-checked
 in `db-fader.check.mjs`): position `p∈[0,1]` maps unity at `p=0.75`, `+6 dB` at the top, `−60 dB`
 → −∞ below — two segments linear-in-dB (equal travel = equal dB). `posToGain`/`gainToPos` are exact
 inverses (legacy `vol` values just re-derive a position). **Per-strip metering**: each track strip
@@ -237,6 +240,12 @@ warp ratio — **pitch-preserved under beats/complex**, tape-style under off/var
 (`audioClipRate` divides by it). The factor telescopes correctly across a drag (re-derived per
 move) and joins the wave cache key.
 
+**Shift+⌥ drag = SLIP (all clip kinds).** In-place content offset: clip `startBeat`/`lengthBeats`
+stay put, `ArrClip.slip` (beats, absent/0 = none) slides the underlying MIDI/drum/audio under
+the window. Positive slip = play deeper into the content at the left edge. Scheduler + wave/
+mini-previews apply it via `slippedLocals` (MIDI/drum) and buffer-offset + slip (audio) —
+notes stay stored unslipped (same lossless idea as swing). Coalesced undo (`slip:<clipId>`).
+
 **Multi-clip mouse drag.** Dragging a clip that's part of a multi-selection moves the whole
 selection: the Timeline snapshots every selected clip's start at pointer-down and each move calls
 `engine.dragSelectionTo(items, delta)` — a UNIFORM delta (clamped at beat 0, like
@@ -383,7 +392,22 @@ the ONE cursor; resume plays from there), `stopArrangementToStart`/`returnToStar
 keep the playhead in a band). **Metronome**: `metronome`/`metronomeVol` → `metroClick` (square blip,
 2 kHz accent on the bar downbeat / 1.4 kHz else) fired per integer beat in the arrangement branch,
 deduped via `_metroThrough`. **Count-in**: `countInBars` (0–2) pre-schedules that many bars of click
-before the anchor, pushing `_seqAnchorTime` forward. Keyboard: Space = play/stop (from the cursor),
+before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slice) + **live audio record** (second slice):
+`engine.toggleRecord()` (● in the playback pane, **Shift+R**) arms a take.
+- **MIDI/drum**: writes Note On/Off from the live keyboard / Web MIDI into the
+  selected/armed midi or drum clip (creates a 1-bar clip at the cursor if needed).
+- **Audio**: arm an audio track (requests mic/interface via `getUserMedia`), then ● —
+  after count-in, PCM is captured through a ScriptProcessor into a new imported audio
+  clip on that track (persisted via `encodeWav` → IndexedDB). No input monitoring yet
+  (avoids speaker feedback).
+Count-in is monitor-only for MIDI and capture-gated for audio until
+`currentTime >= _seqAnchorTime`. Press ● again to punch out without stopping transport;
+Space/Stop ends the take. No punch-in markers or takes ladder yet.
+**Computer MIDI Keyboard** (`engine.midiKeys`, **M** / `keys` chip in the playback pane): Ableton
+toggle between single-key shortcuts (off — L loop, R reverse…) and typing-keyboard pitches
+(on — Ableton A–; row plays the **armed** or selected MIDI track via `noteOn`; Z/X octave,
+C/V velocity). Plays without a clip selected — arming alone is enough (Instrument mounts for
+the armed track too). Keyboard: Space = play/stop (from the cursor),
 Home = `cursorToStart`, End = `cursorToEnd`, L = loop; ←/→ move the cursor when nothing is
 selected (⌘ fine, ⌘⇧ clip edges — see the ONE-cursor section).
 
@@ -399,17 +423,25 @@ MIDI Note Editor (non-draw-mode). The canvas is `tabIndex=0` (focusable) so keyb
 - **Select:** click a note · shift+click add/remove · drag empty → marquee (shift adds) ·
   shift+click a gutter key → toggle the whole pitch row · esc clears. Selected notes get a white
   outline; the HUD (top-right) shows live `sel / note / vel / len`.
-- **Edit (mouse):** **double-click empty → create** (snap 1/16; a plain click only deselects —
-  Live's EDITOR mode, not Draw mode) · drag a selected note → move the whole selection ·
+- **Edit (mouse, Editor mode — default):** **double-click empty → create** (snap 1/16; a plain
+  click only deselects — Live's EDITOR mode) · drag a selected note → move the whole selection ·
   drag right edge → resize the selection · **hold ⌘/ctrl/⌥ to bypass snap** · **⌥+drag → duplicate**
   the selection (clone-in-place then move) · double-click / right-click a note → delete.
-- **Edit (keys, when focused):** ←/→ nudge · ⌥+←/→ nudge without snap · shift+←/→ resize · ↑/↓
+- **Edit (mouse, Draw mode — toggle with `B`):** **single-click empty → create** one grid cell,
+  then drag to set length (Ableton pencil). Select/move/resize/delete gestures otherwise match
+  Editor mode. HUD shows `mode DRAW` while active. Default stays Editor — Draw is strictly additive.
+- **Edit (keys, when focused):** **`B` toggle Draw/Editor** · ←/→ nudge · ⌥+←/→ nudge without snap ·
+  shift+←/→ resize · ↑/↓
   transpose semitone · **shift+↑/↓ octave** · **⌘/ctrl+↑/↓ velocity ±10** · **0 mute/unmute**
   (deactivate, Ableton: gray + never voiced — `Note.muted`, filtered in `buildRuns` and the
   drum-note path) · ⌘/ctrl+A select all · ⌘/ctrl+D duplicate (+1 beat) · delete/backspace · esc.
   A transpose/velocity change blips the representative note so you hear the edit. The same "0"
   on the TIMELINE pane deactivates the selected clips (`ArrClip.muted`, `toggleMuteSelection` —
   dim, skipped by `schedTick`, live audio stopped; undoable).
+- **Undo (pane-scoped on the shared stack):** content edits push `scope: "content:<clipId>"`
+  (coalesced). With the **editor** pane focused, ⌘Z/⌘Y only pop when the top snap matches that
+  clip's content/slip/swing scope — roll-local without a second undo system. Timeline focus
+  undoes anything.
 - **Navigate:** wheel → scroll pitch · shift+wheel → scroll time · ⌘/ctrl+wheel → zoom time around
   cursor · hold Space (or middle-drag) → pan. Wheel is a **non-passive native listener** so it can
   `preventDefault` the page scroll.

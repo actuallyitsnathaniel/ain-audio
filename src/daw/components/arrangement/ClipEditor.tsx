@@ -128,8 +128,9 @@ export function ClipEditor({ trackId, clipId }: { trackId: string; clipId: strin
   useEngine(["arrange"]);
   const clip = engine.getArrClip(trackId, clipId);
   // undo/redo bumps undoStamp → the roll/grid remount and reload the RESTORED content
-  // (they edit a working copy, so without this they'd re-commit stale notes)
-  const stamp = engine.undoStamp;
+  // (they edit a working copy, so without this they'd re-commit stale notes).
+  // recordStamp remounts after a MIDI take so newly captured notes appear.
+  const stamp = engine.undoStamp + ":" + engine.recordStamp;
   if (!clip) return null;
 
   if (clip.content.kind === "midi") {

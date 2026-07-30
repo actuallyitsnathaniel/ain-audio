@@ -93,6 +93,13 @@ export function PlaybackPane() {
         <button className={iconBtn + (playing ? activeCls : idle)} onClick={() => engine.toggleArrangement()} title="play / stop (Space)">
           <span className={playing ? "icon-pause small" : "icon-play small"} aria-hidden />
         </button>
+        <button
+          className={iconBtn + (eng.recording ? "border-red-500 bg-red-500 text-[#111]" : idle)}
+          onClick={() => engine.toggleRecord()}
+          title="record into the armed track (Shift+R) · MIDI notes or live audio input · count-in applies · press again to punch out"
+        >
+          <span className={"inline-block size-2.5 rounded-full " + (eng.recording ? "bg-[#111]" : "bg-red-500")} aria-hidden />
+        </button>
         <button className={iconBtn + idle} onClick={() => engine.stopArrangementToStart()} title="stop → return to start">⏹</button>
       </div>
 
@@ -169,6 +176,15 @@ export function PlaybackPane() {
       {/* follow playhead */}
       <button className={ctl + px + onOff(eng.followPlayhead)} onClick={() => engine.setFollowPlayhead(!eng.followPlayhead)} title="auto-scroll the timeline to follow the playhead">
         follow
+      </button>
+
+      {/* Ableton Computer MIDI Keyboard (M) — letter keys play the armed track */}
+      <button
+        className={ctl + px + onOff(eng.midiKeys)}
+        onClick={() => engine.toggleMidiKeys()}
+        title="Computer MIDI Keyboard (M): ON = A–; play the armed/selected track · OFF = single-key shortcuts (L loop, R reverse…)"
+      >
+        keys {eng.midiKeys ? "on" : "off"}
       </button>
 
       {/* tempo + tap */}

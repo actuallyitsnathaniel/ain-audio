@@ -106,7 +106,8 @@ export function RollLab() {
       <PianoRoll />
       <div className="flex flex-col gap-0.75 font-mono text-[10.5px] leading-[1.55] tracking-[0.03em] text-faint">
         <span>
-          <span className="text-dim">draw / select</span> · click empty to draw · click a note to select · shift+click
+          <span className="text-dim">draw / select</span> · <span className="text-dim">B</span> toggles Draw mode
+          (single-click creates) · default Editor = double-click to create · click a note to select · shift+click
           to add · drag empty for a marquee · double-click / right-click to delete · tap left keys to hear
         </span>
         <span>

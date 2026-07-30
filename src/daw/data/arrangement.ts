@@ -64,6 +64,11 @@ export interface ArrClip {
   color?: string; // optional per-clip tint (defaults by track/kind)
   swing?: number; // per-clip swing %, 0.5 (straight ≡ absent) … 0.75 (hard); applied at schedule time
   muted?: boolean; // deactivated (Ableton "0"): stays on the timeline, drawn dim, never scheduled
+  // Slip edit: in-place content offset in beats (absent/0 = none). Clip start/end stay
+  // put; positive slip = play deeper into the content at the left edge (classic DAW
+  // "slip" — timeline Shift+⌥ drag). Applied at schedule + wave/preview time; notes
+  // stay stored unslipped (same lossless idea as swing).
+  slip?: number;
 }
 
 // ── warp modes (the per-clip dropdown, Ableton-style) ──
@@ -98,6 +103,28 @@ export function swingDelay(beat: number, swing?: number): number {
       ? local * (apex / 0.25)
       : apex + (local - 0.25) * ((0.5 - apex) / 0.25);
   return warped - local;
+}
+
+// Clip-local beat(s) where a content event at `contentBeat` sounds under slip.
+// Positive slip shifts content left under the window (earlier material leaves the
+// left edge; later material enters). Tiling repeats every `contentLen` to fill
+// `lengthBeats` (song rule). Returns locals in [0, lengthBeats).
+export function slippedLocals(
+  contentBeat: number,
+  slip: number | undefined,
+  contentLen: number,
+  lengthBeats: number,
+): number[] {
+  const s = slip ?? 0;
+  const period = Math.max(0.25, contentLen);
+  const out: number[] = [];
+  const r0 = Math.floor(-(contentBeat - s) / period) - 1;
+  for (let r = r0; ; r++) {
+    const L = contentBeat - s + r * period;
+    if (L >= lengthBeats) break;
+    if (L >= -1e-9) out.push(L < 0 ? 0 : L);
+  }
+  return out;
 }
 
 export type TrackKind = "midi" | "drum" | "audio";

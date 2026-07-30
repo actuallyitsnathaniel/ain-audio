@@ -15,6 +15,7 @@ import { Knob } from "../Knob";
 import { FxRack } from "../audio-lab/FxRack";
 import { FxChainRack } from "../FxChainRack";
 import { Instrument } from "../audio-lab/Instrument";
+import { PL_KEYMAP } from "../audio-lab/synth-ui";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
 import { PlaybackPane } from "./PlaybackPane";
@@ -25,13 +26,25 @@ import type { ArrTrack, TrackKind } from "../../data/arrangement";
 const HEAD_H = 22; // must match Timeline
 const ROW_H = 64; // must match Timeline ROW_H
 const chip = (active: boolean, danger?: boolean) =>
-  "rounded-[3px] border px-1.5 py-0.5 font-mono text-[9px] tracking-[0.05em] transition-colors " +
+  "rounded-[3px] border px-1.5 py-0.5 font-mono text-[9px] tracking-[0.05em] transition-colors duration-150 " +
   (active
     ? danger
       ? "border-[color-mix(in_srgb,#e0654f_60%,transparent)] bg-[color-mix(in_srgb,#e0654f_22%,transparent)] text-[#e98c79]"
       : "border-[color-mix(in_srgb,var(--accent)_60%,transparent)] bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-accent"
     : "border-line text-faint hover:text-dim");
 
+/** Track arm — same vocabulary as transport ●: square chip + red disk (not a naked circle). */
+const armChip = (armed: boolean) =>
+  "flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[3px] border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/60 " +
+  (armed
+    ? "border-red-500 bg-[color-mix(in_srgb,#ef4444_28%,transparent)] hover:bg-[color-mix(in_srgb,#ef4444_40%,transparent)]"
+    : "border-line hover:border-[color-mix(in_srgb,#ef4444_55%,transparent)]");
+
+const armDot = (armed: boolean) =>
+  "inline-block size-2 rounded-full transition-[background-color,box-shadow] duration-150 " +
+  (armed
+    ? "bg-red-500 shadow-[0_0_6px_color-mix(in_srgb,#ef4444_55%,transparent)]"
+    : "bg-[color-mix(in_srgb,#ef4444_40%,#5c5c66)]");
 
 function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack; armed: boolean; selected: boolean; fxOpen: boolean; onArm: (id: string) => void; onFx: (id: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -85,19 +98,35 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
             {t.name}
           </button>
         )}
-        {t.kind === "midi" && (
-          <button className={chip(armed)} onClick={() => onArm(t.id)} title="arm for keyboard">
-            arm
-          </button>
-        )}
         <span className="ml-auto flex items-center gap-0.75">
+          {/* arm sits with M/S — same square chrome as transport ● */}
+          <button
+            type="button"
+            aria-pressed={armed}
+            aria-label={armed ? "disarm track" : "arm track for record"}
+            onClick={() => onArm(t.id)}
+            title={
+              t.kind === "audio"
+                ? armed
+                  ? "armed — click to disarm"
+                  : "arm for audio input (mic/interface) · ● to record"
+                : armed
+                  ? "armed — click to disarm"
+                  : t.kind === "drum"
+                    ? "arm for pads / MIDI · ● records into a drum clip"
+                    : "arm for keyboard / MIDI · M for computer keys"
+            }
+            className={armChip(armed)}
+          >
+            <span className={armDot(armed)} aria-hidden />
+          </button>
           <button className={chip(t.mute, true)} onClick={() => engine.toggleTrackMute(t.id)} title="mute">
             M
           </button>
           <button className={chip(t.solo)} onClick={() => engine.toggleTrackSolo(t.id)} title="solo">
             S
           </button>
-          <button className="rounded-[3px] border border-line px-1.25 py-0.5 font-mono text-[9px] text-faint transition-colors hover:border-[#e0654f] hover:text-[#e98c79]" onClick={() => engine.removeTrack(t.id)} title="remove track">
+          <button className="rounded-[3px] border border-line px-1.25 py-0.5 font-mono text-[9px] text-faint transition-colors duration-150 hover:border-[#e0654f] hover:text-[#e98c79]" onClick={() => engine.removeTrack(t.id)} title="remove track">
             ✕
           </button>
         </span>
@@ -181,7 +210,7 @@ function TrackFxPanel({ t }: { t: ArrTrack }) {
 }
 
 export function ArrangementPage() {
-  const eng = useEngine(["arrange", "transport", "preset", "patch", "synth", "select", "fx"]);
+  const eng = useEngine(["arrange", "transport", "preset", "patch", "synth", "select", "fx", "clip"]);
   const tracks = eng.arrangement.tracks;
   // which track's FX panel is open (toggled from the track header's fx chip)
   const [fxTrackId, setFxTrackId] = useState<string | null>(null);
@@ -209,16 +238,87 @@ export function ArrangementPage() {
   const [editSel, setEditSel] = useState<{ trackId: string; clipId: string } | null>(null);
   const primary = eng.selClips.size === 1 ? engine.primaryClip() : null;
   const sel = primary ?? (editSel && engine.getArrClip(editSel.trackId, editSel.clipId) ? editSel : null);
-  // the MIDI track whose clip is being edited — its instrument is what the INSTRUMENT
-  // panel edits (patches are shared by key, so editing here changes that track's sound).
+  // Instrument panel: selected MIDI clip's track, OR the armed MIDI track (so arming
+  // alone is enough to hear/edit — no clip selection required).
   const selTrack = sel ? tracks.find((t) => t.id === sel.trackId) : undefined;
-  const selMidiTrack = selTrack?.kind === "midi" ? selTrack : undefined;
+  const armedTrack = eng.armedChannel
+    ? tracks.find((t) => t.id === eng.armedChannel)
+    : undefined;
+  const instrumentTrack =
+    (selTrack?.kind === "midi" ? selTrack : undefined) ||
+    (armedTrack?.kind === "midi" ? armedTrack : undefined);
+  const selMidiTrack = instrumentTrack;
 
   useEffect(() => {
     void engine.loadPersistedAudio(); // re-hydrate imported audio clips from IndexedDB
     engine.warmArrangement(); // decode restored tracks' instruments up front
     return () => {
       if (engine.arrangeMode) engine.stopArrangement();
+    };
+  }, []);
+
+  // Ableton Computer MIDI Keyboard (M): when on, letter keys play the armed/selected
+  // track via noteOn — independent of whether Instrument is mounted (that was the bug).
+  useEffect(() => {
+    const held: Record<string, number> = {};
+    const typing = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      const tag = (el?.tagName || "").toLowerCase();
+      return tag === "input" || tag === "textarea" || !!el?.isContentEditable;
+    };
+    const releaseAll = () => {
+      for (const k of Object.keys(held)) {
+        engine.noteOff(held[k]);
+        delete held[k];
+      }
+    };
+    const dn = (e: KeyboardEvent) => {
+      if (!engine.midiKeys) return;
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (typing(e.target)) return;
+      const key = e.key.toLowerCase();
+      if (key === "z") {
+        e.preventDefault();
+        engine.setMidiOctave(engine.midiOctave - 1);
+        return;
+      }
+      if (key === "x") {
+        e.preventDefault();
+        engine.setMidiOctave(engine.midiOctave + 1);
+        return;
+      }
+      if (key === "c") {
+        e.preventDefault();
+        engine.setMidiVel(engine.midiVel - 0.1);
+        return;
+      }
+      if (key === "v") {
+        e.preventDefault();
+        engine.setMidiVel(engine.midiVel + 0.1);
+        return;
+      }
+      const base = PL_KEYMAP[key];
+      if (base === undefined || held[key] !== undefined) return;
+      e.preventDefault();
+      const m = base + engine.midiOctave * 12;
+      held[key] = m;
+      engine.noteOn(m, engine.midiVel);
+    };
+    const up = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if (held[key] !== undefined) {
+        engine.noteOff(held[key]);
+        delete held[key];
+      }
+      // toggling M off mid-hold: release everything
+      if (key === "m" && !engine.midiKeys) releaseAll();
+    };
+    window.addEventListener("keydown", dn);
+    window.addEventListener("keyup", up);
+    return () => {
+      releaseAll();
+      window.removeEventListener("keydown", dn);
+      window.removeEventListener("keyup", up);
     };
   }, []);
 
@@ -238,21 +338,57 @@ export function ArrangementPage() {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e.target)) return;
       const meta = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+      // Ableton M — Computer MIDI Keyboard on/off (before other letter shortcuts)
+      if (key === "m" && !meta && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        engine.toggleMidiKeys();
+        return;
+      }
+      // when MIDI keys are on, letter-row pitches + Z/X/C/V are owned by the play
+      // handler above — don't steal them for L-loop / etc.
+      if (engine.midiKeys && !meta) {
+        if (PL_KEYMAP[key] !== undefined || key === "z" || key === "x" || key === "c" || key === "v") return;
+      }
       // ── GLOBAL: transport + undo, whatever pane is focused ──
       if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
       if (e.code === "Home") { e.preventDefault(); engine.cursorToStart(); return; }
       if (e.code === "End") { e.preventDefault(); engine.cursorToEnd(); return; }
-      if (e.key.toLowerCase() === "l" && !meta) {
+      if (key === "l" && !meta) {
         e.preventDefault();
         const l = engine.arrangement.loop;
         if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
         else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
         return;
       }
+      // MIDI record (first slice) — Shift+R so bare R keeps reverse-selection
+      if (key === "r" && e.shiftKey && !meta) {
+        e.preventDefault();
+        engine.toggleRecord();
+        return;
+      }
       // (undo keeps the surviving selection, so the editor stays open — the ClipEditor
-      // remounts its roll/grid via engine.undoStamp to show the restored content)
-      if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) engine.redo(); else engine.undo(); return; }
-      if (meta && e.key.toLowerCase() === "y") { e.preventDefault(); engine.redo(); return; }
+      // remounts its roll/grid via engine.undoStamp to show the restored content).
+      // Editor pane: scope ⌘Z to that clip's content/slip/swing edits (roll-local) —
+      // timeline focus undoes anything on the shared stack. Read clip id live from the
+      // engine (this effect has [] deps — don't close over React `sel`).
+      if (meta && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        const clip = engine.selClips.size === 1 ? engine.primaryClip() : null;
+        const scope =
+          paneRef.current === "editor" && clip ? "content:" + clip.clipId : undefined;
+        if (e.shiftKey) engine.redo(scope);
+        else engine.undo(scope);
+        return;
+      }
+      if (meta && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        const clip = engine.selClips.size === 1 ? engine.primaryClip() : null;
+        const scope =
+          paneRef.current === "editor" && clip ? "content:" + clip.clipId : undefined;
+        engine.redo(scope);
+        return;
+      }
       // grid size: ⌘1 finer · ⌘2 coarser (Ableton) — PANE-AWARE: steps the timeline's
       // snap ladder or the piano roll's own grid, whichever pane has key focus
       if (meta && (e.key === "1" || e.key === "2")) {
@@ -423,7 +559,7 @@ export function ArrangementPage() {
               {/* selected-clip editor (piano roll) sits directly under the timeline */}
               {sel && <ClipEditor trackId={sel.trackId} clipId={sel.clipId} />}
               {/* selected MIDI track's instrument designer (edits that track's patch) */}
-              {selMidiTrack && <Instrument />}
+              {selMidiTrack && <Instrument enableTypingKeys={false} />}
               {/* the open FX chain: a track's, or the master's (from the MASTER row's fx chip) */}
               {fxTrack && <TrackFxPanel t={fxTrack} />}
               {fxTrackId === MASTER_ID && <FxRack hint="master fx — every track sums into this chain · add devices, drag ⠿ to reorder" />}
@@ -435,7 +571,7 @@ export function ArrangementPage() {
           <Link to="/" className="rounded-[3px] border border-line px-2.5 py-1.25 text-dim transition-colors hover:border-accent hover:text-accent">
             ← back to the lab
           </Link>
-          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = move cursor · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · drag edge = resize (⌥ = stretch content) · shift-click = multi-select · drag empty = marquee · space play (from cursor) · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · <b>no selection:</b> ←→ move cursor (⌘ fine · ⌘⇧ clip edge) · Home/End · <b>selection:</b> ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
+          <span>click a pane to key-focus it (edit keys follow the focused pane; space/undo are global) · dbl-click = create · click = move cursor · drag = move (⌘ free, multi-select drags together) · ⌥-drag = duplicate · Shift+⌥-drag = slip content · Shift+R = record MIDI · M = computer MIDI keys · drag edge = resize (⌥ = stretch content) · shift-click = multi-select · drag empty = marquee · space play (from cursor) · +/− zoom · ⌘1/⌘2 grid · ⌫ delete · ⌘D dup · ⌘C/X/V · ⌘Z undo · ⌘E split · ⌘J consolidate (audio = real bounce) · ⌘I insert · <b>no selection:</b> ←→ move cursor (⌘ fine · ⌘⇧ clip edge) · Home/End · <b>selection:</b> ←→ nudge · shift+←→ resize · ↑↓ track · R reverse · 0 mute.</span>
         </div>
       </TrackSection>
     </main>

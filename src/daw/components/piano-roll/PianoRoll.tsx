@@ -1,15 +1,17 @@
 // ── PIANO ROLL — playable + editable MIDI clip editor ────────────────────
 // A scrollable / zoomable viewport over the full MIDI range. ONE coordinate
 // system for grid + notes (no squashing) so rows and notes always align.
-// Gesture set models Ableton Live's MIDI Note Editor (non-draw-mode).
+// Gesture set models Ableton Live's MIDI Note Editor.
 //
-// Edit:
+// Edit (Editor mode — default):
 //   dbl-click empty → create a note (one grid cell) · click a note → select · shift+click → add/remove ·
 //   drag empty → marquee select (shift adds) · drag a note → move the selection ·
 //   drag right edge → resize · hold ⌘/ctrl while moving/resizing → bypass snap ·
 //   ⌥/ctrl+drag a note → duplicate the selection · double-click / right-click → delete
+// Edit (Draw mode — toggle with B):
+//   single-click empty → create a note (one grid cell) and drag to set length · same select/move otherwise
 // Keyboard (when the roll has focus):
-//   ←/→ nudge in time · ⌘/ctrl+←/→ nudge w/o snap · shift+←/→ resize ·
+//   B toggle Draw/Editor · ←/→ nudge in time · ⌘/ctrl+←/→ nudge w/o snap · shift+←/→ resize ·
 //   ↑/↓ transpose semitone · shift+↑/↓ octave · delete/backspace · ⌘/ctrl+A all ·
 //   ⌘/ctrl+D duplicate · esc deselect
 // Navigate:
@@ -91,11 +93,17 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
   // bottom lane: which automation it shows, and whether it's expanded. A ref mirror
   // (assigned in an effect, not during render) lets the rAF canvas read it.
   const [lane, setLane] = useState<{ mode: "vel" | "vib"; open: boolean }>({ mode: "vel", open: true });
+  // Ableton Draw mode (B): single-click creates. Default stays Editor (double-click create).
+  const [drawMode, setDrawMode] = useState(false);
   const [, bump] = useState(0); // re-render the vib knobs (clip lives in a ref)
   const laneRef = useRef(lane);
+  const drawModeRef = useRef(drawMode);
   useEffect(() => {
     laneRef.current = lane;
   }, [lane]);
+  useEffect(() => {
+    drawModeRef.current = drawMode;
+  }, [drawMode]);
   // re-render on transport events so the grid select tracks ⌘1/⌘2 snap changes
   useEffect(() => {
     const fn = () => bump((x) => x + 1);
@@ -382,8 +390,27 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
         drag.current = { mode: "move", grabBeat: xToBeat(x), grabPitch: yToPitch(y), base, moved: false, dup: e.altKey };
       }
     } else if (e.button === 0) {
+      // Draw mode: single-click empty → create one grid cell, then resize-drag its length
+      // (Ableton pencil). Editor mode: marquee / deselect (create stays on double-click).
+      if (drawModeRef.current && !e.shiftKey) {
+        const s = snapSize();
+        const note: Note = {
+          id: newNoteId(),
+          pitch: clamp(yToPitch(y), LO_MIDI, HI_MIDI),
+          start: clamp(Math.floor(xToBeat(x) / s) * s, 0, Math.max(0, totalBeats() - s)),
+          length: s,
+          vel: 0.85,
+        };
+        clipRef.current.notes.push(note);
+        sel.current = new Set([note.id]);
+        blip(note.pitch);
+        const base = new Map<string, number>([[note.id, note.length]]);
+        drag.current = { mode: "resize", base, anchor: note.id, moved: true };
+        commit();
+        return;
+      }
       // empty: marquee (shift adds to selection) — promoted from a press once it
-      // exceeds the slop; a plain click that doesn't drag draws a note on up.
+      // exceeds the slop; a plain click that doesn't drag just deselects.
       drag.current = { mode: "marquee", x0: x, y0: y, x1: x, y1: y, add: e.shiftKey ? new Set(sel.current) : new Set() };
       if (!e.shiftKey) sel.current = new Set();
     }
@@ -696,6 +723,12 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
     const k = e.key;
     if (k === "Escape") {
       sel.current = new Set();
+      return;
+    }
+    // B = toggle Draw mode (Ableton). Ignore with modifiers so browser shortcuts stay clear.
+    if ((k === "b" || k === "B") && !cmd(e) && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      setDrawMode((d) => !d);
       return;
     }
     if (cmd(e) && (k === "a" || k === "A")) {
@@ -1031,6 +1064,7 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
     const rep = ids.length ? byId(ids[0]) : null;
     g.font = "9px ui-monospace, monospace";
     const lines: string[] = [];
+    if (drawModeRef.current) lines.push("mode DRAW");
     if (rep) {
       const vMin = Math.min(...ids.map((id) => byId(id)?.vel ?? 1));
       const vMax = Math.max(...ids.map((id) => byId(id)?.vel ?? 0));
