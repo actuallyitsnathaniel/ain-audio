@@ -198,11 +198,15 @@ export function PlaybackPane() {
         <button
           type="button"
           data-audio-prefs-open
-          className={ctl + px + onOff(prefsOpen || eng.inputStatus === "live")}
+          className={
+            ctl +
+            px +
+            onOff(prefsOpen || eng.inputStatus === "live" || eng.inputStatus === "pending")
+          }
           onClick={() => setPrefsOpen((o) => !o)}
           title="audio preferences — input device, buffer, latency, monitor"
         >
-          audio
+          {eng.inputStatus === "pending" ? "audio…" : "audio"}
         </button>
         {prefsOpen && <AudioPrefsPanel onClose={() => setPrefsOpen(false)} />}
       </span>

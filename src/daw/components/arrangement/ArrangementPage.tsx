@@ -34,11 +34,13 @@ const chip = (active: boolean, danger?: boolean) =>
     : "border-line text-faint hover:text-dim");
 
 /** Track arm — same vocabulary as transport ●: square chip + red disk (not a naked circle). */
-const armChip = (armed: boolean) =>
+const armChip = (armed: boolean, arming?: boolean) =>
   "flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[3px] border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/60 " +
-  (armed
-    ? "border-red-500 bg-[color-mix(in_srgb,#ef4444_28%,transparent)] hover:bg-[color-mix(in_srgb,#ef4444_40%,transparent)]"
-    : "border-line hover:border-[color-mix(in_srgb,#ef4444_55%,transparent)]");
+  (arming
+    ? "border-red-500/70 bg-[color-mix(in_srgb,#ef4444_18%,transparent)]"
+    : armed
+      ? "border-red-500 bg-[color-mix(in_srgb,#ef4444_28%,transparent)] hover:bg-[color-mix(in_srgb,#ef4444_40%,transparent)]"
+      : "border-line hover:border-[color-mix(in_srgb,#ef4444_55%,transparent)]");
 
 const armDot = (armed: boolean) =>
   "inline-block size-2 rounded-full transition-[background-color,box-shadow] duration-150 " +
@@ -46,7 +48,23 @@ const armDot = (armed: boolean) =>
     ? "bg-red-500 shadow-[0_0_6px_color-mix(in_srgb,#ef4444_55%,transparent)]"
     : "bg-[color-mix(in_srgb,#ef4444_40%,#5c5c66)]");
 
-function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack; armed: boolean; selected: boolean; fxOpen: boolean; onArm: (id: string) => void; onFx: (id: string) => void }) {
+function TrackHeader({
+  t,
+  armed,
+  arming,
+  selected,
+  fxOpen,
+  onArm,
+  onFx,
+}: {
+  t: ArrTrack;
+  armed: boolean;
+  arming?: boolean;
+  selected: boolean;
+  fxOpen: boolean;
+  onArm: (id: string) => void;
+  onFx: (id: string) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const hasFx = !!t.devices?.length;
   return (
@@ -103,22 +121,34 @@ function TrackHeader({ t, armed, selected, fxOpen, onArm, onFx }: { t: ArrTrack;
           <button
             type="button"
             aria-pressed={armed}
-            aria-label={armed ? "disarm track" : "arm track for record"}
+            aria-busy={arming || undefined}
+            aria-label={
+              arming ? "opening audio input…" : armed ? "disarm track" : "arm track for record"
+            }
             onClick={() => onArm(t.id)}
             title={
-              t.kind === "audio"
-                ? armed
-                  ? "armed — click to disarm"
-                  : "arm for audio input (mic/interface) · ● to record"
-                : armed
-                  ? "armed — click to disarm"
-                  : t.kind === "drum"
-                    ? "arm for pads / MIDI · ● records into a drum clip"
-                    : "arm for keyboard / MIDI · M for computer keys"
+              arming
+                ? "opening input…"
+                : t.kind === "audio"
+                  ? armed
+                    ? "armed — click to disarm"
+                    : "arm for audio input (mic/interface) · ● to record"
+                  : armed
+                    ? "armed — click to disarm"
+                    : t.kind === "drum"
+                      ? "arm for pads / MIDI · ● records into a drum clip"
+                      : "arm for keyboard / MIDI · M for computer keys"
             }
-            className={armChip(armed)}
+            className={armChip(armed, arming)}
           >
-            <span className={armDot(armed)} aria-hidden />
+            {arming ? (
+              <span
+                className="size-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-red-500/35 border-t-red-500"
+                aria-hidden
+              />
+            ) : (
+              <span className={armDot(armed)} aria-hidden />
+            )}
           </button>
           <button className={chip(t.mute, true)} onClick={() => engine.toggleTrackMute(t.id)} title="mute">
             M
@@ -528,7 +558,20 @@ export function ArrangementPage() {
                 {/* spacer strip aligns the header column with the timeline's ruler */}
                 <div className="border-b border-line" style={{ height: HEAD_H }} />
                 {tracks.map((t) => (
-                  <TrackHeader key={t.id} t={t} armed={eng.armedChannel === t.id} selected={eng.selTrackId === t.id} fxOpen={fxTrackId === t.id} onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)} onFx={toggleFx} />
+                  <TrackHeader
+                    key={t.id}
+                    t={t}
+                    armed={eng.armedChannel === t.id}
+                    arming={
+                      eng.armedChannel === t.id &&
+                      t.kind === "audio" &&
+                      eng.inputStatus === "pending"
+                    }
+                    selected={eng.selTrackId === t.id}
+                    fxOpen={fxTrackId === t.id}
+                    onArm={(id) => engine.armChannel(engine.armedChannel === id ? null : id)}
+                    onFx={toggleFx}
+                  />
                 ))}
                 {tracks.length === 0 && <div className="p-2.5 font-mono text-[9px] leading-[1.55] text-faint">no tracks yet — add one above, then double-click a lane to create a clip.</div>}
               </div>

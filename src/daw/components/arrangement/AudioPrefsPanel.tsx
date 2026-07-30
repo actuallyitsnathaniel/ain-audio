@@ -3,8 +3,10 @@
 import { useEffect, useRef } from "react";
 import {
   AUDIO_BUFFER_SIZES,
+  INPUT_CHANNEL_MODES,
   engine,
   type AudioBufferSize,
+  type InputChannelMode,
 } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 
@@ -23,9 +25,17 @@ const cap = "font-mono text-[9px] tracking-[0.06em] text-faint";
 
 const STATUS: Record<string, string> = {
   idle: "idle — arm an audio track to open input",
+  pending: "opening input…",
   live: "live",
   denied: "denied — allow mic in the browser",
   unsupported: "unsupported in this browser",
+};
+
+const CH_LABEL: Record<InputChannelMode, string> = {
+  stereo: "stereo L/R",
+  left: "mono ← L (in 1)",
+  right: "mono ← R (in 2)",
+  sum: "mono sum L+R",
 };
 
 export function AudioPrefsPanel({ onClose }: { onClose: () => void }) {
@@ -92,6 +102,29 @@ export function AudioPrefsPanel({ onClose }: { onClose: () => void }) {
             </option>
           ))}
         </select>
+      </label>
+
+      <label className="mb-2.5 flex flex-col gap-1">
+        <span className={cap}>channels</span>
+        <select
+          className={field}
+          value={prefs.inputChannels}
+          onChange={(e) =>
+            engine.setAudioPrefs({
+              inputChannels: e.target.value as InputChannelMode,
+            })
+          }
+          title="Scarlett mic on input 1 → mono ← L · stereo keeps both interface channels"
+        >
+          {INPUT_CHANNEL_MODES.map((m) => (
+            <option key={m} value={m}>
+              {CH_LABEL[m]}
+            </option>
+          ))}
+        </select>
+        <span className={cap}>
+          interfaces usually look stereo — fold L for a mic on input 1
+        </span>
       </label>
 
       <label className="mb-2.5 flex flex-col gap-1">
@@ -179,7 +212,9 @@ export function AudioPrefsPanel({ onClose }: { onClose: () => void }) {
             ✕
           </button>
         </div>
-        <span className={cap}>speakers can feedback — prefer headphones</span>
+        <span className={cap}>
+          speakers can feedback — prefer headphones · bypasses FX/limiter for speed
+        </span>
       </div>
     </div>
   );

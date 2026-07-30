@@ -69,9 +69,14 @@ export type TransportMode = "track" | "sequence";
 
 export const AUDIO_BUFFER_SIZES = [256, 512, 1024, 2048, 4096] as const;
 export type AudioBufferSize = (typeof AUDIO_BUFFER_SIZES)[number];
+/** How a stereo interface maps into the take / monitor. Scarlett mic on input 1 → `left`. */
+export const INPUT_CHANNEL_MODES = ["stereo", "left", "right", "sum"] as const;
+export type InputChannelMode = (typeof INPUT_CHANNEL_MODES)[number];
 export type AudioPrefs = {
   inputDeviceId: string | null;
   bufferSize: AudioBufferSize;
+  /** stereo keep L/R · left/right fold that channel to both · sum = (L+R)/2 */
+  inputChannels: InputChannelMode;
   latencyMode: "auto" | "manual";
   latencyMs: number;
   inputMonitor: boolean;
@@ -79,7 +84,8 @@ export type AudioPrefs = {
 
 const DEFAULT_AUDIO_PREFS: AudioPrefs = {
   inputDeviceId: null,
-  bufferSize: 1024,
+  bufferSize: 512, // lower default — 256 is tighter but glitchier on slower machines
+  inputChannels: "left", // Scarlett / Focusrite input-1 mono is the common case
   latencyMode: "auto",
   latencyMs: 0,
   inputMonitor: false,
@@ -93,9 +99,13 @@ function loadAudioPrefs(): AudioPrefs {
     const buf = AUDIO_BUFFER_SIZES.includes(p.bufferSize as AudioBufferSize)
       ? (p.bufferSize as AudioBufferSize)
       : DEFAULT_AUDIO_PREFS.bufferSize;
+    const ch = INPUT_CHANNEL_MODES.includes(p.inputChannels as InputChannelMode)
+      ? (p.inputChannels as InputChannelMode)
+      : DEFAULT_AUDIO_PREFS.inputChannels;
     return {
       inputDeviceId: typeof p.inputDeviceId === "string" ? p.inputDeviceId : null,
       bufferSize: buf,
+      inputChannels: ch,
       latencyMode: p.latencyMode === "manual" ? "manual" : "auto",
       latencyMs:
         typeof p.latencyMs === "number" && Number.isFinite(p.latencyMs)
@@ -106,6 +116,21 @@ function loadAudioPrefs(): AudioPrefs {
   } catch {
     return { ...DEFAULT_AUDIO_PREFS };
   }
+}
+
+/** Map a stereo (or mono) ScriptProcessor block into stored L/R per prefs. */
+function mapInputBlock(
+  L: Float32Array,
+  R: Float32Array | null,
+  mode: InputChannelMode,
+): Float32Array[] {
+  const r = R || L;
+  if (mode === "stereo") return [L, new Float32Array(r)];
+  if (mode === "left") return [L, new Float32Array(L)];
+  if (mode === "right") return [new Float32Array(r), new Float32Array(r)];
+  const s = new Float32Array(L.length);
+  for (let i = 0; i < L.length; i++) s[i] = (L[i] + r[i]) * 0.5;
+  return [s, new Float32Array(s)];
 }
 
 const STEP_BEATS = 0.25; // one drum step = a 1/16 note
@@ -150,6 +175,8 @@ interface GraphNodes {
   limMakeup: GainNode;
   master: GainNode;
   anPost: AnalyserNode; // post-limiter final output (post-limiter master meter)
+  /** Low-latency input monitor bus — skips FX + safety compressor → destination. */
+  monitorBus: GainNode;
 }
 
 // the fixed master-bus safety limiter (the only effect NOT in the device chain)
@@ -530,7 +557,8 @@ class AudioEngine {
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext;
-      this.ctx = new Ctor();
+      // interactive = lowest glitch-free output buffer the browser will give us
+      this.ctx = new Ctor({ latencyHint: "interactive" });
       this.buildGraph();
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
@@ -579,6 +607,12 @@ class AudioEngine {
     n.anPost.fftSize = 2048;
     n.anPost.smoothingTimeConstant = 0;
     n.master.connect(n.anPost);
+
+    // Input monitor bypasses track/master FX and the DynamicsCompressor (those add
+    // audible delay). Direct to destination; level follows armed track vol/mute.
+    n.monitorBus = c.createGain();
+    n.monitorBus.gain.value = 1;
+    n.monitorBus.connect(c.destination);
 
     this.nodes = n;
     // ── the modular master FxChain: sum → [devices] → anOut ──
@@ -1841,8 +1875,10 @@ class AudioEngine {
       this.warmPatch(this.resolvePatch(t.presetId));
     // leaving an audio arm → release the mic (privacy); arming audio → request it
     if (prev && prev !== this.armedChannel) this.teardownInput();
-    if (this.armedChannel && t?.kind === "audio") void this.enableInput();
-    else this.syncInputMonitor();
+    if (this.armedChannel && t?.kind === "audio") {
+      void this.enableInput();
+      void this.ensureCaptureWorklet(); // warm the worklet module during arm pending
+    } else this.syncInputMonitor();
     this.emit("clip");
     this.emit("transport");
   }
@@ -1873,7 +1909,7 @@ class AudioEngine {
   // latency compensation / input monitor (ain-audio-prefs). No punch/takes yet.
   recording = false;
   recordStamp = 0; // bumped when a take finishes → ClipEditor remounts
-  inputStatus: "idle" | "live" | "denied" | "unsupported" = "idle";
+  inputStatus: "idle" | "pending" | "live" | "denied" | "unsupported" = "idle";
   audioPrefs: AudioPrefs = loadAudioPrefs();
   inputDevices: { deviceId: string; label: string }[] = [];
   private _recTarget: { trackId: string; clipId: string } | null = null;
@@ -1884,12 +1920,18 @@ class AudioEngine {
   private _recCapturing = false;
   private _inputStream: MediaStream | null = null;
   private _inputSource: MediaStreamAudioSourceNode | null = null;
-  private _recProc: ScriptProcessorNode | null = null;
+  private _recWorklet: AudioWorkletNode | null = null;
+  private _recProc: ScriptProcessorNode | null = null; // fallback if worklet fails
   private _recSink: GainNode | null = null; // mute sink so the processor runs
-  private _monitorGain: GainNode | null = null; // live input → armed track strip
+  private _monitorGain: GainNode | null = null; // live input → monitorBus
+  private _monitorNodes: AudioNode[] = []; // splitter/merger/gains for channel fold
   private _recChunks: Float32Array[][] = []; // each callback: per-channel copies
   private _deviceListen = false;
   private _inputOpenGen = 0; // ignore stale getUserMedia resolutions
+  /** From MediaStreamTrack.getSettings().latency when the browser reports it (seconds). */
+  private _inputReportedLatencySec = 0;
+  private _captureWorkletReady: Promise<boolean> | null = null;
+  private _captureUsesWorklet = false;
 
   // true while playSequence's count-in clicks are still running (anchor is in the future)
   private inCountIn(): boolean {
@@ -1908,14 +1950,22 @@ class AudioEngine {
     }
   }
 
-  /** Approximate input→clip latency (ms). USB/OS buffers are invisible to the page. */
+  /** Approximate input→clip latency (ms). USB/OS buffers are mostly invisible to the page. */
   estimatedLatencyMs(): number {
     const c = this.ctx;
     const sr = c?.sampleRate || 48000;
-    const bufMs = (this.audioPrefs.bufferSize / sr) * 1000;
+    // Worklet render quantum (~128) is the real capture delay; ScriptProcessor uses bufferSize.
+    const captureFrames = this._captureUsesWorklet
+      ? 128
+      : this.audioPrefs.bufferSize;
+    const bufMs = (captureFrames / sr) * 1000;
     const base = c ? (c.baseLatency || 0) * 1000 : 0;
-    const out = c ? ((c as AudioContext & { outputLatency?: number }).outputLatency || 0) * 1000 : 0;
-    return Math.round(bufMs + base + out);
+    const out = c
+      ? ((c as AudioContext & { outputLatency?: number }).outputLatency || 0) *
+        1000
+      : 0;
+    const reported = this._inputReportedLatencySec * 1000;
+    return Math.round(Math.max(bufMs + base + out, reported + bufMs));
   }
 
   effectiveLatencyMs(): number {
@@ -1930,6 +1980,11 @@ class AudioEngine {
       this.audioPrefs.inputDeviceId = partial.inputDeviceId || null;
     if (partial.bufferSize !== undefined && AUDIO_BUFFER_SIZES.includes(partial.bufferSize))
       this.audioPrefs.bufferSize = partial.bufferSize;
+    if (
+      partial.inputChannels !== undefined &&
+      INPUT_CHANNEL_MODES.includes(partial.inputChannels)
+    )
+      this.audioPrefs.inputChannels = partial.inputChannels;
     if (partial.latencyMode === "auto" || partial.latencyMode === "manual")
       this.audioPrefs.latencyMode = partial.latencyMode;
     if (partial.latencyMs !== undefined)
@@ -1940,19 +1995,22 @@ class AudioEngine {
 
     const deviceChanged = prev.inputDeviceId !== this.audioPrefs.inputDeviceId;
     const bufChanged = prev.bufferSize !== this.audioPrefs.bufferSize;
-    const monChanged = prev.inputMonitor !== this.audioPrefs.inputMonitor;
+    const monChanged =
+      prev.inputMonitor !== this.audioPrefs.inputMonitor ||
+      prev.inputChannels !== this.audioPrefs.inputChannels;
 
     if (deviceChanged && (this._inputStream || this.armedAudioTrack())) {
       void this.reopenInput();
       return;
     }
-    if (bufChanged && this._recProc) {
+    if (bufChanged && (this._recProc || this._recWorklet)) {
       const wasCapturing = this._recCapturing;
       this.stopAudioCaptureGraph(true);
       this.ensureInputSource();
       if (this.recording && this._recMode === "audio") {
-        this.ensureAudioCaptureGraph();
-        this._recCapturing = wasCapturing;
+        void this.ensureAudioCaptureGraph().then(() => {
+          this.setRecCapturing(wasCapturing);
+        });
       } else {
         this.syncInputMonitor();
       }
@@ -2009,14 +2067,30 @@ class AudioEngine {
   }
 
   private audioConstraints(): MediaTrackConstraints {
-    const c: MediaTrackConstraints = {
+    const c: MediaTrackConstraints & { latency?: number } = {
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
+      // ask the browser for the lowest input buffering it will allow
+      latency: 0,
     };
     if (this.audioPrefs.inputDeviceId)
       c.deviceId = { exact: this.audioPrefs.inputDeviceId };
     return c;
+  }
+
+  private readInputTrackLatency(stream: MediaStream) {
+    const track = stream.getAudioTracks()[0];
+    if (!track?.getSettings) {
+      this._inputReportedLatencySec = 0;
+      return;
+    }
+    const settings = track.getSettings() as MediaTrackSettings & {
+      latency?: number;
+    };
+    const lat = settings.latency;
+    this._inputReportedLatencySec =
+      typeof lat === "number" && Number.isFinite(lat) ? Math.max(0, lat) : 0;
   }
 
   // Request mic/interface access and keep the stream warm while an audio track is armed.
@@ -2047,6 +2121,12 @@ class AudioEngine {
       this.emit("transport");
       return true;
     }
+    // show arm spinner while the browser / interface opens the stream
+    if (!retried) {
+      this.inputStatus = "pending";
+      this.emit("transport");
+      this.emit("clip");
+    }
     const gen = ++this._inputOpenGen;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -2058,10 +2138,12 @@ class AudioEngine {
       }
       this._inputStream = stream;
       this.inputStatus = "live";
+      this.readInputTrackLatency(stream);
       this.ensureInputSource();
       this.syncInputMonitor();
       void this.refreshInputDevices();
       this.emit("transport");
+      this.emit("clip");
       return true;
     } catch {
       if (!retried && this.audioPrefs.inputDeviceId) {
@@ -2071,6 +2153,7 @@ class AudioEngine {
       }
       this.inputStatus = "denied";
       this.emit("transport");
+      this.emit("clip");
       return false;
     }
   }
@@ -2082,22 +2165,73 @@ class AudioEngine {
   }
 
   private syncInputMonitor() {
-    try {
-      this._monitorGain?.disconnect();
-    } catch {
-      /* fine */
+    for (const n of this._monitorNodes) {
+      try {
+        n.disconnect();
+      } catch {
+        /* fine */
+      }
     }
+    this._monitorNodes = [];
     this._monitorGain = null;
     const t = this.armedAudioTrack();
-    if (!this.audioPrefs.inputMonitor || !t || !this._inputStream) return;
+    if (!t || !this._inputStream) return;
     this.ensureInputSource();
     if (!this._inputSource) return;
     const c = this.ensureCtx();
-    const g = c.createGain();
-    g.gain.value = 1;
-    this._inputSource.connect(g);
-    g.connect(this.trackStrip(t));
-    this._monitorGain = g;
+    // Ensure strip + analyser exist so the track fader meters input even when
+    // the audible path bypasses FX/limiter (monitorBus).
+    this.trackStrip(t);
+    const an = this._arrStrips[t.id]?.an;
+    if (!an) return;
+
+    const fold = c.createGain();
+    fold.gain.value = 1;
+    const mode = this.audioPrefs.inputChannels;
+    if (mode === "stereo") {
+      this._inputSource.connect(fold);
+      this._monitorNodes.push(fold);
+    } else {
+      const split = c.createChannelSplitter(2);
+      const merge = c.createChannelMerger(2);
+      this._inputSource.connect(split);
+      if (mode === "left") {
+        split.connect(merge, 0, 0);
+        split.connect(merge, 0, 1);
+      } else if (mode === "right") {
+        split.connect(merge, 1, 0);
+        split.connect(merge, 1, 1);
+      } else {
+        const gL = c.createGain();
+        const gR = c.createGain();
+        const sum = c.createGain();
+        gL.gain.value = 0.5;
+        gR.gain.value = 0.5;
+        split.connect(gL, 0);
+        split.connect(gR, 1);
+        gL.connect(sum);
+        gR.connect(sum);
+        sum.connect(merge, 0, 0);
+        sum.connect(merge, 0, 1);
+        this._monitorNodes.push(gL, gR, sum);
+      }
+      merge.connect(fold);
+      this._monitorNodes.push(split, merge, fold);
+    }
+
+    // Meter tap (silent leaf) — always on while armed so the fader reacts to input.
+    fold.connect(an);
+
+    // Audible path — low-latency bus only when monitor is enabled.
+    const bus = this.nodes?.monitorBus;
+    if (this.audioPrefs.inputMonitor && bus) {
+      const hear = c.createGain();
+      hear.gain.value = t.vol * this.trackGain(t);
+      fold.connect(hear);
+      hear.connect(bus);
+      this._monitorNodes.push(hear);
+      this._monitorGain = hear;
+    }
   }
 
   private teardownInput() {
@@ -2106,12 +2240,23 @@ class AudioEngine {
       for (const t of this._inputStream.getTracks()) t.stop();
       this._inputStream = null;
     }
+    this._inputReportedLatencySec = 0;
     this.inputStatus = "idle";
   }
 
   /** Tear down capture nodes. When `full`, also drop the MediaStreamSource + monitor. */
   private stopAudioCaptureGraph(full = true) {
-    this._recCapturing = false;
+    this.setRecCapturing(false);
+    try {
+      this._recWorklet?.port.postMessage({ type: "config", capturing: false });
+    } catch {
+      /* fine */
+    }
+    try {
+      this._recWorklet?.disconnect();
+    } catch {
+      /* fine */
+    }
     try {
       this._recProc?.disconnect();
     } catch {
@@ -2122,14 +2267,19 @@ class AudioEngine {
     } catch {
       /* fine */
     }
+    this._recWorklet = null;
     this._recProc = null;
     this._recSink = null;
+    this._captureUsesWorklet = false;
     if (!full) return;
-    try {
-      this._monitorGain?.disconnect();
-    } catch {
-      /* fine */
+    for (const n of this._monitorNodes) {
+      try {
+        n.disconnect();
+      } catch {
+        /* fine */
+      }
     }
+    this._monitorNodes = [];
     this._monitorGain = null;
     try {
       this._inputSource?.disconnect();
@@ -2139,32 +2289,100 @@ class AudioEngine {
     this._inputSource = null;
   }
 
-  // MediaStream → ScriptProcessor (silent sink). Chunks append only while
-  // `_recCapturing` (after count-in). Monitor is a parallel tap via syncInputMonitor.
-  private ensureAudioCaptureGraph() {
-    if (!this._inputStream || this._recProc) return;
+  private setRecCapturing(on: boolean) {
+    this._recCapturing = on;
+    if (this._recWorklet) {
+      try {
+        this._recWorklet.port.postMessage({
+          type: "config",
+          capturing: on,
+          bufferSize: this.audioPrefs.bufferSize,
+        });
+      } catch {
+        /* fine */
+      }
+    }
+  }
+
+  private ensureCaptureWorklet(): Promise<boolean> {
+    if (this._captureWorkletReady) return this._captureWorkletReady;
+    this._captureWorkletReady = (async () => {
+      try {
+        const c = this.ensureCtx();
+        await c.audioWorklet.addModule(
+          new URL("./worklets/input-capture-processor.js", import.meta.url),
+        );
+        return true;
+      } catch {
+        this._captureWorkletReady = null; // allow retry
+        return false;
+      }
+    })();
+    return this._captureWorkletReady;
+  }
+
+  // MediaStream → AudioWorklet (preferred) or ScriptProcessor fallback.
+  // Chunks append only while capturing. Monitor is a parallel low-latency tap.
+  private async ensureAudioCaptureGraph() {
+    if (!this._inputStream || this._recWorklet || this._recProc) return;
     this.ensureInputSource();
     const src = this._inputSource;
     if (!src) return;
     const c = this.ensureCtx();
     const size = this.audioPrefs.bufferSize;
-    const proc = c.createScriptProcessor(size, 2, 2);
     const sink = c.createGain();
     sink.gain.value = 0;
+
+    const useWorklet = await this.ensureCaptureWorklet();
+    if (useWorklet) {
+      try {
+        const node = new AudioWorkletNode(c, "ain-input-capture", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
+          channelCount: 2,
+        });
+        node.port.onmessage = (ev) => {
+          const d = ev.data;
+          if (!d || d.type !== "chunk" || !this._recCapturing || !this.recording)
+            return;
+          this._recChunks.push(
+            mapInputBlock(d.L, d.R, this.audioPrefs.inputChannels),
+          );
+        };
+        node.port.postMessage({
+          type: "config",
+          bufferSize: size,
+          capturing: this._recCapturing,
+        });
+        src.connect(node);
+        node.connect(sink);
+        sink.connect(c.destination);
+        this._recWorklet = node;
+        this._recSink = sink;
+        this._captureUsesWorklet = true;
+        this.syncInputMonitor();
+        return;
+      } catch {
+        /* fall through to ScriptProcessor */
+      }
+    }
+
+    const proc = c.createScriptProcessor(size, 2, 2);
     proc.onaudioprocess = (ev) => {
       if (!this._recCapturing || !this.recording) return;
       const n = ev.inputBuffer.numberOfChannels;
-      const block: Float32Array[] = [];
-      for (let ch = 0; ch < Math.min(2, n); ch++)
-        block.push(new Float32Array(ev.inputBuffer.getChannelData(ch)));
-      if (block.length === 1) block.push(new Float32Array(block[0])); // force stereo store
-      this._recChunks.push(block);
+      const L = new Float32Array(ev.inputBuffer.getChannelData(0));
+      const R =
+        n > 1 ? new Float32Array(ev.inputBuffer.getChannelData(1)) : null;
+      this._recChunks.push(mapInputBlock(L, R, this.audioPrefs.inputChannels));
     };
     src.connect(proc);
     proc.connect(sink);
-    sink.connect(c.destination); // processor only runs when connected to the graph
+    sink.connect(c.destination);
     this._recProc = proc;
     this._recSink = sink;
+    this._captureUsesWorklet = false;
     this.syncInputMonitor();
   }
 
@@ -2269,13 +2487,13 @@ class AudioEngine {
         this.emit("transport");
         return;
       }
-      this.ensureAudioCaptureGraph();
+      await this.ensureAudioCaptureGraph();
       this.pushUndo("arrange");
       this._recMode = "audio";
       this._recTrackId = audioTrackId;
       this._recTarget = null;
       this._recChunks = [];
-      this._recCapturing = false;
+      this.setRecCapturing(false);
       this._recStartBeat = this.insertBeat;
       this.recording = true;
       if (!(this.sequencePlaying && this.arrangeMode))
@@ -2306,7 +2524,7 @@ class AudioEngine {
     if (this._recMode !== "audio" || this._recCapturing) return;
     this._recStartBeat = this.currentBeat();
     this._recChunks = [];
-    this._recCapturing = true;
+    this.setRecCapturing(true);
   }
 
   // called from schedTick so count-in → capture is transport-clock accurate
@@ -2331,7 +2549,7 @@ class AudioEngine {
       for (const midi of [...this._recOpen.keys()]) this.commitRecNote(midi, at);
     }
     this._recOpen.clear();
-    this._recCapturing = false;
+    this.setRecCapturing(false);
     this._recChunks = [];
     this.recording = false;
     this._recTarget = null;
@@ -2342,9 +2560,9 @@ class AudioEngine {
     this.emit("transport");
   }
 
-  // Concatenate ScriptProcessor chunks → AudioBuffer → imported clip on the track.
+  // Concatenate capture chunks → AudioBuffer → imported clip on the track.
   private bakeAudioTake(endBeat: number) {
-    this._recCapturing = false;
+    this.setRecCapturing(false);
     const trackId = this._recTrackId;
     const c = this.ctx;
     if (!trackId || !c || this._recChunks.length === 0) return;
@@ -2554,6 +2772,16 @@ class AudioEngine {
       const s = this._arrStrips[t.id];
       if (s) s.gain.gain.setTargetAtTime(t.vol * this.trackGain(t), tt, 0.02);
     }
+    // keep low-latency monitor level in sync with mute/solo/fader
+    if (this._monitorGain && this.audioPrefs.inputMonitor) {
+      const armed = this.armedAudioTrack();
+      if (armed)
+        this._monitorGain.gain.setTargetAtTime(
+          armed.vol * this.trackGain(armed),
+          tt,
+          0.02,
+        );
+    }
   }
   // resolve a midi track's instrument to a VoiceSel routed to its strip
   private trackVoice(t: ArrTrack): VoiceSel {
@@ -2586,6 +2814,7 @@ class AudioEngine {
     return t;
   }
   removeTrack(id: string) {
+    if (this.armedChannel === id) this.armChannel(null);
     const t = this.findTrack(id);
     if (t)
       for (const c of t.clips) {
