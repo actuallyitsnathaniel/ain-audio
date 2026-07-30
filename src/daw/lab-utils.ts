@@ -2,10 +2,29 @@ import { engine } from "./engine";
 import type { Track } from "./data/tracks";
 
 // Smooth-scroll to a section by id, accounting for the fixed transport bar.
+// Fires an "anchor-glow" event on the target once the scroll settles — even if
+// we were already there and no scroll happened — so TrackSection can flash it.
 export function scrollToId(id: string) {
   const el = document.getElementById(id);
   if (!el) return;
-  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 64, behavior: "smooth" });
+  // Clamp to the page's actual max scroll — the last couple of sections have no
+  // room below them to reach their unclamped target, so compare against what the
+  // browser will really do or "already there" never matches and scrollend never fires.
+  const maxScrollY = document.documentElement.scrollHeight - window.innerHeight;
+  const top = Math.min(Math.max(el.getBoundingClientRect().top + window.scrollY - 64, 0), maxScrollY);
+  const glow = () => el.dispatchEvent(new CustomEvent("anchor-glow"));
+
+  if (Math.abs(window.scrollY - top) < 2) {
+    requestAnimationFrame(glow);
+    return;
+  }
+  if ("onscrollend" in window) {
+    window.addEventListener("scrollend", glow, { once: true });
+  } else {
+    // ponytail: fixed-delay fallback for browsers without scrollend (pre-2024 Safari)
+    setTimeout(glow, 500);
+  }
+  window.scrollTo({ top, behavior: "smooth" });
 }
 
 // Load any track into the global lab (from project pages / detail panel).

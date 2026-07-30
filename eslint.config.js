@@ -37,6 +37,7 @@ export default tseslint.config(
         "error",
         {
           ignore: [
+            "^anchor-dot$",
             "^animate-appear$",
             "^animate-appear-slow$",
             "^cursor-blink$",

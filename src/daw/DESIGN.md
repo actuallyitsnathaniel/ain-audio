@@ -64,6 +64,11 @@ Things Tailwind can't express cleanly — reuse these, don't reinvent:
 - `.scrollbar-hide` — used by the mobile transport nav and other routes.
 - `.fx-scroll` — always-visible thin accent-tinted horizontal scrollbar (the FX device chain;
   macOS overlay scrollbars would otherwise hide that the row scrolls).
+- `.glow-active` (toggled on a `TrackSection`, not written in any `className`) — makes its
+  `SectionHead` dot (`.anchor-dot`) flash a quick `box-shadow` glow in the dot's own color
+  (`currentColor`) on nav arrival. Fired via the `anchor-glow` CustomEvent dispatched by
+  `scrollToId` (`lab-utils.ts`); `TrackSection` retriggers it with a classList remove/reflow/add so
+  repeat clicks always restart the flash.
 
 ## Reusable building blocks
 
