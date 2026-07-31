@@ -13,6 +13,14 @@ const Footer = () => {
         >
           Read the usage &amp; AI policy
         </Link>
+        . Studio users are responsible for rights to material they import or
+        create — see the{" "}
+        <Link
+          className="italic underline underline-offset-2 text-purple-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-white"
+          to="/disclaimer"
+        >
+          studio disclaimer
+        </Link>
         .
       </p>
       <p className="flex-1 md:text-base lowercase">

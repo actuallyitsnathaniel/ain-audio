@@ -25,6 +25,7 @@ import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TrackFader } from "./TrackFader";
 import { AudioAcceptSheet } from "./AudioAcceptSheet";
 import { openContextMenu } from "../context-menu-bus";
+import { requestMidiEnable } from "../midi-gate-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
 const HEAD_H = 26; // must match Timeline
@@ -313,6 +314,7 @@ export function ArrangementPage() {
       requestAccept(() => engine.armChannel(next));
       return;
     }
+    if (t?.kind === "midi" || t?.kind === "drum") requestMidiEnable();
     engine.armChannel(next);
   };
   const fxTrack = fxTrackId ? tracks.find((t) => t.id === fxTrackId) : undefined; // auto-hides if deleted

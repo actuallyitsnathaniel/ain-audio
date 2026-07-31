@@ -196,13 +196,20 @@ export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boo
           vel <span className="text-accent">{Math.round(vel * 127)}</span>
         </span>
         <button
-          onClick={() => midiStatus === "idle" && requestMidiEnable()}
-          disabled={midiStatus !== "idle"}
+          onClick={() => requestMidiEnable()}
           className={
             "rounded-[3px] border px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap transition-colors " +
-            (midiStatus.indexOf("device") > 0 ? "border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-accent" : midiStatus === "idle" ? "border-line text-faint hover:border-accent hover:text-accent" : "border-line text-faint")
+            (midiStatus.indexOf("device") >= 0
+              ? "border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-accent"
+              : midiStatus === "idle"
+                ? "border-line text-faint hover:border-accent hover:text-accent"
+                : "border-line text-faint hover:border-accent hover:text-dim")
           }
-          title={midiStatus === "idle" ? "click to connect a MIDI controller" : "plug in a MIDI controller and just play"}
+          title={
+            midiStatus === "idle"
+              ? "click to connect a MIDI controller"
+              : "Web MIDI — click to reconnect / re-scan devices"
+          }
         >
           midi: {midiStatus === "idle" ? "connect" : midiStatus}
         </button>

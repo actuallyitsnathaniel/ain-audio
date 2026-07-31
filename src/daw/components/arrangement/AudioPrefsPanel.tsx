@@ -11,6 +11,7 @@ import {
 import { shortDeviceLabel } from "../../audio-capability";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
+import { requestMidiEnable } from "../midi-gate-bus";
 
 const ctl =
   "flex h-7 items-center justify-center rounded-sm border font-mono text-[10px] transition-colors ";
@@ -75,7 +76,7 @@ export function AudioPrefsPanel({
   onClose: () => void;
   onRereadAccept?: () => void;
 }) {
-  const eng = useEngine(["transport", "clip"]);
+  const eng = useEngine(["transport", "clip", "midi"]);
   const prefs = eng.audioPrefs;
   const root = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<"prefs" | "system">("prefs");
@@ -208,6 +209,40 @@ export function AudioPrefsPanel({
               </span>
             )}
           </label>
+
+          <div className="mb-2.5 flex flex-col gap-1">
+            <span className={cap}>midi</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                className={
+                  ctl +
+                  "flex-1 px-2.5 " +
+                  onOff(eng.midiStatus.indexOf("device") >= 0)
+                }
+                onClick={() => requestMidiEnable()}
+                title="Connect a hardware MIDI keyboard / controller (Web MIDI)"
+              >
+                {eng.midiStatus === "idle"
+                  ? "connect MIDI…"
+                  : eng.midiStatus === "unsupported"
+                    ? "MIDI unsupported"
+                    : eng.midiStatus === "denied"
+                      ? "MIDI denied — retry"
+                      : eng.midiStatus === "no device"
+                        ? "no device — retry"
+                        : eng.midiStatus}
+              </button>
+              <button
+                type="button"
+                className={ctl + "px-2 " + idle}
+                onClick={() => engine.panicMidiNotes()}
+                title="All notes off — release stuck voices / clear sustain"
+              >
+                panic
+              </button>
+            </div>
+          </div>
 
           <label className="mb-2.5 flex flex-col gap-1">
             <span className={cap}>channels</span>

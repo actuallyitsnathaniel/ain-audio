@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { DawShell } from "../daw/DawShell";
 import SEO from "../components/seo";
 
@@ -93,6 +94,20 @@ const UsageAndAiPolicy = () => {
                 <a className={linkClass} href={`mailto:${CONTACT_EMAIL}`}>
                   {CONTACT_EMAIL}
                 </a>
+                .
+              </p>
+            </section>
+
+            <section className="mb-6 break-inside-avoid">
+              <h2 className="font-mono text-accent uppercase tracking-widest text-[12px] mb-2">
+                Studio users
+              </h2>
+              <p className="text-daw-text leading-relaxed">
+                If you import or create material in the interactive studio, see
+                also the{" "}
+                <Link className={linkClass} to="/disclaimer">
+                  studio disclaimer
+                </Link>
                 .
               </p>
             </section>

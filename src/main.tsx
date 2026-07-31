@@ -16,6 +16,8 @@ const EventsPage = lazy(() => import("../src/routes/events"));
 const StudioPage = lazy(() => import("../src/routes/studio"));
 // eslint-disable-next-line react-refresh/only-export-components
 const UsageAndAiPolicy = lazy(() => import("../src/routes/usage-and-ai-policy"));
+// eslint-disable-next-line react-refresh/only-export-components
+const Disclaimer = lazy(() => import("../src/routes/disclaimer"));
 
 const router = createBrowserRouter([
   {
@@ -61,6 +63,15 @@ const router = createBrowserRouter([
     element: (
       <Suspense fallback={<Loader />}>
         <UsageAndAiPolicy />
+      </Suspense>
+    ),
+    errorElement: <ErrorPage />,
+  },
+  {
+    path: "/disclaimer",
+    element: (
+      <Suspense fallback={<Loader />}>
+        <Disclaimer />
       </Suspense>
     ),
     errorElement: <ErrorPage />,

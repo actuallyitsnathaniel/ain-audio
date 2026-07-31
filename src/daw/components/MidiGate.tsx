@@ -33,16 +33,18 @@ export function MidiGate() {
         className="w-full max-w-110 rounded-md border border-line2 bg-panel p-5.5 shadow-[0_20px_60px_rgba(0,0,0,0.5)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="mb-2.5 font-mono text-[13px] tracking-[0.06em] text-daw-text">🎹🔌 connect a MIDI keyboard?</h3>
+        <h3 className="mb-2.5 font-mono text-[13px] tracking-[0.06em] text-daw-text">
+          connect a MIDI keyboard?
+        </h3>
         <p className="mb-2 text-[12px] leading-[1.6] text-dim">
-          {/* DRAFT — placeholder copy, pending your edit */}
-          To play these channels from a hardware MIDI keyboard, your browser needs permission to see your connected music
-          devices. In a moment it&apos;ll ask &quot;allow this site to access your MIDI devices?&quot; — that&apos;s this.
+          To play from a hardware MIDI keyboard or pad controller, your browser
+          needs permission to see connected music devices. Next it&apos;ll ask
+          to allow MIDI access — that&apos;s this.
         </p>
         <p className="mb-4.5 text-[12px] leading-[1.6] text-faint">
-          {/* DRAFT — placeholder copy, pending your edit */}
-          We only listen for notes you play; nothing is recorded or sent anywhere. You can skip this and still play with
-          your computer keyboard.
+          We only listen for notes (and sustain / all-notes-off). Nothing is
+          recorded or sent anywhere unless you arm ● record. You can skip and
+          still play with computer keys.
         </p>
         <div className="flex items-center justify-end gap-2">
           <button

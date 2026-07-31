@@ -15,7 +15,7 @@ export function StudioStatusStrip({
 }: {
   onOpenIo: () => void;
 }) {
-  const eng = useEngine(["transport", "fx", "arrange"]);
+  const eng = useEngine(["transport", "fx", "arrange", "midi"]);
   const rmsRef = useRef<HTMLDivElement>(null);
   const peakRef = useRef<HTMLDivElement>(null);
   const dbRef = useRef<HTMLSpanElement>(null);
@@ -108,6 +108,23 @@ export function StudioStatusStrip({
         </span>
         <span className="text-faint">·</span>
         <span className="text-dim">store {store}</span>
+        <span className="text-faint">·</span>
+        <span
+          className={
+            eng.midiStatus.indexOf("device") >= 0
+              ? "text-accent"
+              : eng.midiStatus === "denied"
+                ? "text-[#e98c79]"
+                : "text-dim"
+          }
+        >
+          midi{" "}
+          {eng.midiStatus === "idle"
+            ? "off"
+            : eng.midiStatus === "unsupported"
+              ? "n/a"
+              : eng.midiStatus}
+        </span>
         {eng.armedChannel && (
           <>
             <span className="text-faint">·</span>

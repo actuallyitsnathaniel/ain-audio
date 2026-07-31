@@ -469,6 +469,11 @@ studio (same wipe as New project).
     A silent tap into the armed track’s analyser keeps the fader meter alive whether
     or not monitor is on. Speakers can feedback; headphones recommended. Stream stays
     warm while armed either way.
+  - **MIDI** — Web MIDI (`navigator.requestMIDIAccess`), gated by [MidiGate](components/MidiGate.tsx)
+    before the browser prompt. Wired from I/O prefs, Instrument chip, arming a midi/drum
+    track, or ● MIDI record. Note On/Off (+ velocity) → `noteOn`/`noteOff` →
+    `startVoiceAt`/`releaseVoice` (armed/selected track). Also: CC 64 sustain, CC 120/123
+    all-notes/sound-off (`panicMidiNotes`). Status on the studio strip + I/O panel.
 
 **Capability / acceptance** — first arm of an audio track (or first open of **I/O** prefs)
 shows a one-time **Before you record** sheet (`ain-audio-accept` v1). Checklist must be

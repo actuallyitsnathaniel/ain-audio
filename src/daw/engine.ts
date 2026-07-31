@@ -1799,6 +1799,10 @@ class AudioEngine {
   // status: "idle" (never asked) | "unsupported" | "denied" | "no device" | "N device(s)"
   midiStatus = "idle";
   private _midiAccess: MIDIAccess | null = null;
+  /** Damper pedal (CC 64) — holds sounding notes until released. */
+  private _midiSustain = false;
+  /** liveKey strings deferred by sustain (released on pedal up / all-notes-off). */
+  private _midiSustained = new Set<string>();
 
   // Request Web MIDI access and wire every input to the live keyboard. Idempotent:
   // safe to call repeatedly; once granted it just re-wires. Returns true if access
@@ -1814,12 +1818,7 @@ class AudioEngine {
       this._midiAccess!.inputs.forEach((inp) => {
         count++;
         inp.onmidimessage = (msg: MIDIMessageEvent) => {
-          if (!msg.data) return;
-          const st = msg.data[0] & 0xf0;
-          const note = msg.data[1];
-          const vel = msg.data[2];
-          if (st === 144 && vel > 0) this.noteOn(note, vel / 127);
-          else if (st === 128 || (st === 144 && vel === 0)) this.noteOff(note);
+          this.handleMidiMessage(msg);
         };
       });
       this.midiStatus = count
@@ -1841,6 +1840,70 @@ class AudioEngine {
       this.emit("midi");
       return false;
     }
+  }
+
+  /** Parse a hardware MIDI message → noteOn/Off (+ sustain / all-notes-off). */
+  private handleMidiMessage(msg: MIDIMessageEvent) {
+    const data = msg.data;
+    if (!data || data.length < 1) return;
+    const st = data[0]! & 0xf0;
+    // ignore realtime / sysex / active sensing / clock
+    if (data[0]! === 0xf0 || st === 0xf0) return;
+
+    if (st === 0xb0 && data.length >= 3) {
+      const cc = data[1]!;
+      const val = data[2]!;
+      // CC 64 sustain / damper
+      if (cc === 64) {
+        const on = val >= 64;
+        if (this._midiSustain && !on) this.releaseMidiSustain();
+        this._midiSustain = on;
+        return;
+      }
+      // CC 120 all sound off / 123 all notes off
+      if (cc === 120 || cc === 123) {
+        this.panicMidiNotes();
+        return;
+      }
+      return;
+    }
+
+    if (data.length < 2) return;
+    const note = data[1]!;
+    const vel = data.length >= 3 ? data[2]! : 0;
+    if (st === 0x90 && vel > 0) this.noteOn(note, vel / 127);
+    else if (st === 0x80 || (st === 0x90 && vel === 0)) this.noteOff(note);
+  }
+
+  private releaseMidiSustain() {
+    if (!this._midiSustained.size) return;
+    const keys = [...this._midiSustained];
+    this._midiSustained.clear();
+    for (const key of keys) {
+      const h = this._liveVoices[key];
+      if (!h) continue;
+      delete this._liveVoices[key];
+      if (this.ctx) this.releaseVoice(h, this.ctx.currentTime);
+    }
+    this.emit("synth");
+    this._centinelMidiSig = "";
+    this.syncCentinelMidiTargets();
+  }
+
+  /** Kill all live keyboard/hardware voices (sustain cleared). */
+  panicMidiNotes() {
+    this._midiSustain = false;
+    this._midiSustained.clear();
+    const now = this.ctx?.currentTime ?? 0;
+    for (const key of Object.keys(this._liveVoices)) {
+      const h = this._liveVoices[key];
+      if (!h) continue;
+      delete this._liveVoices[key];
+      if (this.ctx) this.releaseVoice(h, now, true);
+    }
+    this.emit("synth");
+    this._centinelMidiSig = "";
+    this.syncCentinelMidiTargets();
   }
 
   // ── live keyboard (held notes keyed by channel:midi; retrigger replaces) ──
@@ -1920,12 +1983,19 @@ class AudioEngine {
     this.recordNoteOff(midi); // close a recorded note even for drum one-shots (no live voice)
     const cid = this.liveCid(channelId); // must mirror noteOn or the release misses its key
     const key = this.liveKey(midi, cid);
+    const gKey = this.liveKey(midi, undefined);
     // fall back to the global slot in case the note was pressed before arming
-    const h =
-      this._liveVoices[key] ?? this._liveVoices[this.liveKey(midi, undefined)];
+    const h = this._liveVoices[key] ?? this._liveVoices[gKey];
     if (!h) return;
+    // damper pedal: keep sounding until pedal up (instant = retrigger / panic path)
+    if (this._midiSustain && !instant) {
+      this._midiSustained.add(this._liveVoices[key] ? key : gKey);
+      return;
+    }
+    this._midiSustained.delete(key);
+    this._midiSustained.delete(gKey);
     delete this._liveVoices[key];
-    delete this._liveVoices[this.liveKey(midi, undefined)];
+    delete this._liveVoices[gKey];
     this.releaseVoice(h, this.ctx!.currentTime, instant);
     this.emit("synth");
     this._centinelMidiSig = "";
