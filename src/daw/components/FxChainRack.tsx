@@ -5,7 +5,7 @@
 // track's chain and the master bus. `tail` renders fixed, non-reorderable panels
 // after the chain (the master's safety limiter).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1934,6 +1934,10 @@ export function FxChainRack({
 
   // Ableton-style pick-up reorder: lift a floating ghost, open a gap under the
   // cursor, commit onMove once on release (no live audio rewires mid-drag).
+  //
+  // Pointer tracking is on window — NOT the ⠿ handle. Starting a drag removes
+  // the lifted device from the list (gap UX), which unmounts the handle; any
+  // setPointerCapture / onPointerMove on that button dies with it.
   type DragState = {
     id: string;
     from: number;
@@ -1949,20 +1953,33 @@ export function FxChainRack({
   };
   const [dragUi, setDragUi] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  // FLIP: visual lefts of sibling devices *before* the next gap move.
+  const flipFromRef = useRef<Map<string, number>>(new Map());
   const devicesRef = useRef(devices);
+  const onMoveRef = useRef(onMove);
   useEffect(() => {
     devicesRef.current = devices;
   }, [devices]);
+  useEffect(() => {
+    onMoveRef.current = onMove;
+  }, [onMove]);
 
   const dropIndexAt = useCallback((clientX: number, id: string): number => {
+    // Index among remaining devices (matches FxChain.moveDevice after splice-out).
+    // Use offsetLeft (layout box), not getBoundingClientRect — siblings may be
+    // mid-FLIP with a translateX that would skew hit-testing.
+    const root = scroller.current;
+    if (!root) return 0;
+    const origin = root.getBoundingClientRect().left - root.scrollLeft;
     const list = devicesRef.current.filter((d) => d.id !== id);
     for (let i = 0; i < list.length; i++) {
-      const el = scroller.current?.querySelector(
+      const el = root.querySelector(
         `[data-fxid="${list[i].id}"]`,
       ) as HTMLElement | null;
       if (!el) continue;
-      const r = el.getBoundingClientRect();
-      if (clientX < r.left + r.width / 2) return i;
+      const mid = origin + el.offsetLeft + el.offsetWidth / 2;
+      if (clientX < mid) return i;
     }
     return list.length;
   }, []);
@@ -1976,12 +1993,97 @@ export function FxChainRack({
     else if (clientX > r.right - edge) el.scrollLeft += 14;
   }, []);
 
+  const captureFlipFrom = useCallback((liftId: string) => {
+    const map = new Map<string, number>();
+    const root = scroller.current;
+    if (!root) {
+      flipFromRef.current = map;
+      return;
+    }
+    for (const d of devicesRef.current) {
+      if (d.id === liftId) continue;
+      const el = root.querySelector(`[data-fxid="${d.id}"]`) as HTMLElement | null;
+      if (!el) continue;
+      // Visual left (includes mid-flight transform) so chained gap moves stay smooth.
+      map.set(d.id, el.getBoundingClientRect().left);
+    }
+    flipFromRef.current = map;
+  }, []);
+
+  const clearFlipStyles = useCallback(() => {
+    const root = scroller.current;
+    if (!root) return;
+    for (const el of root.querySelectorAll<HTMLElement>("[data-fxid]")) {
+      el.style.transition = "";
+      el.style.transform = "";
+    }
+    flipFromRef.current = new Map();
+  }, []);
+
+  // After the gap reflows, invert sibling jumps then play translateX → 0.
+  useLayoutEffect(() => {
+    if (!dragUi) return;
+    const root = scroller.current;
+    if (!root) return;
+    const from = flipFromRef.current;
+    if (from.size === 0) return;
+
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const playing: HTMLElement[] = [];
+
+    for (const d of devicesRef.current) {
+      if (d.id === dragUi.id) continue;
+      const el = root.querySelector(`[data-fxid="${d.id}"]`) as HTMLElement | null;
+      if (!el) continue;
+      const first = from.get(d.id);
+      if (first === undefined) continue;
+      // Resting layout left (strip any in-flight FLIP before measuring Last).
+      el.style.transition = "none";
+      el.style.transform = "none";
+      const last = el.getBoundingClientRect().left;
+      const dx = first - last;
+      if (Math.abs(dx) < 0.5 || reduce) continue;
+      el.style.transform = `translateX(${dx}px)`;
+      playing.push(el);
+    }
+    flipFromRef.current = new Map();
+    if (playing.length === 0) return;
+
+    // Force invert paint, then ease to resting layout.
+    void root.offsetWidth;
+    for (const el of playing) {
+      el.style.transition = "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)";
+      el.style.transform = "translateX(0)";
+    }
+    // dragUi.x/y intentionally omitted — only re-FLIP when the gap slot moves
+  }, [dragUi?.id, dragUi?.drop]);
+
+  const stopDragTracking = useCallback(() => {
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = null;
+  }, []);
+
+  const endDrag = useCallback((commit: boolean) => {
+    const cur = dragRef.current;
+    dragRef.current = null;
+    clearFlipStyles();
+    setDragUi(null);
+    stopDragTracking();
+    if (!commit || !cur) return;
+    // from/drop share the same coordinate system: index among others after lift
+    // (from was the pre-lift index, which equals the no-op insert slot).
+    if (cur.drop !== cur.from) onMoveRef.current(cur.id, cur.drop);
+  }, [clearFlipStyles, stopDragTracking]);
+
   const startDrag =
     (id: string) => (e: ReactPointerEvent<HTMLButtonElement>) => {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-      e.currentTarget.setPointerCapture(e.pointerId);
+      // Tear down any orphaned session (e.g. lost pointerup).
+      stopDragTracking();
       const wrap = e.currentTarget.closest("[data-fxid]") as HTMLElement | null;
       if (!wrap) return;
       const r = wrap.getBoundingClientRect();
@@ -2001,49 +2103,57 @@ export function FxChainRack({
         label: FX_DEVICES[d.type].label,
         on: !!(d.params as { on?: boolean }).on,
       };
+      // Snapshot siblings before the lift reflow (gap replaces the device).
+      captureFlipFrom(id);
       dragRef.current = next;
       setDragUi(next);
+
+      const prevUserSelect = document.body.style.userSelect;
+      document.body.style.userSelect = "none";
+
+      const onMove = (ev: PointerEvent) => {
+        const cur = dragRef.current;
+        if (!cur) return;
+        autoScroll(ev.clientX);
+        const drop = dropIndexAt(ev.clientX, cur.id);
+        if (drop !== cur.drop) captureFlipFrom(cur.id);
+        const updated: DragState = {
+          ...cur,
+          drop,
+          x: ev.clientX - cur.ox,
+          y: ev.clientY - cur.oy,
+        };
+        dragRef.current = updated;
+        // Ghost tracks every move; FLIP only when drop (sibling layout) changes.
+        setDragUi(updated);
+      };
+      const onUp = () => endDrag(true);
+      const onCancel = () => endDrag(false);
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      dragCleanupRef.current = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        document.body.style.userSelect = prevUserSelect;
+      };
     };
-
-  const moveDrag = (e: ReactPointerEvent<HTMLButtonElement>) => {
-    const cur = dragRef.current;
-    if (!cur) return;
-    autoScroll(e.clientX);
-    const drop = dropIndexAt(e.clientX, cur.id);
-    const next: DragState = {
-      ...cur,
-      drop,
-      x: e.clientX - cur.ox,
-      y: e.clientY - cur.oy,
-    };
-    dragRef.current = next;
-    setDragUi(next);
-  };
-
-  const endDrag = () => {
-    const cur = dragRef.current;
-    dragRef.current = null;
-    setDragUi(null);
-    if (!cur) return;
-    if (cur.drop !== cur.from) onMove(cur.id, cur.drop);
-  };
-
-  const cancelDrag = useCallback(() => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    setDragUi(null);
-  }, []);
 
   useEffect(() => {
     if (!dragUi) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      cancelDrag();
+      endDrag(false);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [dragUi, cancelDrag]);
+  }, [dragUi, endDrag]);
+
+  // Unmount / hot-reload: drop listeners so we don't leak.
+  useEffect(() => () => stopDragTracking(), [stopDragTracking]);
 
   // Visual order while dragging: others + a gap slot at `drop`.
   const dragSlots: Array<{ kind: "device"; d: (typeof devices)[0] } | { kind: "gap" }> =
@@ -2064,14 +2174,14 @@ export function FxChainRack({
     <div className="relative">
       <div
         ref={scroller}
-        className="fx-scroll flex flex-nowrap items-stretch gap-2.5 overflow-x-auto pb-1.5"
+        className="fx-scroll relative flex flex-nowrap items-stretch gap-2.5 overflow-x-auto pb-1.5"
       >
-        {dragSlots.map((slot, si) => {
+        {dragSlots.map((slot) => {
           if (slot.kind === "gap" && dragUi) {
             return (
               <div
-                key={"gap-" + si}
-                className="shrink-0 rounded-sm border border-dashed border-accent/50 bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] transition-[width] duration-150"
+                key="fx-drop-gap"
+                className="shrink-0 rounded-sm border border-dashed border-accent/50 bg-[color-mix(in_srgb,var(--accent)_8%,transparent)]"
                 style={{ width: dragUi.w, minHeight: Math.max(72, dragUi.h * 0.35) }}
                 aria-hidden
               />
@@ -2084,10 +2194,7 @@ export function FxChainRack({
             <div
               key={d.id}
               data-fxid={d.id}
-              className={
-                "relative shrink-0 transition-[transform,opacity] duration-150 " +
-                (dragUi ? "ease-out" : "")
-              }
+              className="relative shrink-0 will-change-transform"
             >
               {folded.has(d.id) ? (
                 // folded: a slim vertical strip — power dot + rotated name; click to expand.
@@ -2131,10 +2238,8 @@ export function FxChainRack({
                     ▼
                   </button>
                   <button
+                    type="button"
                     onPointerDown={startDrag(d.id)}
-                    onPointerMove={moveDrag}
-                    onPointerUp={endDrag}
-                    onPointerCancel={endDrag}
                     className="absolute top-0.75 right-5.5 z-3 flex h-6 w-4.5 cursor-grab touch-none items-center justify-center rounded-[3px] text-[15px] leading-none text-faint transition-colors hover:bg-panel hover:text-dim active:cursor-grabbing"
                     aria-label={"reorder " + FX_DEVICES[d.type].label}
                     title="drag to reorder — pick up; Esc cancels"

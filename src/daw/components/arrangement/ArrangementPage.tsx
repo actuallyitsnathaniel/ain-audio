@@ -19,7 +19,7 @@ import { PL_KEYMAP } from "../audio-lab/synth-ui";
 import { Timeline } from "./Timeline";
 import { ClipEditor } from "./ClipEditor";
 import { PlaybackPane } from "./PlaybackPane";
-import { SessionCluster } from "./SessionCluster";
+import { FileMenu } from "./FileMenu";
 import { StudioStatusStrip } from "./StudioStatusStrip";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TrackFader } from "./TrackFader";
@@ -596,45 +596,49 @@ export function ArrangementPage() {
         <SectionHead num="05" title="studio" sub="linear timeline · place midi, drum + audio clips on tracks · runs through the fx rack" />
 
         <div className="flex flex-col gap-3 rounded-[5px] border border-line bg-panel p-4 max-[767px]:p-3" onPointerDownCapture={() => focusPane("timeline")}>
+          {/* File — top-left above transport (Ableton convention) */}
+          <FileMenu
+            prefsOpen={prefsOpen}
+            onPrefsOpenChange={setPrefsOpen}
+            onRequestAccept={requestAccept}
+            onNewProject={() => {
+              if (
+                window.confirm(
+                  "New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?",
+                )
+              ) {
+                void engine.newProject();
+                setEditSel(null);
+              }
+            }}
+          />
+
           <PlaybackPane />
 
-          {/* tracks (left) · session I/O + new project (right) */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-mono text-[9px] tracking-widest text-faint">TRACKS</span>
-              <button
-                type="button"
-                className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
-                onClick={() => addTrack("midi")}
-              >
-                + midi
-              </button>
-              <button
-                type="button"
-                className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
-                onClick={() => addTrack("drum")}
-              >
-                + drum
-              </button>
-              <button
-                type="button"
-                className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
-                onClick={() => addTrack("audio")}
-              >
-                + audio
-              </button>
-            </div>
-            <SessionCluster
-              prefsOpen={prefsOpen}
-              onPrefsOpenChange={setPrefsOpen}
-              onRequestAccept={requestAccept}
-              onNewProject={() => {
-                if (window.confirm("New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?")) {
-                  void engine.newProject();
-                  setEditSel(null);
-                }
-              }}
-            />
+          {/* tracks toolbar */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[9px] tracking-widest text-faint">TRACKS</span>
+            <button
+              type="button"
+              className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+              onClick={() => addTrack("midi")}
+            >
+              + midi
+            </button>
+            <button
+              type="button"
+              className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+              onClick={() => addTrack("drum")}
+            >
+              + drum
+            </button>
+            <button
+              type="button"
+              className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+              onClick={() => addTrack("audio")}
+            >
+              + audio
+            </button>
           </div>
 
           <StudioStatusStrip

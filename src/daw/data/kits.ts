@@ -15,11 +15,22 @@ export interface DrumLane {
   url?: string; // resolved one-shot URL (set at build time if a file exists)
   /** Session import (user-dropped one-shot) — preferred over url when set. */
   bufId?: string;
-  /** Play region inside the sample (0..1). */
+  /** Play region inside the sample (0..1) — same as SampleSource start/end. */
   a?: number;
   b?: number;
-  /** Linear lane gain. */
+  /** Linear lane gain (sample oscillator "level"). */
   gain?: number;
+  /** Same filter block the sample oscillator uses. */
+  filter?: {
+    type: BiquadFilterType;
+    cut: number;
+    q: number;
+    on?: boolean;
+  };
+  /** Filter envelope (amt in Hz) — same shape as SynthPatch.filtEnv. */
+  filtEnv?: { a: number; d: number; s: number; r: number; amt: number };
+  /** Amp envelope — same shape as SynthPatch.ampEnv. */
+  ampEnv?: { a: number; d: number; s: number; r: number };
 }
 
 export interface DrumKit {

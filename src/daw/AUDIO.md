@@ -424,8 +424,8 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
 Portable project file for actuallyitsnathaniel (extension invented here). Container
 is a zip (`fflate`) for storage-friendly size + inspectability; layout + manifest
 id are fixed — not a generic archive. Working copy stays `localStorage`
-(`ain-arrangement`) + IndexedDB; Save/Open live on the session cluster
-([SessionCluster](components/arrangement/SessionCluster.tsx)).
+(`ain-arrangement`) + IndexedDB; Save/Open live in the **File** menu
+([FileMenu](components/arrangement/FileMenu.tsx), top-left above transport).
 
 | Path | Contents |
 |------|----------|
@@ -440,7 +440,7 @@ are **not** duplicated — recipients need the same site build. Engine: `exportA
 `importAin` in [ain-pack.ts](ain-pack.ts) + [engine.ts](engine.ts). Open replaces the
 studio (same wipe as New project).
 
-  **Audio prefs** (`ain-audio-prefs`, **I/O** chip in the session cluster → small panel):
+  **Audio prefs** (`ain-audio-prefs`, **File → I/O Preferences…** → small panel):
   - **Input** — `enumerateDevices` list; `deviceId: { exact }` on open (falls back to
     Default if the device is gone). `devicechange` refreshes the list.
   - **Output** — `audiooutput` list + `AudioContext.setSinkId(id)` when supported
@@ -477,7 +477,7 @@ studio (same wipe as New project).
 
 **Capability / acceptance** — first arm of an audio track (or first open of **I/O** prefs)
 shows a one-time **Before you record** sheet (`ain-audio-accept` v1). Checklist must be
-acked before Continue. **I/O → system** shows a live `engine.audioCapabilityReport()`
+acked before Continue. **File → I/O → system** shows a live `engine.audioCapabilityReport()`
 (browser/OS, chosen input/output labels when set, sample rate, capture path, persist codec
 Opus/WebM vs WAV, latency estimate, UI frame load — labeled as UI not DSP; Safari note when
 `setSinkId` is missing). Soft

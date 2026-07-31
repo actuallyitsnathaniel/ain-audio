@@ -2,7 +2,7 @@
 // Standard DAW playback controls: ⏮ return-to-start · ▶/⏸ play/pause · ⏹ stop,
 // bars.beats + mm:ss readout, tempo (+ tap), time signature, loop (toggle + numeric
 // range), metronome (+ count-in), follow-playhead. Spacebar/Home/L keyboard transport.
-// Session I/O + new project live in SessionCluster (not here).
+// Session I/O / save / new live in FileMenu (top-left, above this transport).
 
 import { useRef, type ReactNode } from "react";
 import { engine } from "../../engine";
@@ -158,7 +158,7 @@ export function PlaybackPane() {
       {/* snap / launch / follow / keys — folded out of the primary bar */}
       <GridMenu />
 
-      {/* tempo + tap — stay with transport (session I/O is SessionCluster) */}
+      {/* tempo + tap — stay with transport (File menu owns I/O / project) */}
       <span className="ml-auto flex items-center gap-2.5">
         <button className={ctl + px + idle} onClick={() => engine.tapTempo()} title="tap tempo — hit repeatedly to set the BPM">
           tap

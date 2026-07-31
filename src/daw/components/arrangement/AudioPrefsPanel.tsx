@@ -99,6 +99,7 @@ export function AudioPrefsPanel({
       const t = e.target as Node;
       if (el.contains(t)) return;
       if ((t as HTMLElement).closest?.("[data-audio-prefs-open]")) return;
+      if ((t as HTMLElement).closest?.("[data-file-menu]")) return;
       if ((t as HTMLElement).closest?.("[data-audio-accept]")) return;
       onClose();
     };
@@ -134,7 +135,7 @@ export function AudioPrefsPanel({
       ref={root}
       role="dialog"
       aria-label="audio preferences"
-      className="absolute top-[calc(100%+6px)] right-0 z-40 w-[min(340px,calc(100vw-24px))] rounded-sm border border-line bg-[#0e0e12] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+      className="absolute top-[calc(100%+6px)] left-0 z-40 w-[min(340px,calc(100vw-24px))] rounded-sm border border-line bg-[#0e0e12] p-3 shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
     >
       <div className="mb-2.5 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1">

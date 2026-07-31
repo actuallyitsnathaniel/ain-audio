@@ -9,6 +9,7 @@ import { useEngine } from "../../hooks/useEngine";
 import { Knob } from "../Knob";
 import { PianoRoll } from "../piano-roll/PianoRoll";
 import { DrumClipGrid } from "./DrumClipGrid";
+import { DrumLaneEditor } from "./DrumLaneEditor";
 import { AudioClipEditor } from "./AudioClipEditor";
 import { allKits, findKit, resizeRow } from "../../data/kits";
 import type { SequenceClip } from "../../data/kits";
@@ -37,9 +38,10 @@ function SwingKnob({ trackId, clipId, value }: { trackId: string; clipId: string
 // `content.notes` — the source of truth. The sequence grid shows those notes on-grid and
 // hatch-flags any step whose notes it can't fully represent. A grid edit is on-grid, so
 // it regenerates the notes from the grid.
-function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: { trackId: string; clipId: string; pat: SequenceClip; notes?: NoteClip; startBeat: number; swing?: number; stamp: number }) {
+function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: { trackId: string; clipId: string; pat: SequenceClip; notes?: NoteClip; startBeat: number; swing?: number; stamp: string }) {
   const [view, setView] = useState<"seq" | "roll">("seq");
   const kit = findKit(pat.kitId);
+  const [laneId, setLaneId] = useState(kit.lanes[0]?.id ?? "kick");
   // sequence-view pattern: derive from notes when they're the truth, else the raw pattern
   const gridPat = notes ? { ...pat, ...notesToPattern(notes, kit, pat.steps) } : pat;
   // grid edit → reconcile against existing notes so off-grid/held detail on untouched
@@ -135,7 +137,16 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
         </span>
       </div>
       {view === "seq" ? (
-        <DrumClipGrid key={clipId + "-seq:" + stamp} pattern={gridPat} notes={notes} startBeat={startBeat} kitId={pat.kitId || kit.id} onCommit={commitGrid} />
+        <DrumClipGrid
+          key={clipId + "-seq:" + stamp}
+          pattern={gridPat}
+          notes={notes}
+          startBeat={startBeat}
+          kitId={pat.kitId || kit.id}
+          selectedLaneId={laneId}
+          onSelectLane={setLaneId}
+          onCommit={commitGrid}
+        />
       ) : (
         <PianoRoll
           key={clipId + "-roll:" + stamp + ":" + pat.steps}
@@ -146,6 +157,18 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
           onCommit={commitRoll}
         />
       )}
+      <DrumLaneEditor
+        kitId={pat.kitId || kit.id}
+        laneId={laneId}
+        onLaneId={setLaneId}
+        onKitId={(id) =>
+          engine.setClipContent(trackId, clipId, {
+            kind: "drum",
+            pattern: { ...pat, kitId: id },
+            notes,
+          })
+        }
+      />
     </div>
   );
 }

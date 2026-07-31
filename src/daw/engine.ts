@@ -77,6 +77,14 @@ import {
   type SynthPatch,
 } from "./data/patches";
 import { setOscillatorWave } from "./osc-phase";
+import {
+  DEFAULT_DRUM_AMP,
+  DEFAULT_DRUM_FILT,
+  DEFAULT_DRUM_FILT_ENV,
+  scheduleAmpAttack,
+  scheduleAmpRelease,
+  scheduleFiltEnv,
+} from "./voice-env";
 import { parseMidi } from "./data/midi-file";
 import {
   DEFAULT_KIT,
@@ -1565,12 +1573,7 @@ class AudioEngine {
         p.filter.cut * Math.pow(2, (p.filter.keyTrack * (midi - 60)) / 12),
       );
       // filter envelope (ADSR) on cutoff, peaking at cutBase + amt
-      const fe = p.filtEnv;
-      const cutPeak = Math.max(20, Math.min(18000, cutBase + fe.amt));
-      const cutSus = Math.max(20, Math.min(18000, cutBase + fe.amt * fe.s));
-      vf.frequency.setValueAtTime(cutBase, t);
-      vf.frequency.linearRampToValueAtTime(cutPeak, t + Math.max(0.005, fe.a));
-      vf.frequency.setTargetAtTime(cutSus, t + fe.a, Math.max(0.03, fe.d));
+      scheduleFiltEnv(vf.frequency, t, cutBase, p.filtEnv);
     } else {
       vf.type = "allpass"; // bypass: flat magnitude, sources still route through it
     }
@@ -1702,9 +1705,7 @@ class AudioEngine {
     // amp envelope
     const ae = p.ampEnv;
     const peak = p.vol * vel;
-    vg.gain.setValueAtTime(0, t);
-    vg.gain.linearRampToValueAtTime(peak, t + Math.max(0.005, ae.a));
-    vg.gain.setTargetAtTime(peak * ae.s, t + ae.a, Math.max(0.03, ae.d));
+    scheduleAmpAttack(vg.gain, t, ae, peak);
 
     // pitch-modulation targets = every pitched source's detune (oscs + the sample)
     const pitchTargets = oscs.map((o) => o.detune);
@@ -3948,9 +3949,8 @@ class AudioEngine {
     this.saveArr();
   }
 
-  // Voice one drum lane at `when`, into `dest`. Uses the lane's decoded one-shot when
-  // available (looked up by lane id across kits), else its fallback synth voice. Used
-  // by arrangement drum clips (→ the track strip) and note-preview auditions.
+  // Voice one drum lane at `when`, into `dest`. Sample path reuses the same
+  // filter + filt-env + amp-env math as the synth sample oscillator (`voice-env.ts`).
   private voiceDrum(
     lane: DrumLane,
     when: number,
@@ -3960,29 +3960,111 @@ class AudioEngine {
     const c = this.ensureCtx();
     const buf =
       (lane.bufId && this._importBufs[lane.bufId]) || this._drumBufs[lane.id];
-    if (buf) {
-      const g = c.createGain();
-      const laneGain = lane.gain ?? 1;
-      g.gain.value = vel * laneGain;
-      const src = c.createBufferSource();
-      src.buffer = buf;
-      src.connect(g);
-      g.connect(dest);
-      const a = Math.min(1, Math.max(0, lane.a ?? 0));
-      const b = Math.min(1, Math.max(a + 0.001, lane.b ?? 1));
-      const startSec = a * buf.duration;
-      const dur = Math.max(0.01, (b - a) * buf.duration);
-      src.start(when, startSec, dur);
-      src.onended = () => {
-        try {
-          g.disconnect();
-        } catch {
-          /* fine */
-        }
-      };
-    } else {
+    if (!buf) {
       this.synthDrum(lane.synth, when, vel, dest);
+      return;
     }
+
+    const a = Math.min(0.999, Math.max(0, lane.a ?? 0));
+    const b = Math.min(1, Math.max(a + 0.001, lane.b ?? 1));
+    const startSec = a * buf.duration;
+    const playDur = Math.max(0.01, (b - a) * buf.duration);
+    const peak = vel * (lane.gain ?? 1);
+    const ampEnv = lane.ampEnv ?? DEFAULT_DRUM_AMP;
+    const filt = lane.filter ?? DEFAULT_DRUM_FILT;
+    const filtEnv = lane.filtEnv ?? DEFAULT_DRUM_FILT_ENV;
+    const filterOn = filt.on !== false;
+
+    const vg = c.createGain();
+    vg.gain.value = 0;
+    scheduleAmpAttack(vg.gain, when, ampEnv, peak);
+    // one-shot: begin release near the end of the played region (no note-off)
+    const releaseAt =
+      when + Math.max(0.02, playDur - Math.max(0.02, ampEnv.r));
+    scheduleAmpRelease(vg.gain, releaseAt, ampEnv, peak * ampEnv.s);
+    vg.connect(dest);
+
+    const vf = c.createBiquadFilter();
+    if (filterOn) {
+      vf.type = filt.type;
+      vf.Q.value = filt.q;
+      scheduleFiltEnv(vf.frequency, when, filt.cut, filtEnv);
+      vf.connect(vg);
+    } else {
+      vf.type = "allpass";
+      vf.connect(vg);
+    }
+
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.connect(vf);
+    src.start(when, startSec, playDur);
+    const stopAt = when + playDur + Math.max(0.05, ampEnv.r) + 0.05;
+    try {
+      src.stop(stopAt);
+    } catch {
+      /* fine */
+    }
+    src.onended = () => {
+      try {
+        vg.disconnect();
+        vf.disconnect();
+      } catch {
+        /* fine */
+      }
+    };
+  }
+
+  /** Patch voice params on a kit lane (promotes builtin → user kit). Returns kit id. */
+  setKitLaneVoice(
+    kitId: string,
+    laneId: string,
+    partial: Partial<
+      Pick<
+        DrumLane,
+        "a" | "b" | "gain" | "filter" | "filtEnv" | "ampEnv" | "name"
+      >
+    >,
+  ): string {
+    let kit = findKit(kitId);
+    const wasBuiltin = !kit.user;
+    const prevId = kit.id;
+    if (wasBuiltin) kit = cloneKitAsUser(kit, kit.name + " (custom)");
+    const lanes = kit.lanes.map((l) => {
+      if (l.id !== laneId) return { ...l };
+      return {
+        ...l,
+        ...partial,
+        filter: partial.filter
+          ? { ...(l.filter ?? DEFAULT_DRUM_FILT), ...partial.filter }
+          : l.filter,
+        filtEnv: partial.filtEnv
+          ? { ...(l.filtEnv ?? DEFAULT_DRUM_FILT_ENV), ...partial.filtEnv }
+          : l.filtEnv,
+        ampEnv: partial.ampEnv
+          ? { ...(l.ampEnv ?? DEFAULT_DRUM_AMP), ...partial.ampEnv }
+          : l.ampEnv,
+      };
+    });
+    const next: DrumKit = { ...kit, lanes, user: true };
+    upsertUserKit(next);
+    this.kit = next;
+    if (wasBuiltin) {
+      for (const t of this.arrangement.tracks)
+        for (const cl of t.clips) {
+          if (cl.content.kind !== "drum") continue;
+          const id = cl.content.pattern.kitId || prevId;
+          if (id !== prevId) continue;
+          cl.content = {
+            ...cl.content,
+            pattern: { ...cl.content.pattern, kitId: next.id },
+          };
+        }
+      this.saveArr();
+    }
+    this.emit("transport");
+    this.emit("arrange");
+    return next.id;
   }
 
   // metronome click: a short pitched blip → straight to master (not through a track
@@ -4254,7 +4336,17 @@ class AudioEngine {
     if (wasBuiltin) kit = cloneKitAsUser(kit, kit.name + " (custom)");
     const lanes = kit.lanes.map((l) =>
       l.id === laneId
-        ? { ...l, bufId: res.bufId, url: undefined, a: 0, b: 1, gain: 1 }
+        ? {
+            ...l,
+            bufId: res.bufId,
+            url: undefined,
+            a: 0,
+            b: 1,
+            gain: 1,
+            ampEnv: l.ampEnv ?? DEFAULT_DRUM_AMP,
+            filter: l.filter ?? DEFAULT_DRUM_FILT,
+            filtEnv: l.filtEnv ?? DEFAULT_DRUM_FILT_ENV,
+          }
         : { ...l },
     );
     const next: DrumKit = { ...kit, lanes, user: true };
@@ -4569,7 +4661,38 @@ class AudioEngine {
   importPeaks(bufId: string, bins: number): Float32Array | null {
     const buf = this._importBufs[bufId];
     if (!buf) return null;
-    const key = bufId + ":" + bins;
+    return this.peaksFromBuf(buf, "imp:" + bufId, bins);
+  }
+
+  /** Peaks for a kit lane one-shot (session import or decoded kit url). */
+  drumLanePeaks(laneId: string, bins: number): Float32Array | null {
+    const lane = this.kit.lanes.find((l) => l.id === laneId);
+    const buf =
+      (lane?.bufId && this._importBufs[lane.bufId]) ||
+      this._drumBufs[laneId] ||
+      null;
+    if (!buf) return null;
+    const key = lane?.bufId
+      ? "imp:" + lane.bufId
+      : "drum:" + this.kit.id + ":" + laneId;
+    return this.peaksFromBuf(buf, key, bins);
+  }
+
+  drumLaneSeconds(laneId: string): number {
+    const lane = this.kit.lanes.find((l) => l.id === laneId);
+    const buf =
+      (lane?.bufId && this._importBufs[lane.bufId]) ||
+      this._drumBufs[laneId] ||
+      null;
+    return buf?.duration ?? 0;
+  }
+
+  private peaksFromBuf(
+    buf: AudioBuffer,
+    cacheKey: string,
+    bins: number,
+  ): Float32Array {
+    const key = cacheKey + ":" + bins;
     const cached = this._importPeaks[key];
     if (cached) return cached;
     const ch0 = buf.getChannelData(0);

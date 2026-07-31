@@ -3,6 +3,9 @@
 // edits a clip's own `pattern` (a SequenceClip) and commits back via onCommit. Click
 // a step to toggle it; shift-click toggles its accent. The kit comes from the clip's
 // pattern.kitId. Playhead highlight reads engine.getArrangementBeat().
+//
+// Sample intake: each lane has a dedicated well (drop / click-to-pick). Selecting a
+// lane (click name or well) docks the voice inspector below via selectedLaneId.
 
 import { useRef } from "react";
 import { engine } from "../../engine";
@@ -20,12 +23,16 @@ export function DrumClipGrid({
   notes,
   startBeat,
   kitId,
+  selectedLaneId,
+  onSelectLane,
   onCommit,
 }: {
   pattern: SequenceClip;
   notes?: NoteClip;
   startBeat: number;
   kitId?: string;
+  selectedLaneId: string;
+  onSelectLane: (laneId: string) => void;
   onCommit: (p: SequenceClip) => void;
 }) {
   useEngine(["transport", "arrange"]);
@@ -41,6 +48,13 @@ export function DrumClipGrid({
     if (!file) return;
     e.preventDefault();
     e.stopPropagation();
+    onSelectLane(laneId);
+    const ok = await engine.setKitLaneSample(kit.id, laneId, file);
+    if (!ok) window.alert("Couldn't load that sample for this lane");
+  };
+
+  const onLanePick = async (laneId: string, file: File) => {
+    onSelectLane(laneId);
     const ok = await engine.setKitLaneSample(kit.id, laneId, file);
     if (!ok) window.alert("Couldn't load that sample for this lane");
   };
@@ -87,38 +101,53 @@ export function DrumClipGrid({
     });
   });
 
-  // pinned label column + a shared horizontal scroller for the step rows, so long
-  // patterns (any bar count) scroll while lane names / M/S stay put. Cells are
-  // FIXED-width (no more squeezing the pattern into the panel width).
+  // pinned label + sample-well column; steps scroll horizontally for long patterns.
   return (
     <div ref={gridRef} className="flex gap-2">
       <div className="flex shrink-0 flex-col gap-1.25">
         {kit.lanes.map((lane) => {
           const mix = pattern.laneMix?.[lane.id];
           const hasSample = !!(lane.bufId || lane.url);
+          const selected = selectedLaneId === lane.id;
           return (
             <div
               key={lane.id}
-              className="flex h-6 items-center gap-2 rounded-xs border border-transparent px-0.5 hover:border-line2"
-              title="Drop a one-shot sample here"
-              onDragOver={(e) => {
-                if (Array.from(e.dataTransfer.types).includes("Files"))
-                  e.preventDefault();
-              }}
-              onDrop={(e) => void onLaneDrop(lane.id, e)}
+              className={
+                "flex h-6 items-center gap-1.5 rounded-xs border px-0.5 " +
+                (selected
+                  ? "border-accent bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]"
+                  : "border-transparent hover:border-line2")
+              }
+              style={
+                selected
+                  ? { borderLeftWidth: 2, borderLeftColor: "var(--accent)" }
+                  : undefined
+              }
             >
-              <span
+              <button
+                type="button"
+                onClick={() => onSelectLane(lane.id)}
                 className={
                   "w-11 shrink-0 text-right font-mono text-[10px] tracking-[0.05em] " +
                   (hasSample ? "text-accent" : "text-dim")
                 }
+                title={`Select ${lane.name} voice`}
               >
                 {lane.name}
-              </span>
+              </button>
               <span className="flex shrink-0 gap-0.5">
                 <button className={msBtn(!!mix?.mute, true)} onClick={() => toggleMix(lane.id, "mute")} title="mute lane">M</button>
                 <button className={msBtn(!!mix?.solo)} onClick={() => toggleMix(lane.id, "solo")} title="solo lane">S</button>
               </span>
+              <SampleWell
+                laneId={lane.id}
+                hasSample={hasSample}
+                label={lane.name}
+                selected={selected}
+                onSelect={() => onSelectLane(lane.id)}
+                onDrop={(e) => void onLaneDrop(lane.id, e)}
+                onPick={(f) => void onLanePick(lane.id, f)}
+              />
             </div>
           );
         })}
@@ -128,8 +157,15 @@ export function DrumClipGrid({
           {kit.lanes.map((lane) => {
             const on = pattern.on[lane.id] || [];
             const accent = pattern.accent[lane.id] || [];
+            const selected = selectedLaneId === lane.id;
             return (
-              <div key={lane.id} className="flex gap-2">
+              <div
+                key={lane.id}
+                className={
+                  "flex gap-2 rounded-xs " +
+                  (selected ? "bg-[color-mix(in_srgb,var(--accent)_6%,transparent)]" : "")
+                }
+              >
                 {Array.from({ length: bars }).map((_, b) => (
                   <div key={b} className="flex gap-0.75">
                     {Array.from({ length: BAR_STEPS }).map((_, i) => {
@@ -145,7 +181,10 @@ export function DrumClipGrid({
                         <button
                           key={s}
                           data-step={s}
-                          onClick={(e) => toggle(lane.id, s, e.shiftKey)}
+                          onClick={(e) => {
+                            onSelectLane(lane.id);
+                            toggle(lane.id, s, e.shiftKey);
+                          }}
                           title={`${lane.name} · step ${s + 1}${disc ? " — has off-grid / variable detail (edit in piano roll)" : isOn ? " (shift-click: accent)" : ""}`}
                           style={
                             disc
@@ -172,6 +211,110 @@ export function DrumClipGrid({
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Per-lane one-shot slot: dashed empty drop, or mini waveform when loaded. */
+function SampleWell({
+  laneId,
+  hasSample,
+  label,
+  selected,
+  onSelect,
+  onDrop,
+  onPick,
+}: {
+  laneId: string;
+  hasSample: boolean;
+  label: string;
+  selected: boolean;
+  onSelect: () => void;
+  onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+  onPick: (file: File) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const waveRef = useRef<HTMLCanvasElement>(null);
+
+  useRafLoop(() => {
+    const cv = waveRef.current;
+    if (!cv || !hasSample) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = cv.clientWidth;
+    const h = cv.clientHeight;
+    if (w < 2 || h < 2) return;
+    if (cv.width !== Math.floor(w * dpr) || cv.height !== Math.floor(h * dpr)) {
+      cv.width = Math.floor(w * dpr);
+      cv.height = Math.floor(h * dpr);
+    }
+    const g = cv.getContext("2d");
+    if (!g) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const accent =
+      getComputedStyle(cv).getPropertyValue("--accent").trim() || "#54adbd";
+    const peaks = engine.drumLanePeaks(laneId, Math.max(16, Math.floor(w)));
+    if (!peaks) return;
+    const mid = h / 2;
+    g.fillStyle = accent;
+    const bw = w / peaks.length;
+    for (let i = 0; i < peaks.length; i++) {
+      const ph = Math.max(1, peaks[i] * (h - 2));
+      g.fillRect(i * bw, mid - ph / 2, Math.max(1, bw - 0.4), ph);
+    }
+  });
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => {
+        onSelect();
+        if (!hasSample) fileRef.current?.click();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+          if (!hasSample) fileRef.current?.click();
+        }
+      }}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
+      }}
+      onDrop={onDrop}
+      title={
+        hasSample
+          ? `${label} sample — drop to replace · click to select`
+          : `Drop a one-shot for ${label}, or click to pick`
+      }
+      className={
+        "relative flex h-5 w-18 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-[3px] " +
+        (hasSample
+          ? "border border-solid bg-[#0c0c10] " +
+            (selected ? "border-accent" : "border-line2")
+          : "border border-dashed " +
+            (selected
+              ? "border-accent text-accent"
+              : "border-line2 text-faint hover:border-accent hover:text-dim"))
+      }
+    >
+      <input
+        ref={fileRef}
+        type="file"
+        accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.aac"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onPick(f);
+          e.target.value = "";
+        }}
+      />
+      {hasSample ? (
+        <canvas ref={waveRef} className="pointer-events-none size-full" />
+      ) : (
+        <span className="font-mono text-[7px] tracking-[0.04em]">drop</span>
+      )}
     </div>
   );
 }
