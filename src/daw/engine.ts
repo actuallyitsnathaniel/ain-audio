@@ -81,7 +81,9 @@ import { parseMidi } from "./data/midi-file";
 import {
   DEFAULT_KIT,
   defaultSequence,
-  KITS,
+  findKit,
+  upsertUserKit,
+  cloneKitAsUser,
   parseLoopMeta,
   type DrumKit,
   type DrumLane,
@@ -1937,7 +1939,7 @@ class AudioEngine {
       : undefined;
     if (dt) {
       const kit =
-        KITS.find((k) => k.id === this.drumTrackKitId(dt)) || this.kit;
+        findKit(this.drumTrackKitId(dt));
       const lane = kit.lanes[midi - DRUM_BASE];
       if (lane)
         this.voiceDrum(
@@ -2016,6 +2018,10 @@ class AudioEngine {
     const c = this.ensureCtx();
     await Promise.all(
       kit.lanes.map(async (l) => {
+        if (l.bufId && this._importBufs[l.bufId]) {
+          this._drumBufs[l.id] = this._importBufs[l.bufId]!;
+          return;
+        }
         if (!l.url || this._drumBufs[l.id] !== undefined) return;
         try {
           this._drumBufs[l.id] = await this.fetchBuf(l.url, c);
@@ -3755,7 +3761,7 @@ class AudioEngine {
     } else if (c.content.kind === "drum") {
       // notes are the truth (convert a grid-only pattern first so nothing is lost)
       const dc = c.content; // narrow once — closures below would lose the discriminant
-      const kit = KITS.find((k) => k.id === dc.pattern.kitId) || this.kit;
+      const kit = findKit(dc.pattern.kitId);
       const notes = dc.notes ?? patternToNotes(dc.pattern, kit);
       for (const n of notes.notes) {
         n.start *= f;
@@ -3952,15 +3958,21 @@ class AudioEngine {
     dest: AudioNode,
   ) {
     const c = this.ensureCtx();
-    const buf = this._drumBufs[lane.id];
+    const buf =
+      (lane.bufId && this._importBufs[lane.bufId]) || this._drumBufs[lane.id];
     if (buf) {
       const g = c.createGain();
-      g.gain.value = vel;
+      const laneGain = lane.gain ?? 1;
+      g.gain.value = vel * laneGain;
       const src = c.createBufferSource();
       src.buffer = buf;
       src.connect(g);
       g.connect(dest);
-      src.start(when);
+      const a = Math.min(1, Math.max(0, lane.a ?? 0));
+      const b = Math.min(1, Math.max(a + 0.001, lane.b ?? 1));
+      const startSec = a * buf.duration;
+      const dur = Math.max(0.01, (b - a) * buf.duration);
+      src.start(when, startSec, dur);
       src.onended = () => {
         try {
           g.disconnect();
@@ -4184,6 +4196,108 @@ class AudioEngine {
       return null; // undecodable file
     }
   }
+
+  /**
+   * Import a Standard MIDI File → midi clip on a midi track (or new track).
+   * Applies file tempo/time-sig when present. Returns clip placement info.
+   */
+  async importMidiFile(
+    file: File,
+    atBeat = 0,
+    trackId?: string,
+  ): Promise<{ trackId: string; clipId: string } | null> {
+    let buf: ArrayBuffer;
+    try {
+      buf = await file.arrayBuffer();
+    } catch {
+      return null;
+    }
+    const parsed = parseMidi(buf);
+    if (!parsed) return null;
+
+    this.pushUndo();
+    if (parsed.hasTempo) this.setArrangementBpm(parsed.bpm);
+    if (parsed.clip.beatsPerBar > 0)
+      this.setBeatsPerBar(parsed.clip.beatsPerBar);
+
+    let tid = trackId;
+    let t = tid ? this.findTrack(tid) : undefined;
+    if (!t || t.kind !== "midi") {
+      t = this.addTrack("midi", file.name.replace(/\.[^.]+$/, "") || "MIDI");
+      tid = t.id;
+    }
+    const lengthBeats = parsed.clip.bars * parsed.clip.beatsPerBar;
+    const created = this.addClip(tid!, {
+      startBeat: atBeat,
+      lengthBeats,
+      loop: false,
+      name: file.name.replace(/\.[^.]+$/, "") || "MIDI",
+      content: { kind: "midi", clip: parsed.clip },
+    });
+    if (!created) return null;
+    this.selectClip(created.id);
+    this.emit("arrange");
+    return { trackId: tid!, clipId: created.id };
+  }
+
+  /** Drop a one-shot onto a kit lane (user kit or clone of builtin → user). */
+  async setKitLaneSample(
+    kitId: string,
+    laneId: string,
+    file: File,
+  ): Promise<boolean> {
+    const res = await this.importAudio(file);
+    if (!res) return false;
+    let kit = findKit(kitId);
+    const wasBuiltin = !kit.user;
+    // builtins are read-only — clone into a user kit on first sample drop
+    if (wasBuiltin) kit = cloneKitAsUser(kit, kit.name + " (custom)");
+    const lanes = kit.lanes.map((l) =>
+      l.id === laneId
+        ? { ...l, bufId: res.bufId, url: undefined, a: 0, b: 1, gain: 1 }
+        : { ...l },
+    );
+    const next: DrumKit = { ...kit, lanes, user: true };
+    upsertUserKit(next);
+    this.kit = next;
+    if (this._importBufs[res.bufId])
+      this._drumBufs[laneId] = this._importBufs[res.bufId]!;
+    void this.loadKit(next);
+    // remount drum clips that pointed at the old builtin kit id
+    if (wasBuiltin) {
+      for (const t of this.arrangement.tracks) {
+        for (const cl of t.clips) {
+          if (cl.content.kind !== "drum") continue;
+          if ((cl.content.pattern.kitId || this.kit.id) !== kitId) continue;
+          cl.content = {
+            ...cl.content,
+            pattern: { ...cl.content.pattern, kitId: next.id },
+          };
+        }
+      }
+      this.saveArr();
+    }
+    this.emit("transport");
+    this.emit("arrange");
+    return true;
+  }
+
+  /** Persist the current engine kit under a name (always as a user kit). */
+  saveCurrentKitAs(name: string): DrumKit {
+    const base = this.kit.user
+      ? this.kit
+      : cloneKitAsUser(this.kit, name.trim() || "my kit");
+    const next: DrumKit = {
+      ...base,
+      name: name.trim() || base.name,
+      user: true,
+    };
+    upsertUserKit(next);
+    this.kit = next;
+    this.emit("transport");
+    this.emit("arrange");
+    return next;
+  }
   // New project: wipe the arrangement + all imported audio (localStorage + IndexedDB, in
   // sync so no clip is left with a dangling bufId) and reset to a blank studio. Stops
   // playback and clears selection/undo/clipboard.
@@ -4263,6 +4377,80 @@ class AudioEngine {
       masterFx: this.masterDevices(),
     });
     downloadBlob(blob, safeAinFilename(name));
+  }
+
+  /**
+   * Realtime mix bounce: record the master bus while playing the arrangement
+   * (full FX / MIDI / drums — whatever you hear). Downloads .webm (Opus) or .m4a.
+   */
+  bouncing = false;
+  async bounceMix(name = "mix"): Promise<void> {
+    if (this.bouncing) return;
+    const c = this.ensureCtx();
+    const n = this.nodes;
+    if (!n) throw new Error("Audio engine not ready");
+    if (typeof MediaRecorder === "undefined")
+      throw new Error("This browser can’t record a mixdown (no MediaRecorder)");
+
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+          ? "audio/mp4"
+          : "";
+    if (!mime) throw new Error("No supported MediaRecorder audio type");
+
+    if (this.sequencePlaying) this.stopArrangement();
+    this.bouncing = true;
+    this.emit("transport");
+
+    const dest = c.createMediaStreamDestination();
+    n.master.connect(dest);
+
+    const chunks: BlobPart[] = [];
+    const rec = new MediaRecorder(dest.stream, { mimeType: mime });
+    rec.ondataavailable = (e) => {
+      if (e.data.size) chunks.push(e.data);
+    };
+    const finished = new Promise<Blob>((resolve, reject) => {
+      rec.onstop = () => resolve(new Blob(chunks, { type: mime }));
+      rec.onerror = () => reject(new Error("Mix recording failed"));
+    });
+
+    const endBeat = Math.max(
+      arrangementBeats(this.arrangement),
+      this.arrangement.beatsPerBar,
+    );
+    // +1.5s tail for master FX / reverb
+    const durationMs =
+      ((endBeat * 60) / this.arrangement.bpm + 1.5) * 1000;
+
+    try {
+      rec.start(100);
+      this.playArrangement(0);
+      await new Promise<void>((r) => setTimeout(r, durationMs));
+      if (this.sequencePlaying) this.stopArrangement();
+      await new Promise<void>((r) => setTimeout(r, 250)); // flush into recorder
+      if (rec.state === "recording") rec.stop();
+      const blob = await finished;
+      const ext = mime.includes("mp4") ? "m4a" : "webm";
+      const base = name
+        .trim()
+        .replace(/[^\w-]+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 64);
+      downloadBlob(blob, `${base || "mix"}.${ext}`);
+    } finally {
+      try {
+        n.master.disconnect(dest);
+      } catch {
+        /* fine */
+      }
+      this.bouncing = false;
+      this.emit("transport");
+    }
   }
 
   /**
@@ -4754,7 +4942,7 @@ class AudioEngine {
         const kitId = clip.content.pattern.kitId || this.kit.id;
         if (warmedKits.has(kitId)) continue;
         warmedKits.add(kitId);
-        const kit = KITS.find((kt) => kt.id === kitId);
+        const kit = findKit(kitId);
         if (kit) void this.loadKit(kit);
       }
     }
@@ -6494,7 +6682,7 @@ class AudioEngine {
             }
           } else if (clip.content.kind === "drum") {
             const pat = clip.content.pattern;
-            const kit = KITS.find((kt) => kt.id === pat.kitId) || this.kit;
+            const kit = findKit(pat.kitId);
             const dest = this.trackStrip(t);
             const contentLen = Math.max(0.25, pat.steps * STEP_BEATS);
             const notes = clip.content.notes; // lossless source of truth when present

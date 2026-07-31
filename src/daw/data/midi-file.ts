@@ -1,18 +1,24 @@
 // ── Standard MIDI File (.mid) → NoteClip ──────────────────────────────────
-// A small SMF parser: reads format-0 and format-1 files, merges all tracks,
-// pairs note-on/off into notes, and converts ticks → beats so the result drops
-// straight into the piano roll. Tempo + time-signature meta events are read to
-// derive bpmHint and beatsPerBar; clip length is rounded up to whole bars.
+// SMF format 0/1: merges tracks, pairs note-on/off, converts ticks → beats.
+// Also captures CC1 (mod), pitch bend, and channel pressure into AutoLanes so
+// protocol data the studio can use is preserved (not just notes).
 //
-// Used by presets.ts to auto-import src/assets/presets/<id>/*.mid as a preset's
-// defaultPhrase. Vite imports the file as a URL; we fetch + parse at load.
+// Used by presets.ts and studio timeline drop (`engine.importMidiFile`).
 
-import { newNoteId, type Note, type NoteClip } from "./clips";
+import {
+  newNoteId,
+  type AutoLane,
+  type AutoPoint,
+  type Note,
+  type NoteClip,
+} from "./clips";
 
-interface ParsedMidi {
+export interface ParsedMidi {
   clip: NoteClip;
   bpm: number;
-  hasTempo: boolean; // false when the file carried no tempo meta (caller should use its own hint)
+  hasTempo: boolean;
+  /** True when the file carried CC / bend / pressure we mapped into autos. */
+  hasExpression: boolean;
 }
 
 // ── byte reader ──
@@ -37,7 +43,6 @@ class Reader {
     for (let i = 0; i < n; i++) out.push(this.u8());
     return out;
   }
-  // variable-length quantity (7 bits per byte, high bit = continue)
   vlq() {
     let v = 0;
     for (;;) {
@@ -66,16 +71,14 @@ class Reader {
   }
 }
 
-interface RawEvent {
-  tick: number;
-  type: "on" | "off" | "tempo" | "timesig";
-  pitch?: number;
-  vel?: number;
-  usPerBeat?: number;
-  num?: number; // time-sig numerator
-}
+type RawEvent =
+  | { tick: number; type: "on" | "off"; pitch: number; vel: number }
+  | { tick: number; type: "tempo"; usPerBeat: number }
+  | { tick: number; type: "timesig"; num: number }
+  | { tick: number; type: "cc"; cc: number; val: number }
+  | { tick: number; type: "bend"; val: number } // 0..1, 0.5 = center
+  | { tick: number; type: "pressure"; val: number }; // 0..1
 
-// Parse a single MTrk chunk's events (absolute ticks), tracking running status.
 function parseTrack(r: Reader, end: number): RawEvent[] {
   const events: RawEvent[] = [];
   let tick = 0;
@@ -84,7 +87,6 @@ function parseTrack(r: Reader, end: number): RawEvent[] {
     tick += r.vlq();
     let status = r.u8();
     if (status < 0x80) {
-      // running status: reuse last, and this byte is actually data
       r.pos -= 1;
       status = running;
     } else {
@@ -92,52 +94,86 @@ function parseTrack(r: Reader, end: number): RawEvent[] {
     }
     const hi = status & 0xf0;
     if (status === 0xff) {
-      // meta event
       const meta = r.u8();
       const len = r.vlq();
       if (meta === 0x51 && len === 3) {
         const b = r.bytes(3);
-        events.push({ tick, type: "tempo", usPerBeat: (b[0] << 16) | (b[1] << 8) | b[2] });
+        events.push({
+          tick,
+          type: "tempo",
+          usPerBeat: (b[0]! << 16) | (b[1]! << 8) | b[2]!,
+        });
       } else if (meta === 0x58 && len >= 2) {
         const b = r.bytes(len);
-        events.push({ tick, type: "timesig", num: b[0] }); // denom = 2^b[1]
+        events.push({ tick, type: "timesig", num: b[0]! });
       } else {
         r.skip(len);
       }
     } else if (status === 0xf0 || status === 0xf7) {
-      // sysex — skip
       const len = r.vlq();
       r.skip(len);
     } else if (hi === 0x90) {
       const pitch = r.u8();
       const vel = r.u8();
-      events.push({ tick, type: vel > 0 ? "on" : "off", pitch, vel });
+      events.push({
+        tick,
+        type: vel > 0 ? "on" : "off",
+        pitch,
+        vel,
+      });
     } else if (hi === 0x80) {
       const pitch = r.u8();
       const vel = r.u8();
       events.push({ tick, type: "off", pitch, vel });
-    } else if (hi === 0xa0 || hi === 0xb0 || hi === 0xe0) {
-      r.skip(2); // poly-aftertouch / control-change / pitch-bend (2 data bytes)
-    } else if (hi === 0xc0 || hi === 0xd0) {
-      r.skip(1); // program-change / channel-pressure (1 data byte)
+    } else if (hi === 0xa0) {
+      r.u8(); // poly aftertouch pitch — unused for now
+      const val = r.u8() / 127;
+      events.push({ tick, type: "pressure", val });
+    } else if (hi === 0xb0) {
+      const cc = r.u8();
+      const val = r.u8();
+      events.push({ tick, type: "cc", cc, val });
+    } else if (hi === 0xe0) {
+      const lo = r.u8();
+      const hiB = r.u8();
+      const raw14 = (hiB << 7) | lo;
+      events.push({ tick, type: "bend", val: raw14 / 16383 });
+    } else if (hi === 0xc0) {
+      r.skip(1); // program change — not mapped yet
+    } else if (hi === 0xd0) {
+      const val = r.u8() / 127;
+      events.push({ tick, type: "pressure", val });
     } else {
-      break; // unknown — bail this track
+      break;
     }
   }
   return events;
 }
 
+function downsampleLane(
+  points: AutoPoint[],
+  maxPts = 256,
+): AutoPoint[] {
+  if (points.length <= maxPts) return points;
+  const out: AutoPoint[] = [];
+  const step = (points.length - 1) / (maxPts - 1);
+  for (let i = 0; i < maxPts; i++) {
+    const idx = Math.min(points.length - 1, Math.round(i * step));
+    out.push(points[idx]!);
+  }
+  return out;
+}
+
 export function parseMidi(buf: ArrayBuffer): ParsedMidi | null {
   const r = new Reader(new DataView(buf));
   if (r.str(4) !== "MThd") return null;
-  r.u32(); // header length (6)
-  r.u16(); // format (0 or 1)
+  r.u32();
+  r.u16();
   const nTracks = r.u16();
   const division = r.u16();
-  if (division & 0x8000) return null; // SMPTE timecode division unsupported
-  const tpb = division || 480; // ticks per beat
+  if (division & 0x8000) return null;
+  const tpb = division || 480;
 
-  // gather all events across tracks (absolute ticks)
   const all: RawEvent[] = [];
   for (let t = 0; t < nTracks && !r.done; t++) {
     if (r.str(4) !== "MTrk") break;
@@ -148,60 +184,106 @@ export function parseMidi(buf: ArrayBuffer): ParsedMidi | null {
   }
   all.sort((a, b) => a.tick - b.tick);
 
-  // tempo + time-sig (first ones win for the hint). hasTempo lets the caller fall
-  // back to its own bpmHint when the file carries no tempo (Ableton's "Export MIDI
-  // Clip" omits it — tempo is a Set property, not a clip property).
-  let usPerBeat = 500000; // 120 bpm default
+  let usPerBeat = 500000;
   let beatsPerBar = 4;
   let hasTempo = false;
   for (const e of all) {
-    if (e.type === "tempo" && e.usPerBeat) {
+    if (e.type === "tempo") {
       usPerBeat = e.usPerBeat;
       hasTempo = true;
       break;
     }
   }
   for (const e of all) {
-    if (e.type === "timesig" && e.num) {
+    if (e.type === "timesig") {
       beatsPerBar = e.num;
       break;
     }
   }
   const bpm = Math.round(60000000 / usPerBeat);
 
-  // pair note-on → note-off (FIFO per pitch)
   const open: Record<number, { tick: number; vel: number }[]> = {};
   const notes: Note[] = [];
-  let lastTick = 0;
+  const modPts: AutoPoint[] = [];
+  const bendPts: AutoPoint[] = [];
+  const pressPts: AutoPoint[] = [];
+
   for (const e of all) {
-    if (e.pitch == null) continue;
-    lastTick = Math.max(lastTick, e.tick);
-    if (e.type === "on") {
-      (open[e.pitch] = open[e.pitch] || []).push({ tick: e.tick, vel: e.vel ?? 100 });
-    } else if (e.type === "off") {
-      const stack = open[e.pitch];
-      const started = stack && stack.shift();
-      if (started) {
-        const start = started.tick / tpb;
-        const length = Math.max(0.0625, (e.tick - started.tick) / tpb);
-        notes.push({ id: newNoteId(), pitch: e.pitch, start, length, vel: clampVel(started.vel / 127) });
+    if (e.type === "on" || e.type === "off") {
+      if (e.type === "on") {
+        (open[e.pitch] = open[e.pitch] || []).push({
+          tick: e.tick,
+          vel: e.vel,
+        });
+      } else {
+        const stack = open[e.pitch];
+        const started = stack && stack.shift();
+        if (started) {
+          const start = started.tick / tpb;
+          const length = Math.max(0.0625, (e.tick - started.tick) / tpb);
+          notes.push({
+            id: newNoteId(),
+            pitch: e.pitch,
+            start,
+            length,
+            vel: clampVel(started.vel / 127),
+          });
+        }
       }
+      continue;
+    }
+    if (e.type === "cc" && e.cc === 1) {
+      modPts.push({ beat: e.tick / tpb, value: e.val / 127 });
+    } else if (e.type === "cc" && (e.cc === 11 || e.cc === 7)) {
+      // expression / channel volume → also into mod lane as a useful stand-in
+      modPts.push({ beat: e.tick / tpb, value: e.val / 127 });
+    } else if (e.type === "bend") {
+      bendPts.push({ beat: e.tick / tpb, value: e.val });
+    } else if (e.type === "pressure") {
+      pressPts.push({ beat: e.tick / tpb, value: e.val });
     }
   }
   if (!notes.length) return null;
 
-  // ── auto-trim leading/trailing space ──
-  // Ableton's "Export MIDI Clip" writes the clip's full span incl. empty space
-  // before the first note and after the last. Shift the earliest note to beat 0
-  // (trim the lead) and round the clip length up to whole bars from the last
-  // note-off (trim the tail). Right for short loopable phrases; a deliberate
-  // pickup would be snapped to the downbeat, which is the intended trade-off.
   const firstStart = Math.min(...notes.map((n) => n.start));
-  if (firstStart > 1e-6) notes.forEach((n) => (n.start -= firstStart));
+  if (firstStart > 1e-6) {
+    notes.forEach((n) => (n.start -= firstStart));
+    const shift = (pts: AutoPoint[]) => {
+      for (const p of pts) p.beat = Math.max(0, p.beat - firstStart);
+    };
+    shift(modPts);
+    shift(bendPts);
+    shift(pressPts);
+  }
 
   const lastBeat = notes.reduce((m, n) => Math.max(m, n.start + n.length), 0);
   const bars = Math.max(1, Math.ceil(lastBeat / beatsPerBar - 1e-6));
-  return { clip: { bars, beatsPerBar, notes }, bpm, hasTempo };
+
+  const autos: AutoLane[] = [];
+  // pressure → vibrato depth curve (audible with existing vib engine)
+  if (pressPts.length)
+    autos.push({
+      target: "vibrato",
+      points: downsampleLane(pressPts),
+      intensity: 1,
+    });
+  if (modPts.length)
+    autos.push({ target: "mod", points: downsampleLane(modPts) });
+  if (bendPts.length)
+    autos.push({ target: "bend", points: downsampleLane(bendPts) });
+
+  return {
+    clip: {
+      bars,
+      beatsPerBar,
+      notes,
+      autos: autos.length ? autos : undefined,
+    },
+    bpm,
+    hasTempo,
+    hasExpression: autos.length > 0,
+  };
 }
 
-const clampVel = (v: number) => Math.min(1, Math.max(0.05, Math.round(v * 100) / 100));
+const clampVel = (v: number) =>
+  Math.min(1, Math.max(0.05, Math.round(v * 100) / 100));

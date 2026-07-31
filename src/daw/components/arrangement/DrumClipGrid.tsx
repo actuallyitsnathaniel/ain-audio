@@ -8,18 +8,42 @@ import { useRef } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
-import { KITS, type SequenceClip } from "../../data/kits";
+import { findKit, type SequenceClip } from "../../data/kits";
 import type { NoteClip } from "../../data/clips";
 import { stepDiscrepancy } from "../../data/drum-midi";
 
 const BAR_STEPS = 16;
 const STEP_BEATS = 0.25;
 
-export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern: SequenceClip; notes?: NoteClip; startBeat: number; onCommit: (p: SequenceClip) => void }) {
-  useEngine(["transport"]);
-  const kit = KITS.find((k) => k.id === pattern.kitId) || engine.kit;
+export function DrumClipGrid({
+  pattern,
+  notes,
+  startBeat,
+  kitId,
+  onCommit,
+}: {
+  pattern: SequenceClip;
+  notes?: NoteClip;
+  startBeat: number;
+  kitId?: string;
+  onCommit: (p: SequenceClip) => void;
+}) {
+  useEngine(["transport", "arrange"]);
+  const kit = findKit(kitId || pattern.kitId);
   const gridRef = useRef<HTMLDivElement>(null);
   const bars = Math.ceil(pattern.steps / BAR_STEPS);
+
+  const onLaneDrop = async (
+    laneId: string,
+    e: React.DragEvent<HTMLDivElement>,
+  ) => {
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const ok = await engine.setKitLaneSample(kit.id, laneId, file);
+    if (!ok) window.alert("Couldn't load that sample for this lane");
+  };
 
   // toggle a step (or its accent) on a cloned pattern → commit
   const toggle = (laneId: string, s: number, accent: boolean) => {
@@ -71,9 +95,26 @@ export function DrumClipGrid({ pattern, notes, startBeat, onCommit }: { pattern:
       <div className="flex shrink-0 flex-col gap-1.25">
         {kit.lanes.map((lane) => {
           const mix = pattern.laneMix?.[lane.id];
+          const hasSample = !!(lane.bufId || lane.url);
           return (
-            <div key={lane.id} className="flex h-6 items-center gap-2">
-              <span className="w-11 shrink-0 text-right font-mono text-[10px] tracking-[0.05em] text-dim">{lane.name}</span>
+            <div
+              key={lane.id}
+              className="flex h-6 items-center gap-2 rounded-xs border border-transparent px-0.5 hover:border-line2"
+              title="Drop a one-shot sample here"
+              onDragOver={(e) => {
+                if (Array.from(e.dataTransfer.types).includes("Files"))
+                  e.preventDefault();
+              }}
+              onDrop={(e) => void onLaneDrop(lane.id, e)}
+            >
+              <span
+                className={
+                  "w-11 shrink-0 text-right font-mono text-[10px] tracking-[0.05em] " +
+                  (hasSample ? "text-accent" : "text-dim")
+                }
+              >
+                {lane.name}
+              </span>
               <span className="flex shrink-0 gap-0.5">
                 <button className={msBtn(!!mix?.mute, true)} onClick={() => toggleMix(lane.id, "mute")} title="mute lane">M</button>
                 <button className={msBtn(!!mix?.solo)} onClick={() => toggleMix(lane.id, "solo")} title="solo lane">S</button>

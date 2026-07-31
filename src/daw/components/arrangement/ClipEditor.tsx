@@ -10,7 +10,7 @@ import { Knob } from "../Knob";
 import { PianoRoll } from "../piano-roll/PianoRoll";
 import { DrumClipGrid } from "./DrumClipGrid";
 import { AudioClipEditor } from "./AudioClipEditor";
-import { KITS, resizeRow } from "../../data/kits";
+import { allKits, findKit, resizeRow } from "../../data/kits";
 import type { SequenceClip } from "../../data/kits";
 import type { NoteClip } from "../../data/clips";
 import { patternToNotes, notesToPattern, pitchLaneName, reconcileGridEdit } from "../../data/drum-midi";
@@ -39,7 +39,7 @@ function SwingKnob({ trackId, clipId, value }: { trackId: string; clipId: string
 // it regenerates the notes from the grid.
 function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: { trackId: string; clipId: string; pat: SequenceClip; notes?: NoteClip; startBeat: number; swing?: number; stamp: number }) {
   const [view, setView] = useState<"seq" | "roll">("seq");
-  const kit = KITS.find((k) => k.id === pat.kitId) || engine.kit;
+  const kit = findKit(pat.kitId);
   // sequence-view pattern: derive from notes when they're the truth, else the raw pattern
   const gridPat = notes ? { ...pat, ...notesToPattern(notes, kit, pat.steps) } : pat;
   // grid edit → reconcile against existing notes so off-grid/held detail on untouched
@@ -62,6 +62,18 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
     engine.setClipContent(trackId, clipId, { kind: "drum", pattern: { ...pat, steps, on, accent }, notes: nc });
   };
   const barOpts = [...new Set([1, 2, 4, 8, 16, patBars])].sort((a, b) => a - b);
+  const kits = allKits();
+  const saveKit = () => {
+    const name =
+      window.prompt("Save kit as…", kit.name || "my kit")?.trim() ||
+      "my kit";
+    const saved = engine.saveCurrentKitAs(name);
+    engine.setClipContent(trackId, clipId, {
+      kind: "drum",
+      pattern: { ...pat, kitId: saved.id },
+      notes,
+    });
+  };
   const tab = (v: "seq" | "roll", label: string) => (
     <button
       onClick={() => setView(v)}
@@ -78,16 +90,30 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
         <span className="relative inline-flex items-center">
           <select
             value={pat.kitId || engine.kit.id}
-            onChange={(e) => engine.setClipContent(trackId, clipId, { kind: "drum", pattern: { ...pat, kitId: e.target.value }, notes })}
+            onChange={(e) => {
+              const id = e.target.value;
+              engine.setClipContent(trackId, clipId, { kind: "drum", pattern: { ...pat, kitId: id }, notes });
+              void engine.loadKit(findKit(id));
+            }}
             aria-label="kit"
             className="cursor-pointer appearance-none rounded-xs border border-line2 bg-panel2 py-0.5 pr-4 pl-1.5 font-mono text-[9px] text-daw-text hover:border-accent focus:outline-none"
           >
-            {KITS.map((k) => (
-              <option key={k.id} value={k.id} className="bg-panel2">{k.name}</option>
+            {kits.map((k) => (
+              <option key={k.id} value={k.id} className="bg-panel2">
+                {k.name}{k.user ? " ★" : ""}
+              </option>
             ))}
           </select>
           <span className="pointer-events-none absolute right-1 text-[7px] text-faint">▼</span>
         </span>
+        <button
+          type="button"
+          onClick={saveKit}
+          className="rounded-xs border border-line2 px-1.5 py-0.5 font-mono text-[9px] text-faint hover:border-accent hover:text-accent"
+          title="Save the current kit (with any dropped samples) to your library"
+        >
+          save kit
+        </button>
         {/* pattern length — the grid scrolls, so any bar count stays editable */}
         <label className="flex items-center gap-1 font-mono text-[9px] text-faint">
           <select
@@ -109,7 +135,7 @@ function DrumClipView({ trackId, clipId, pat, notes, startBeat, swing, stamp }: 
         </span>
       </div>
       {view === "seq" ? (
-        <DrumClipGrid key={clipId + "-seq:" + stamp} pattern={gridPat} notes={notes} startBeat={startBeat} onCommit={commitGrid} />
+        <DrumClipGrid key={clipId + "-seq:" + stamp} pattern={gridPat} notes={notes} startBeat={startBeat} kitId={pat.kitId || kit.id} onCommit={commitGrid} />
       ) : (
         <PianoRoll
           key={clipId + "-roll:" + stamp + ":" + pat.steps}

@@ -358,6 +358,19 @@ export function Timeline({
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
     const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
+    const lower = file.name.toLowerCase();
+
+    // Standard MIDI File → midi clip (tempo/CC/bend preserved in NoteClip.autos)
+    if (lower.endsWith(".mid") || lower.endsWith(".midi")) {
+      const hit = y >= HEAD_H ? hitClip(x, y) : null;
+      const rowTrack = y >= HEAD_H ? tracks()[yToTrackIndex(y)] : undefined;
+      const prefer =
+        !hit && rowTrack?.kind === "midi" ? rowTrack.id : undefined;
+      const res = await engine.importMidiFile(file, beat, prefer);
+      if (res) onEditClip(res.trackId, res.clipId);
+      return;
+    }
+
     const res = await engine.importAudio(file);
     if (!res) return; // undecodable
     // clip length FOLLOWS THE SAMPLE: its actual duration in beats at the current tempo

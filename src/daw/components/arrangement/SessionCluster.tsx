@@ -31,7 +31,7 @@ export function SessionCluster({
 }) {
   const eng = useEngine(["transport"]);
   const [rereadAccept, setRereadAccept] = useState(false);
-  const [busy, setBusy] = useState<"save" | "open" | null>(null);
+  const [busy, setBusy] = useState<"save" | "open" | "bounce" | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const openPrefs = () => {
@@ -85,6 +85,28 @@ export function SessionCluster({
     }
   };
 
+  const bounceMix = async () => {
+    if (busy) return;
+    const name =
+      window.prompt("Export mix as…", "mix")?.trim() || "mix";
+    if (
+      !window.confirm(
+        "Bounce will play the arrangement in real time and download the mix (you’ll hear it). Continue?",
+      )
+    )
+      return;
+    setBusy("bounce");
+    try {
+      await engine.bounceMix(name);
+    } catch (e) {
+      window.alert(
+        e instanceof Error ? e.message : "Couldn't bounce mix",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="ml-auto flex flex-col items-end gap-1.5">
       <div className="relative flex items-center gap-1.5">
@@ -108,6 +130,15 @@ export function SessionCluster({
               : eng.inputStatus === "denied"
                 ? "I/O · denied"
                 : "I/O"}
+        </button>
+        <button
+          type="button"
+          className={ctl + px + onOff(eng.bouncing)}
+          disabled={busy !== null}
+          onClick={() => void bounceMix()}
+          title="Bounce mix — realtime record of the master bus (audio + MIDI + FX)"
+        >
+          {busy === "bounce" || eng.bouncing ? "bounce…" : "bounce mix"}
         </button>
         <button
           type="button"

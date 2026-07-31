@@ -13,12 +13,21 @@ export interface DrumLane {
   name: string; // short display label
   synth: DrumSynth; // fallback synth voice when no sample is bounced
   url?: string; // resolved one-shot URL (set at build time if a file exists)
+  /** Session import (user-dropped one-shot) — preferred over url when set. */
+  bufId?: string;
+  /** Play region inside the sample (0..1). */
+  a?: number;
+  b?: number;
+  /** Linear lane gain. */
+  gain?: number;
 }
 
 export interface DrumKit {
   id: string;
   name: string;
   lanes: DrumLane[];
+  /** User-authored (localStorage) — mutable; builtins are not. */
+  user?: boolean;
 }
 
 // ── filename metadata parser (imported audio clips detect bpm/bars/key from it) ──
@@ -143,6 +152,71 @@ export const BOOMBAP_KIT: DrumKit = {
 };
 
 export const KITS: DrumKit[] = [DEFAULT_KIT, BOOMBAP_KIT];
+
+const LS_USER_KITS = "ain-user-kits";
+
+function loadUserKitsRaw(): DrumKit[] {
+  try {
+    const raw = localStorage.getItem(LS_USER_KITS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as DrumKit[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((k) => k && typeof k.id === "string" && Array.isArray(k.lanes));
+  } catch {
+    return [];
+  }
+}
+
+/** Builtin + user kits (user kits win on id collision). */
+export function allKits(): DrumKit[] {
+  const user = loadUserKitsRaw().map((k) => ({ ...k, user: true as const }));
+  const byId = new Map<string, DrumKit>();
+  for (const k of KITS) byId.set(k.id, k);
+  for (const k of user) byId.set(k.id, k);
+  return [...byId.values()];
+}
+
+export function findKit(id: string | undefined): DrumKit {
+  if (!id) return DEFAULT_KIT;
+  return allKits().find((k) => k.id === id) || DEFAULT_KIT;
+}
+
+export function cloneKitAsUser(kit: DrumKit, name: string): DrumKit {
+  const id =
+    "user-" +
+    (name || kit.name)
+      .toLowerCase()
+      .replace(/[^\w]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 40) +
+    "-" +
+    Date.now().toString(36);
+  return {
+    id,
+    name: name || kit.name,
+    user: true,
+    lanes: kit.lanes.map((l) => ({ ...l })),
+  };
+}
+
+export function upsertUserKit(kit: DrumKit): void {
+  const list = loadUserKitsRaw().filter((k) => k.id !== kit.id);
+  list.push({ ...kit, user: true });
+  try {
+    localStorage.setItem(LS_USER_KITS, JSON.stringify(list));
+  } catch {
+    /* quota */
+  }
+}
+
+export function deleteUserKit(id: string): void {
+  const list = loadUserKitsRaw().filter((k) => k.id !== id);
+  try {
+    localStorage.setItem(LS_USER_KITS, JSON.stringify(list));
+  } catch {
+    /* fine */
+  }
+}
 
 // ── auto-discover reverb impulse responses ──
 // Drop src/assets/irs/<name>.wav and it appears in the REVERB device's IR selector
