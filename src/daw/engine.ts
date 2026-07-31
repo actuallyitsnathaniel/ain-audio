@@ -81,9 +81,13 @@ import {
   DEFAULT_DRUM_AMP,
   DEFAULT_DRUM_FILT,
   DEFAULT_DRUM_FILT_ENV,
+  partialFiltActive,
+  resolveDrumTone,
   scheduleAmpAttack,
-  scheduleAmpRelease,
+  scheduleAmpOneShot,
   scheduleFiltEnv,
+  scheduleFiltEnvOneShot,
+  type DrumPartialFilt,
 } from "./voice-env";
 import { parseMidi } from "./data/midi-file";
 import {
@@ -95,7 +99,6 @@ import {
   parseLoopMeta,
   type DrumKit,
   type DrumLane,
-  type DrumSynth,
   type SequenceClip,
 } from "./data/kits";
 
@@ -115,6 +118,11 @@ export type AudioPrefs = {
   latencyMode: "auto" | "manual";
   latencyMs: number;
   inputMonitor: boolean;
+  /**
+   * Per-note voice randomness: osc start-phase jitter (voices.phase) + sample
+   * preset humanize detune. Default off so MIDI/arrangement hits are identical.
+   */
+  voiceHumanize: boolean;
 };
 
 const DEFAULT_AUDIO_PREFS: AudioPrefs = {
@@ -125,6 +133,7 @@ const DEFAULT_AUDIO_PREFS: AudioPrefs = {
   latencyMode: "auto",
   latencyMs: 0,
   inputMonitor: false,
+  voiceHumanize: false,
 };
 
 function loadAudioPrefs(): AudioPrefs {
@@ -150,6 +159,8 @@ function loadAudioPrefs(): AudioPrefs {
           ? Math.max(0, Math.min(500, Math.round(p.latencyMs)))
           : 0,
       inputMonitor: !!p.inputMonitor,
+      // absent key (old prefs) → false so existing users get deterministic voicing
+      voiceHumanize: p.voiceHumanize === true,
     };
   } catch {
     return { ...DEFAULT_AUDIO_PREFS };
@@ -499,7 +510,7 @@ class AudioEngine {
   > = {}; // per-track FX → ADC → vol → pan strip + post-fader meter tap
   kit: DrumKit = DEFAULT_KIT;
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
-  private _drumBufs: Record<string, AudioBuffer | null> = {}; // laneId → decoded one-shot (null = use synth)
+  private _drumBufs: Record<string, AudioBuffer | null> = {}; // `${kitId}:${laneId}` → decoded one-shot (null = failed / synth)
   private _noiseBufs: Partial<Record<"white" | "pink", AudioBuffer>> = {}; // synth noise sources, built once
   // imported audio-clip buffers (session-only; bufId → decoded buffer + its peak cache)
   private _importBufs: Record<string, AudioBuffer> = {};
@@ -1582,14 +1593,16 @@ class AudioEngine {
 
     // ── unison (Serum-style): osc1/osc2 replicate ×N with a symmetric cents spread
     // and stereo placement; level normalizes by 1/√N. Sub/noise/sample stay single
-    // (a widened sub loses its low-end focus). Phase randomize (default full) so
-    // detuned stacks don't start phase-locked and comb. ──
+    // (a widened sub loses its low-end focus). Phase randomize is gated by the
+    // global voiceHumanize pref (default OFF) so MIDI hits stay identical. ──
     const vc = p.voices;
     const uniN = Math.max(1, Math.min(8, Math.round(vc?.unison ?? 1)));
     const uniDet = vc?.detune ?? 0; // cents at the extremes
     const uniW = Math.max(0, Math.min(1, vc?.width ?? 0)); // stereo spread
-    // absent / undefined → full random (1); 0 = locked like classic Web Audio
-    const uniPhase = Math.max(0, Math.min(1, vc?.phase ?? 1));
+    // locked phase unless voiceHumanize is on; then voices.phase (default full)
+    const uniPhase = this.audioPrefs.voiceHumanize
+      ? Math.max(0, Math.min(1, vc?.phase ?? 1))
+      : 0;
 
     const oscs: OscillatorNode[] = [];
     // a pitched oscillator at `semi` offset, mixed at `level`, with portamento bends.
@@ -1658,7 +1671,12 @@ class AudioEngine {
         // varispeed: note pitch × independent transpose (semi + cents), speed-coupled
         const vari = (p.sample.semi ?? 0) / 12 + (p.sample.cents ?? 0) / 1200;
         s.playbackRate.value = Math.pow(2, (midi - zone.rootMidi) / 12 + vari);
-        if (preset.humanize > 0 && s.detune)
+        // per-note ±cents jitter — only when global voiceHumanize is on
+        if (
+          this.audioPrefs.voiceHumanize &&
+          preset.humanize > 0 &&
+          s.detune
+        )
           s.detune.value = (Math.random() * 2 - 1) * preset.humanize;
         // playback window (0..1 of the buffer). loop region defaults to the window.
         const dur = zone.buf.duration;
@@ -1948,6 +1966,7 @@ class AudioEngine {
           this.ctx!.currentTime,
           vel > 0.85 ? 1 : 0.7,
           this.trackStrip(dt),
+          kit.id,
         );
       this.recordNoteOn(midi, vel); // drum hits still capture when recording
       return;
@@ -2014,24 +2033,45 @@ class AudioEngine {
   }
 
   // ── drum kit voices (arrangement drum clips + note-preview auditions) ──
-  // lazily fetch + decode each lane's one-shot (lanes without a url stay synth)
+  // Cache keyed by kitId:laneId so warmArrangement can decode multiple kits
+  // without clobbering URL one-shots from earlier clips.
   async loadKit(kit: DrumKit) {
     const c = this.ensureCtx();
     await Promise.all(
       kit.lanes.map(async (l) => {
+        const key = kit.id + ":" + l.id;
         if (l.bufId && this._importBufs[l.bufId]) {
-          this._drumBufs[l.id] = this._importBufs[l.bufId]!;
+          this._drumBufs[key] = this._importBufs[l.bufId]!;
           return;
         }
-        if (!l.url || this._drumBufs[l.id] !== undefined) return;
+        if (!l.url) {
+          this._drumBufs[key] = null;
+          return;
+        }
+        if (this._drumBufs[key]) return; // already decoded
         try {
-          this._drumBufs[l.id] = await this.fetchBuf(l.url, c);
+          this._drumBufs[key] = await this.fetchBuf(l.url, c);
         } catch {
-          this._drumBufs[l.id] = null; // fall back to synth
+          this._drumBufs[key] = null; // fall back to synth
         }
       }),
     );
     this.emit("transport");
+  }
+
+  /** Resolved one-shot — bufId imports win; url cache only when no bufId. */
+  private resolveDrumLaneBuf(
+    lane: DrumLane,
+    kitId: string,
+  ): AudioBuffer | null {
+    if (lane.bufId) return this._importBufs[lane.bufId] ?? null;
+    if (lane.url) return this._drumBufs[kitId + ":" + lane.id] ?? null;
+    return null;
+  }
+
+  /** True when the lane has a decoded buffer ready (not merely a dangling bufId/url). */
+  hasDrumLaneSample(lane: DrumLane, kitId?: string): boolean {
+    return !!this.resolveDrumLaneBuf(lane, kitId ?? this.kit.id);
   }
 
   // Grow/shrink the step grid (16/32/48/64), preserving existing steps. Resizes
@@ -2311,6 +2351,8 @@ class AudioEngine {
       this.audioPrefs.latencyMs = Math.max(0, Math.min(500, Math.round(partial.latencyMs)));
     if (partial.inputMonitor !== undefined)
       this.audioPrefs.inputMonitor = !!partial.inputMonitor;
+    if (partial.voiceHumanize !== undefined)
+      this.audioPrefs.voiceHumanize = !!partial.voiceHumanize;
     this.persistAudioPrefs();
 
     const deviceChanged = prev.inputDeviceId !== this.audioPrefs.inputDeviceId;
@@ -3956,12 +3998,12 @@ class AudioEngine {
     when: number,
     vel: number,
     dest: AudioNode,
+    kitId: string = this.kit.id,
   ) {
     const c = this.ensureCtx();
-    const buf =
-      (lane.bufId && this._importBufs[lane.bufId]) || this._drumBufs[lane.id];
+    const buf = this.resolveDrumLaneBuf(lane, kitId);
     if (!buf) {
-      this.synthDrum(lane.synth, when, vel, dest);
+      this.synthDrum(lane, when, vel, dest);
       return;
     }
 
@@ -3977,18 +4019,27 @@ class AudioEngine {
 
     const vg = c.createGain();
     vg.gain.value = 0;
-    scheduleAmpAttack(vg.gain, when, ampEnv, peak);
     // one-shot: begin release near the end of the played region (no note-off)
     const releaseAt =
       when + Math.max(0.02, playDur - Math.max(0.02, ampEnv.r));
-    scheduleAmpRelease(vg.gain, releaseAt, ampEnv, peak * ampEnv.s);
+    const ampEnd = scheduleAmpOneShot(vg.gain, when, ampEnv, peak, releaseAt);
     vg.connect(dest);
 
     const vf = c.createBiquadFilter();
     if (filterOn) {
       vf.type = filt.type;
       vf.Q.value = filt.q;
-      scheduleFiltEnv(vf.frequency, when, filt.cut, filtEnv);
+      if (Math.abs(filtEnv.amt) > 1) {
+        scheduleFiltEnvOneShot(
+          vf.frequency,
+          when,
+          filt.cut,
+          filtEnv,
+          releaseAt,
+        );
+      } else {
+        vf.frequency.value = filt.cut;
+      }
       vf.connect(vg);
     } else {
       vf.type = "allpass";
@@ -3999,7 +4050,7 @@ class AudioEngine {
     src.buffer = buf;
     src.connect(vf);
     src.start(when, startSec, playDur);
-    const stopAt = when + playDur + Math.max(0.05, ampEnv.r) + 0.05;
+    const stopAt = Math.max(when + playDur, ampEnd) + 0.05;
     try {
       src.stop(stopAt);
     } catch {
@@ -4022,7 +4073,7 @@ class AudioEngine {
     partial: Partial<
       Pick<
         DrumLane,
-        "a" | "b" | "gain" | "filter" | "filtEnv" | "ampEnv" | "name"
+        "a" | "b" | "gain" | "filter" | "filtEnv" | "ampEnv" | "name" | "tone"
       >
     >,
   ): string {
@@ -4044,6 +4095,9 @@ class AudioEngine {
         ampEnv: partial.ampEnv
           ? { ...(l.ampEnv ?? DEFAULT_DRUM_AMP), ...partial.ampEnv }
           : l.ampEnv,
+        tone: partial.tone
+          ? resolveDrumTone(l.synth, { ...l.tone, ...partial.tone })
+          : l.tone,
       };
     });
     const next: DrumKit = { ...kit, lanes, user: true };
@@ -4065,6 +4119,18 @@ class AudioEngine {
     this.emit("transport");
     this.emit("arrange");
     return next.id;
+  }
+
+  /** Fire one hit of a kit lane (synth or sample) into the master bus — UI audition. */
+  auditionDrumLane(kitId: string, laneId: string, vel = 1) {
+    const kit = findKit(kitId);
+    const lane = kit.lanes.find((l) => l.id === laneId);
+    if (!lane) return;
+    const c = this.ensureCtx();
+    void c.resume();
+    const n = this.nodes;
+    if (!n) return;
+    this.voiceDrum(lane, c.currentTime + 0.02, vel, n.sum, kit.id);
   }
 
   // metronome click: a short pitched blip → straight to master (not through a track
@@ -4094,31 +4160,31 @@ class AudioEngine {
   }
 
   // ── synthesized drum voices (Web Audio, when no sample is bounced) ──
-  private synthDrum(kind: DrumSynth, t: number, vel: number, dest?: AudioNode) {
+  // Params come from lane.tone (or recipe defaults). Head / body / tail
+  // partials each can carry a filter + bipolar Hz envelope.
+  private synthDrum(lane: DrumLane, t: number, vel: number, dest?: AudioNode) {
     const c = this.ctx!;
     const n = this.nodes!;
+    const tone = resolveDrumTone(lane.synth, lane.tone);
     const out = c.createGain();
     out.gain.value = 1;
     out.connect(dest ?? n.sum);
-    const env = (g: GainNode, peak: number, dec: number) => {
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(peak, t + 0.002);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
+    const env = (g: GainNode, peak: number, dec: number, at = t) => {
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(peak, at + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + Math.max(0.01, dec));
     };
-    const noiseBuf = (dur: number) => {
-      const len = Math.floor(c.sampleRate * dur);
-      const b = c.createBuffer(1, len, c.sampleRate);
-      const d = b.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-      return b;
-    };
-    const stop = (node: AudioScheduledSourceNode, at: number) => {
+    let pending = 0;
+    const track = (node: AudioScheduledSourceNode, at: number) => {
+      pending++;
       try {
         node.stop(at);
       } catch {
         /* fine */
       }
       node.onended = () => {
+        pending--;
+        if (pending > 0) return;
         try {
           out.disconnect();
         } catch {
@@ -4126,97 +4192,155 @@ class AudioEngine {
         }
       };
     };
+    /** Insert optional partial filter; returns filt-env end time (or `when`). */
+    const throughFilt = (
+      src: AudioNode,
+      destNode: AudioNode,
+      pf: DrumPartialFilt,
+      when: number,
+      releaseAt: number,
+    ): number => {
+      if (!partialFiltActive(pf)) {
+        src.connect(destNode);
+        return when;
+      }
+      const f = c.createBiquadFilter();
+      f.type = pf.mode === "off" ? "lowpass" : pf.mode;
+      f.Q.value = Math.max(0.1, pf.q);
+      const cut = Math.max(20, pf.cut);
+      let end = when;
+      if (Math.abs(pf.env.amt) > 1) {
+        end = scheduleFiltEnvOneShot(f.frequency, when, cut, pf.env, releaseAt);
+      } else {
+        f.frequency.value = cut;
+      }
+      src.connect(f);
+      f.connect(destNode);
+      return end;
+    };
 
-    if (kind === "kick") {
+    // ── BODY — pitched oscillator ──
+    if (tone.bodyLevel > 0.001) {
       const o = c.createOscillator();
       const g = c.createGain();
-      o.frequency.setValueAtTime(150, t);
-      o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
-      env(g, 0.9 * vel, 0.32);
-      o.connect(g);
+      o.type = tone.bodyWave;
+      const startHz = Math.max(20, tone.startHz);
+      const endHz = Math.max(20, tone.endHz);
+      o.frequency.setValueAtTime(startHz, t);
+      if (tone.sweep > 0.001 && Math.abs(startHz - endHz) > 0.5) {
+        o.frequency.exponentialRampToValueAtTime(endHz, t + tone.sweep);
+      }
+      env(g, tone.bodyLevel * vel, tone.bodyDecay);
+      const ampEnd = t + tone.bodyDecay;
+      const filtEnd = throughFilt(o, g, tone.bodyFilt, t, ampEnd);
       g.connect(out);
       o.start(t);
-      stop(o, t + 0.34);
-    } else if (kind === "snare") {
-      const ns = c.createBufferSource();
-      ns.buffer = noiseBuf(0.25);
-      const hp = c.createBiquadFilter();
-      hp.type = "highpass";
-      hp.frequency.value = 1400;
-      const g = c.createGain();
-      env(g, 0.55 * vel, 0.2);
-      ns.connect(hp);
-      hp.connect(g);
-      g.connect(out);
-      // body tone
-      const o = c.createOscillator();
-      o.type = "triangle";
-      o.frequency.value = 180;
-      const og = c.createGain();
-      env(og, 0.3 * vel, 0.12);
-      o.connect(og);
-      og.connect(out);
-      ns.start(t);
-      o.start(t);
-      stop(ns, t + 0.26);
-      stop(o, t + 0.14);
-    } else if (kind === "hat") {
-      const ns = c.createBufferSource();
-      ns.buffer = noiseBuf(0.08);
-      const hp = c.createBiquadFilter();
-      hp.type = "highpass";
-      hp.frequency.value = 7000;
-      const g = c.createGain();
-      env(g, 0.4 * vel, 0.05);
-      ns.connect(hp);
-      hp.connect(g);
-      g.connect(out);
-      ns.start(t);
-      stop(ns, t + 0.09);
-    } else if (kind === "clap") {
-      // three quick noise bursts
-      [0, 0.012, 0.024].forEach((off, i) => {
+      track(o, Math.max(ampEnd, filtEnd) + 0.05);
+    }
+
+    // ── HEAD — noise / click (optional multi-burst) ──
+    if (tone.noiseLevel > 0.001) {
+      const bursts = Math.max(1, Math.min(6, Math.round(tone.bursts)));
+      const gap = Math.max(0, tone.burstGap);
+      const useBp = tone.noiseBp > 0;
+      const cutBase = useBp
+        ? Math.max(20, tone.noiseBp)
+        : Math.max(20, tone.noiseHp);
+      const nfe = tone.noiseFiltEnv;
+      const sharedNoise = this.noiseBuf("white");
+      for (let i = 0; i < bursts; i++) {
+        const off = i * gap;
         const ns = c.createBufferSource();
-        ns.buffer = noiseBuf(0.12);
-        const bp = c.createBiquadFilter();
-        bp.type = "bandpass";
-        bp.frequency.value = 1200;
-        bp.Q.value = 0.7;
+        const isLast = i === bursts - 1;
+        const peak =
+          tone.noiseLevel * vel * (bursts > 1 && !isLast ? 0.7 : 1);
+        const dec =
+          bursts > 1 && !isLast
+            ? Math.max(0.03, tone.noiseDecay * 0.28)
+            : tone.noiseDecay;
+        const ampEnd = t + off + Math.max(0.01, dec);
+        const filt = c.createBiquadFilter();
+        if (useBp) {
+          filt.type = "bandpass";
+          filt.Q.value = Math.max(0.1, tone.noiseQ);
+        } else {
+          filt.type = "highpass";
+          filt.Q.value = 0.7;
+        }
+        let filtEnd = ampEnd;
+        if (Math.abs(nfe.amt) > 1) {
+          filtEnd = scheduleFiltEnvOneShot(
+            filt.frequency,
+            t + off,
+            cutBase,
+            nfe,
+            ampEnd,
+          );
+        } else {
+          filt.frequency.value = cutBase;
+        }
+        // Shared noise buffer — fixed offset when humanize off (repeatable hits).
+        ns.buffer = sharedNoise;
+        const playDur = Math.max(0.04, filtEnd - (t + off) + 0.02);
+        const startOff = this.audioPrefs.voiceHumanize
+          ? Math.random() * Math.max(0.01, sharedNoise.duration - playDur)
+          : Math.min(sharedNoise.duration * 0.25, i * 0.011);
         const g = c.createGain();
-        const peak = (i === 2 ? 0.5 : 0.35) * vel;
         g.gain.setValueAtTime(0, t + off);
         g.gain.linearRampToValueAtTime(peak, t + off + 0.001);
-        g.gain.exponentialRampToValueAtTime(
-          0.0001,
-          t + off + (i === 2 ? 0.18 : 0.05),
-        );
-        ns.connect(bp);
-        bp.connect(g);
+        g.gain.exponentialRampToValueAtTime(0.0001, ampEnd);
+        ns.connect(filt);
+        filt.connect(g);
         g.connect(out);
-        ns.start(t + off);
-        stop(ns, t + off + 0.2);
-      });
-    } else if (kind === "tom") {
-      const o = c.createOscillator();
+        ns.start(t + off, startOff, playDur);
+        track(ns, Math.max(ampEnd, filtEnd) + 0.05);
+      }
+    }
+
+    // ── TAIL — length / air / soft bloom ──
+    if (tone.tailLevel > 0.001) {
       const g = c.createGain();
-      o.frequency.setValueAtTime(220, t);
-      o.frequency.exponentialRampToValueAtTime(90, t + 0.18);
-      env(g, 0.7 * vel, 0.3);
-      o.connect(g);
+      env(g, tone.tailLevel * vel, tone.tailDecay);
       g.connect(out);
-      o.start(t);
-      stop(o, t + 0.32);
-    } else {
-      // rim — short bright click
-      const o = c.createOscillator();
-      o.type = "square";
-      o.frequency.value = 1700;
-      const g = c.createGain();
-      env(g, 0.35 * vel, 0.04);
-      o.connect(g);
-      g.connect(out);
-      o.start(t);
-      stop(o, t + 0.05);
+      const ampEnd = t + tone.tailDecay;
+      if (tone.tailSource === "sine") {
+        const o = c.createOscillator();
+        o.type = "sine";
+        o.frequency.value = Math.max(20, tone.tailHz);
+        const filtEnd = throughFilt(o, g, tone.tailFilt, t, ampEnd);
+        o.start(t);
+        track(o, Math.max(ampEnd, filtEnd) + 0.05);
+      } else {
+        const ns = c.createBufferSource();
+        const sharedNoise = this.noiseBuf("white");
+        ns.buffer = sharedNoise;
+        const pre = c.createBiquadFilter();
+        if (tone.tailBp > 0) {
+          pre.type = "bandpass";
+          pre.frequency.value = Math.max(20, tone.tailBp);
+          pre.Q.value = Math.max(0.1, tone.tailQ);
+        } else {
+          pre.type = "highpass";
+          pre.frequency.value = Math.max(20, tone.tailHp);
+          pre.Q.value = 0.7;
+        }
+        ns.connect(pre);
+        const filtEnd = throughFilt(pre, g, tone.tailFilt, t, ampEnd);
+        const playDur = Math.max(0.04, Math.max(ampEnd, filtEnd) - t + 0.02);
+        const startOff = this.audioPrefs.voiceHumanize
+          ? Math.random() * Math.max(0.01, sharedNoise.duration - playDur)
+          : 0;
+        ns.start(t, startOff, playDur);
+        track(ns, Math.max(ampEnd, filtEnd) + 0.05);
+      }
+    }
+
+    if (pending === 0) {
+      try {
+        out.disconnect();
+      } catch {
+        /* fine */
+      }
     }
   }
 
@@ -4332,6 +4456,7 @@ class AudioEngine {
     if (!res) return false;
     let kit = findKit(kitId);
     const wasBuiltin = !kit.user;
+    const prevId = kit.id;
     // builtins are read-only — clone into a user kit on first sample drop
     if (wasBuiltin) kit = cloneKitAsUser(kit, kit.name + " (custom)");
     const lanes = kit.lanes.map((l) =>
@@ -4353,14 +4478,15 @@ class AudioEngine {
     upsertUserKit(next);
     this.kit = next;
     if (this._importBufs[res.bufId])
-      this._drumBufs[laneId] = this._importBufs[res.bufId]!;
+      this._drumBufs[next.id + ":" + laneId] = this._importBufs[res.bufId]!;
     void this.loadKit(next);
     // remount drum clips that pointed at the old builtin kit id
     if (wasBuiltin) {
       for (const t of this.arrangement.tracks) {
         for (const cl of t.clips) {
           if (cl.content.kind !== "drum") continue;
-          if ((cl.content.pattern.kitId || this.kit.id) !== kitId) continue;
+          const id = cl.content.pattern.kitId || prevId;
+          if (id !== prevId) continue;
           cl.content = {
             ...cl.content,
             pattern: { ...cl.content.pattern, kitId: next.id },
@@ -4408,6 +4534,7 @@ class AudioEngine {
     if (this.sequencePlaying) this.stopArrangement();
     this.stopAudioClips();
     this._importBufs = {};
+    this._drumBufs = {};
     this._reverseBufs = {};
     this._importPeaks = {};
     this._waveCache = {};
@@ -4617,13 +4744,8 @@ class AudioEngine {
         /* corrupt entry — skip */
       }
     }
-    // prune imports no arrangement clip points at (frees evicted/orphaned entries)
-    const referenced = new Set<string>();
-    for (const t of this.arrangement.tracks)
-      for (const cl of t.clips)
-        if (cl.content.kind === "audio" && cl.content.bufId)
-          referenced.add(cl.content.bufId);
-    void pruneAudio(referenced);
+    // prune imports no arrangement clip or kit lane points at
+    void pruneAudio(referencedImportIds(this.arrangement));
     // warm the live stretch nodes for restored COMPLEX clips (first play = no fallback)
     for (const t of this.arrangement.tracks)
       for (const cl of t.clips)
@@ -4665,26 +4787,27 @@ class AudioEngine {
   }
 
   /** Peaks for a kit lane one-shot (session import or decoded kit url). */
-  drumLanePeaks(laneId: string, bins: number): Float32Array | null {
-    const lane = this.kit.lanes.find((l) => l.id === laneId);
-    const buf =
-      (lane?.bufId && this._importBufs[lane.bufId]) ||
-      this._drumBufs[laneId] ||
-      null;
+  drumLanePeaks(
+    laneId: string,
+    bins: number,
+    kitId?: string,
+  ): Float32Array | null {
+    const kit = kitId ? findKit(kitId) : this.kit;
+    const lane = kit.lanes.find((l) => l.id === laneId);
+    if (!lane) return null;
+    const buf = this.resolveDrumLaneBuf(lane, kit.id);
     if (!buf) return null;
-    const key = lane?.bufId
+    const key = lane.bufId
       ? "imp:" + lane.bufId
-      : "drum:" + this.kit.id + ":" + laneId;
+      : "drum:" + kit.id + ":" + laneId;
     return this.peaksFromBuf(buf, key, bins);
   }
 
-  drumLaneSeconds(laneId: string): number {
-    const lane = this.kit.lanes.find((l) => l.id === laneId);
-    const buf =
-      (lane?.bufId && this._importBufs[lane.bufId]) ||
-      this._drumBufs[laneId] ||
-      null;
-    return buf?.duration ?? 0;
+  drumLaneSeconds(laneId: string, kitId?: string): number {
+    const kit = kitId ? findKit(kitId) : this.kit;
+    const lane = kit.lanes.find((l) => l.id === laneId);
+    if (!lane) return 0;
+    return this.resolveDrumLaneBuf(lane, kit.id)?.duration ?? 0;
   }
 
   private peaksFromBuf(
@@ -6761,6 +6884,7 @@ class AudioEngine {
         timelineBeat: number,
         vel: number,
         dest: AudioNode,
+        kitId: string,
       ) => {
         if (brace && (timelineBeat < brace.start || timelineBeat >= brace.end))
           return;
@@ -6772,7 +6896,7 @@ class AudioEngine {
             if (!brace) break;
             continue;
           }
-          this.voiceDrum(lane, whenOf(absBeat), vel, dest);
+          this.voiceDrum(lane, whenOf(absBeat), vel, dest, kitId);
           if (!brace) break;
         }
       };
@@ -6834,6 +6958,7 @@ class AudioEngine {
                     clip.startBeat + local + swingDelay(local, clip.swing),
                     nt.vel,
                     dest,
+                    kit.id,
                   );
                 }
               }
@@ -6855,6 +6980,7 @@ class AudioEngine {
                         swingDelay(local, clip.swing),
                       pat.accent[lane.id]?.[s] ? 1 : 0.7,
                       dest,
+                      kit.id,
                     );
                   }
                 }

@@ -245,6 +245,25 @@ export function AudioPrefsPanel({
             </div>
           </div>
 
+          <div className="mb-2.5 flex flex-col gap-1">
+            <span className={cap}>synth voice</span>
+            <button
+              type="button"
+              className={ctl + "px-2.5 " + onOff(prefs.voiceHumanize)}
+              onClick={() =>
+                engine.setAudioPrefs({
+                  voiceHumanize: !prefs.voiceHumanize,
+                })
+              }
+              title="Per-note osc phase jitter + sample humanize. Off (default) = identical MIDI / arrangement hits."
+            >
+              humanize {prefs.voiceHumanize ? "on" : "off"}
+            </button>
+            <span className={cap}>
+              off = locked phase · on = random phase / sample detune each note
+            </span>
+          </div>
+
           <label className="mb-2.5 flex flex-col gap-1">
             <span className={cap}>channels</span>
             <select

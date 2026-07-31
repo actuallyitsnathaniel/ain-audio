@@ -5,6 +5,7 @@
 // beat-maker works immediately. The SequenceClip is the 16-step grid the
 // scheduler walks, sharing the Phase-2 clock.
 
+import type { DrumTone } from "../voice-env";
 
 export type DrumSynth = "kick" | "snare" | "hat" | "clap" | "tom" | "rim";
 
@@ -31,6 +32,11 @@ export interface DrumLane {
   filtEnv?: { a: number; d: number; s: number; r: number; amt: number };
   /** Amp envelope — same shape as SynthPatch.ampEnv. */
   ampEnv?: { a: number; d: number; s: number; r: number };
+  /**
+   * Editable synthDrum params (when no sample). Omitted = recipe defaults for
+   * `synth`. Phase 0 of the drum-synth; later splits into head/body/tail.
+   */
+  tone?: DrumTone;
 }
 
 export interface DrumKit {
@@ -185,6 +191,14 @@ export function allKits(): DrumKit[] {
   for (const k of KITS) byId.set(k.id, k);
   for (const k of user) byId.set(k.id, k);
   return [...byId.values()];
+}
+
+/** bufIds on kit lanes (user drops) — must stay in IDB prune / .ain export keep-sets. */
+export function kitLaneBufIds(kits: DrumKit[] = allKits()): Set<string> {
+  const ids = new Set<string>();
+  for (const k of kits)
+    for (const l of k.lanes) if (l.bufId) ids.add(l.bufId);
+  return ids;
 }
 
 export function findKit(id: string | undefined): DrumKit {

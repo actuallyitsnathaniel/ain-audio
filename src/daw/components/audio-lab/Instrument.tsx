@@ -121,9 +121,10 @@ export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boo
     unison: 1,
     detune: 14,
     width: 0.6,
-    phase: 1,
+    phase: 0,
   };
   const uv = (patch: Partial<NonNullable<SynthPatch["voices"]>>) => u({ voices: { ...vc, ...patch } } as Parameters<typeof engine.updateActivePatch>[0]);
+  const humanizeOn = eng.audioPrefs.voiceHumanize;
   // partial merge of the (guaranteed-present) sample source — deepMerge keeps the rest.
   // `sample?` on SynthPatch defeats DeepPartial's object-narrowing, so cast the shape.
   const us = (partial: Partial<import("../../data/patches").SampleSource>) => u({ sample: partial } as Parameters<typeof engine.updateActivePatch>[0]);
@@ -378,24 +379,40 @@ export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boo
 
         {tab === "voices" && (
           <Group title="voices">
+            <button
+              type="button"
+              title="Global: randomize osc start phase + sample humanize on every note. Off = identical MIDI hits (default)."
+              onClick={() =>
+                engine.setAudioPrefs({ voiceHumanize: !humanizeOn })
+              }
+              className={
+                "rounded-[3px] border px-1.5 py-0.75 font-mono text-[9px] transition-colors " +
+                (humanizeOn
+                  ? "border-accent text-accent"
+                  : "border-line text-faint")
+              }
+            >
+              humanize {humanizeOn ? "on" : "off"}
+            </button>
             <Seg value={vc.mode} options={["poly", "mono"] as const} onChange={(m) => uv({ mode: m })} />
             <Knob size={38} label="voices" value={vc.unison} min={1} max={8} defaultValue={1} onChange={(v) => uv({ unison: Math.round(v) })} fmt={(v) => String(Math.round(v))} />
             <Knob size={38} label="detune" value={vc.detune} min={0} max={100} defaultValue={14} disabled={vc.unison < 2} onChange={(v) => uv({ detune: v })} fmt={(v) => Math.round(v) + "ct"} />
             <Knob size={38} label="width" value={vc.width} min={0} max={1} defaultValue={0.6} disabled={vc.unison < 2} onChange={(v) => uv({ width: v })} fmt={(v) => Math.round(v * 100) + "%"} />
-            <span title="Per-oscillator start phase. 100% = fully random (default — stops detuned voices combing). 0 = locked.">
+            <span title="Per-oscillator start phase when humanize is on. 100% = fully random (stops detuned unison combing). 0 = locked. Ignored while humanize is off.">
               <Knob
                 size={38}
                 label="phase"
-                value={vc.phase ?? 1}
+                value={vc.phase ?? 0}
                 min={0}
                 max={1}
-                defaultValue={1}
+                defaultValue={0}
+                disabled={!humanizeOn}
                 onChange={(v) => uv({ phase: v })}
                 fmt={(v) => (v < 0.01 ? "lock" : Math.round(v * 100) + "%")}
               />
             </span>
             <span className="max-w-60 self-center font-mono text-[8.5px] leading-[1.55] text-faint">
-              mono = last-note priority · unison stacks osc 1/2, detuned ±ct and spread across the stereo field (level-normalized, serum-style). phase randomizes each osc so stacks don’t comb.
+              mono = last-note priority · unison stacks osc 1/2. humanize (global, default off) enables per-note phase jitter + sample detune — leave off for repeatable MIDI.
             </span>
           </Group>
         )}

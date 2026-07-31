@@ -46,7 +46,8 @@ export interface SynthPatch {
   // polyphony + unison, Serum-style. Absent = poly, 1 voice (all old patches).
   // unison replicates osc1/osc2 (not sub/noise/sample): detune = cents spread at the
   // extremes (symmetric), width = stereo spread 0..1. Levels normalize by 1/√N.
-  // phase = 0..1 randomize per oscillator (1 = full 0–2π; default — stops unison combing).
+  // phase = 0..1 randomize per oscillator when global voiceHumanize is on
+  // (gated in startVoiceAt; default humanize off → locked phase 0).
   voices?: {
     mode: "poly" | "mono";
     unison: number;

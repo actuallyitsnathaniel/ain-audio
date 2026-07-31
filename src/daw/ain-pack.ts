@@ -15,6 +15,7 @@
 import { zipSync, unzipSync, strToU8, strFromU8 } from "fflate";
 import type { Arrangement } from "./data/arrangement";
 import { sniffMime } from "./data/audio-store";
+import { kitLaneBufIds } from "./data/kits";
 import type { FxDeviceState } from "./fx-chain";
 
 /** Current pack schema version (reject newer on open). */
@@ -85,13 +86,18 @@ function readmeText(name: string): string {
   ].join("\n");
 }
 
-/** Collect bufIds pointed at by audio clips (imports / recordings — not catalog URLs). */
+/**
+ * Collect bufIds pointed at by audio clips + kit lane samples (imports /
+ * recordings — not catalog URLs). Kit lanes live in localStorage kits, not the
+ * arrangement doc, so they must be included or prune/export drops them.
+ */
 export function referencedImportIds(a: Arrangement): Set<string> {
   const ids = new Set<string>();
   for (const t of a.tracks)
     for (const cl of t.clips)
       if (cl.content.kind === "audio" && cl.content.bufId)
         ids.add(cl.content.bufId);
+  for (const id of kitLaneBufIds()) ids.add(id);
   return ids;
 }
 

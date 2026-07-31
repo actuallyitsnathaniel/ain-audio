@@ -107,7 +107,7 @@ export function DrumClipGrid({
       <div className="flex shrink-0 flex-col gap-1.25">
         {kit.lanes.map((lane) => {
           const mix = pattern.laneMix?.[lane.id];
-          const hasSample = !!(lane.bufId || lane.url);
+          const hasSample = engine.hasDrumLaneSample(lane, kit.id);
           const selected = selectedLaneId === lane.id;
           return (
             <div
@@ -140,6 +140,7 @@ export function DrumClipGrid({
                 <button className={msBtn(!!mix?.solo)} onClick={() => toggleMix(lane.id, "solo")} title="solo lane">S</button>
               </span>
               <SampleWell
+                kitId={kit.id}
                 laneId={lane.id}
                 hasSample={hasSample}
                 label={lane.name}
@@ -217,6 +218,7 @@ export function DrumClipGrid({
 
 /** Per-lane one-shot slot: dashed empty drop, or mini waveform when loaded. */
 function SampleWell({
+  kitId,
   laneId,
   hasSample,
   label,
@@ -225,6 +227,7 @@ function SampleWell({
   onDrop,
   onPick,
 }: {
+  kitId: string;
   laneId: string;
   hasSample: boolean;
   label: string;
@@ -253,7 +256,11 @@ function SampleWell({
     g.clearRect(0, 0, w, h);
     const accent =
       getComputedStyle(cv).getPropertyValue("--accent").trim() || "#54adbd";
-    const peaks = engine.drumLanePeaks(laneId, Math.max(16, Math.floor(w)));
+    const peaks = engine.drumLanePeaks(
+      laneId,
+      Math.max(16, Math.floor(w)),
+      kitId,
+    );
     if (!peaks) return;
     const mid = h / 2;
     g.fillStyle = accent;
