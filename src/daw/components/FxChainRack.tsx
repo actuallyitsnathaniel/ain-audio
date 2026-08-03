@@ -977,7 +977,7 @@ function DevicePanel({
                 label="pop"
                 on={Math.abs(p.speed - 25) < 1 && Math.abs((p.tracking ?? 0) - 1) < 0.05}
                 enabled={p.on}
-                title="Pop — ~25ms ratio chase, tracking wide open (typical mix retune)"
+                title="Pop — snap on note change + ~25ms within-note ease, track 100% (Fairbanks)"
                 onClick={() =>
                   set({
                     speed: 25,
@@ -993,7 +993,7 @@ function DevicePanel({
                 label="soft"
                 on={Math.abs(p.speed - 120) < 1 && p.humanize < 0.05}
                 enabled={p.on}
-                title="Soft — slower ratio chase (~120ms)"
+                title="Soft — slower within-note ease (~120ms); note changes still snap"
                 onClick={() =>
                   set({
                     speed: 120,
@@ -1014,7 +1014,7 @@ function DevicePanel({
                   Math.abs((p.amount ?? 1) - 1) < 0.05
                 }
                 enabled={p.on}
-                title="Hard lock — instant ratio snap"
+                title="Hard lock — always snap R* (best Fairbanks baseline)"
                 onClick={() =>
                   set({
                     speed: 0,
@@ -1106,7 +1106,7 @@ function DevicePanel({
             label="speed"
             disabled={!p.on}
             fmt={(v) => (v < 0.5 ? "lock" : Math.round(v) + "ms")}
-            tip="Retune speed — exponential chase of pitch ratio (ms). 0 = robot hard lock. Resets on note change."
+            tip="Within-note micro-ease of pitch ratio (ms). Note changes always snap like robot. 0 = always snap. Fairbanks can’t soft-glide a note change without vowel morph."
           />
           <Knob
             value={p.amount}
@@ -1150,7 +1150,7 @@ function DevicePanel({
             label="formant"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="0–49% = Fairbanks (formants follow pitch) · 50%+ = PSOLA (formant-friendlier). Formant “diphthongs” on Fairbanks are from ratio chase — leave at 0 for pop."
+            tip="0–49% = Fairbanks · 50%+ = full PSOLA (hard switch — 50% and 100% are the same path). Unvoiced falls back to Fairbanks so consonants survive. Experimental."
           />
           <Knob
             value={p.tracking}

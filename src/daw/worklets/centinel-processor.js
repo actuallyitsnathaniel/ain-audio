@@ -1,8 +1,8 @@
 // Centinel — monophonic pitch corrector (Fairbanks / optional PSOLA).
-// YIN f0 → Phase B stays_locked+hold commit → scale snap → Phase C ratio chase → OLA.
-// formant ≥ 0.5 → period PSOLA; else Fairbanks. humanize inert.
-//
-// Circular buffers N=2048; latency = N/2.
+// YIN f0 → stays_locked+hold commit → sticky want → R* = hz(want)/hz(det) → OLA.
+// Soft speed = WITHIN-NOTE micro-ease only (note boundaries always snap).
+// formant ≥ 0.5 → period PSOLA: epoch refine + 2·PE grain snapshot, no resample.
+// humanize inert. Circular buffers N=2048; latency = N/2.
 
 const N = 2048;
 const N2 = N >> 1;
@@ -26,6 +26,12 @@ const UNVOICED_DROP = 40;
 const STAYS_LOCKED_SEMI = 0.4;
 /** Hold before committing a new note (ms). Short enough for pop; not stacked-hard. */
 const HOLD_MS = 18;
+/**
+ * Soft speed may chase R* only when |ratio error| is under this (cents).
+ * Larger jumps and every note-commit snap — Fairbanks cannot soft-glide
+ * across a note without vowel morph.
+ */
+const WITHIN_NOTE_SOFT_CENTS = 40;
 
 const SCALE_PCS = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -219,8 +225,16 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     /** Target pitch ratio R* = hz(committedWant)/hz(lockedDet); chased in process. */
     this._rStar = 1;
     this.fragsize = 0;
-    /** Input write index at last period mark (PSOLA grain center). */
+    /** Input ring index of last analysis pitch mark (PSOLA grain center). */
     this._pitchMark = 0;
+    /** Half-length of last snapped PSOLA grain (samples); 0 = none. */
+    this._psolaHalf = 0;
+    /** Analysis period used for that grain. */
+    this._psolaPeIn = 64;
+    /** True until first voiced grain gets an energy-peak epoch snap. */
+    this._psolaNeedEpoch = true;
+    /** Persistent mark offset from delay-line nominal (samples, signed). */
+    this._epochOff = 0;
 
     this._detMidi = 60;
     this._tgtMidi = 60;
@@ -333,11 +347,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._phincSlew = 1;
   }
 
-  /**
-   * On note commit: always snap ratio. Fairbanks moves formants with pitch ratio —
-   * chasing R* across a note change sounds like a vowel diphthong.
-   * Soft speed only eases *small* within-note corrections in process().
-   */
+  /** Note commit / large jump: snap R* immediately (robot-equivalent boundary). */
   _seedPhases(rStar) {
     const r = Math.max(FACT_MIN, Math.min(FACT_MAX, rStar));
     this._rStar = r;
@@ -366,10 +376,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Phase B — stays_locked + hold.
-   * committedWant is STICKY until a real note commit.
-   * Pending hold FREEZES lockedDet + R* (OLA keeps running — no dry↔wet stutter).
-   * Phase C — soft speed chases R* while locked on the same note.
+   * Note commit: stays_locked + hold.
+   * committedWant sticky until commit; pending FREEZES R* (OLA keeps running).
+   * Soft speed never runs here — only within-note chase in process().
    */
   _applyCorrection(rawMidi, amount, speedMs, flexCents, transpose) {
     const dtMs = this._detectDt * 1000;
@@ -503,6 +512,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._holdAccumMs = 0;
           this._pendingHold = false;
           this._corrMidi = midi;
+          this._psolaNeedEpoch = true;
         }
       }
 
@@ -537,6 +547,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._noteLocked = false;
         this._pendingHold = false;
         this._holdAccumMs = 0;
+        this._psolaHalf = 0;
+        this._psolaNeedEpoch = true;
+        this._epochOff = 0;
       }
       tgt = nearestScaleMidi(det, this._key, scalePcsOf(this._scale, this._customPcs)) + transpose;
       this._tgtMidi = tgt;
@@ -557,6 +570,58 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       const dst = ((ti + N) % N + N) % N;
       this.fragL[dst] = this.cbiL[src];
       this.fragR[dst] = this.cbiR[src];
+    }
+  }
+
+  _clampPe(pe) {
+    if (pe < 16) return 16;
+    if (pe > N2 - 4) return N2 - 4;
+    return pe;
+  }
+
+  /**
+   * Epoch refine OFF for now — crude energy search locked onto unstable peaks
+   * and made the PSOLA path “pitchy.” Nominal delay-line mark only (D5 later).
+   */
+  _refineEpoch(_nominal, _peIn) {
+    return 0;
+  }
+
+  /** Snapshot ~2·PE grain into frag[] centered at index 0 (PSOLA place reads this). */
+  _capturePsolaGrain(peIn) {
+    const half = Math.min(N2 - 2, Math.floor(peIn));
+    if (half < 8) {
+      this._psolaHalf = 0;
+      return;
+    }
+    const mark = this._pitchMark;
+    for (let i = -half; i < half; i++) {
+      const src = ((mark + i) % N + N) % N;
+      const dst = ((i % N) + N) % N;
+      this.fragL[dst] = this.cbiL[src];
+      this.fragR[dst] = this.cbiR[src];
+    }
+    this._psolaHalf = half;
+    this._psolaPeIn = peIn;
+  }
+
+  /** Analysis period tick: mark + grain snapshot (PSOLA) or full Fairbanks capture. */
+  _onAnalysisPeriod() {
+    const nominal = ((this.cbiwr - N2) % N + N) % N;
+    // Prefer locked det — stabler PE than raw inphinc jitter
+    const inHz = midiToHz(this._lockedDet);
+    const peIn = this._clampPe(sampleRate / Math.max(F_MIN, Math.min(F_MAX, inHz)));
+
+    this._pitchMark = nominal;
+    this._epochOff = 0;
+
+    if (this._formant >= 0.5 && this._armed && this._voiced) {
+      this._capturePsolaGrain(peIn);
+    } else {
+      // Unvoiced / consonants / pre-arm: always full Fairbanks capture so place
+      // can reconstruct (never leave OLA holes — that killed consonants).
+      this._psolaHalf = 0;
+      this._captureFrag();
     }
   }
 
@@ -586,43 +651,37 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Period PSOLA (zita-at2-style): grain ~2·PE_in from a delayed pitch mark
-   * (never the write head — that reads wrap garbage and sounds like noise).
-   * No resample → formants stay; hop = peOut; gain × peOut/peIn for COLA.
+   * Period PSOLA: place last snapped ~2·PE grain with no resample.
+   * Synthesis hop comes from phaseout (peOut); COLA gain ≈ peOut/peIn.
    */
   _placeFragPsola() {
     this.fragsize = 0;
-    const inHz = midiToHz(this._lockedDet);
-    let peIn = sampleRate / Math.max(F_MIN, Math.min(F_MAX, inHz));
-    if (peIn < 16) peIn = 16;
-    if (peIn > N2 - 4) peIn = N2 - 4;
-    const fact = Math.max(FACT_MIN, Math.min(FACT_MAX, this._phincSlew));
-    let peOut = peIn / fact;
-    if (peOut < 16) peOut = 16;
-    if (peOut > N2 - 4) peOut = N2 - 4;
-
-    const grainLen = Math.min(N - 2, Math.floor(2 * peIn));
-    const half = grainLen >> 1;
+    const half = this._psolaHalf;
     if (half < 8) return;
 
-    // Always look back into settled input (same region Fairbanks captures)
-    const srcCenter = ((this.cbiwr - N2) % N + N) % N;
+    const peIn = this._clampPe(this._psolaPeIn);
+    const fact = Math.max(FACT_MIN, Math.min(FACT_MAX, this._phincSlew));
+    const peOut = this._clampPe(peIn / fact);
     const dstCenter = this.cbord + N2;
-    // Pitch-up packs more grains → scale down so overlaps don't clip/harsh
-    const ola = Math.max(0.25, Math.min(1.25, peOut / peIn));
+    const ola = Math.max(0.35, Math.min(1.15, peOut / peIn));
+
     for (let i = -half; i < half; i++) {
       const w = (0.5 - 0.5 * Math.cos((Math.PI * (i + half)) / half)) * ola;
-      const src = ((srcCenter + i) % N + N) % N;
       const dst = ((dstCenter + i) % N + N) % N;
-      this.cboL[dst] += this.cbiL[src] * w;
-      this.cboR[dst] += this.cbiR[src] * w;
+      const src = ((i % N) + N) % N;
+      this.cboL[dst] += this.fragL[src] * w;
+      this.cboR[dst] += this.fragR[src] * w;
     }
   }
 
   _placeFrag() {
-    // Hard switch only when clearly engaged — avoids accidental PSOLA from tiny knob moves
-    if (this._formant >= 0.5) this._placeFragPsola();
-    else this._placeFragFairbanks();
+    // Voiced + formant → PSOLA. Anything else → Fairbanks (consonants / breaths
+    // must keep placing — skipping OLA zeroed the wet path and ate consonants).
+    if (this._formant >= 0.5 && this._psolaHalf >= 8 && this._armed && this._voiced) {
+      this._placeFragPsola();
+    } else {
+      this._placeFragFairbanks();
+    }
   }
 
   process(inputs, outputs, parameters) {
@@ -643,10 +702,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const tracking = parameters.tracking[0];
     const transpose = parameters.transpose[0];
     this._speedMs = Math.max(0, speed);
+    const prevFormant = this._formant;
     this._formant = parameters.formant[0];
+    if (prevFormant < 0.5 && this._formant >= 0.5) this._psolaNeedEpoch = true;
 
-    // Soft speed: chase only small ratio errors. Large jumps snap — Fairbanks
-    // formants ride the ratio, so a long chase reads as a vowel diphthong.
+    // Soft speed = within-note only. Note commits seed-snap; |ΔR*| above
+    // WITHIN_NOTE_SOFT_CENTS snaps (robot-equivalent). No note-boundary glide.
     const spd = this._speedMs;
     let ratioAlpha = 1;
     if (spd >= 0.5) {
@@ -655,7 +716,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     }
     // Tiny ease after snaps so placeFrag doesn't zipper (~0.5 ms)
     const slewAlpha = 1 - Math.exp(-1 / Math.max(1, 0.0005 * sampleRate));
-    const FORMANT_SNAP_CENTS = 40;
 
     for (let i = 0; i < n; i++) {
       const xl = inL[i] || 0;
@@ -675,7 +735,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (this._on) {
         const cur = Math.max(1e-6, this.phincfact);
         const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
-        if (spd < 0.5 || Math.abs(ratioCents) > FORMANT_SNAP_CENTS) {
+        // Pending hold freezes R* already; still snap if soft would chase a big delta.
+        if (
+          spd < 0.5 ||
+          this._pendingHold ||
+          Math.abs(ratioCents) > WITHIN_NOTE_SOFT_CENTS
+        ) {
           this.phincfact = this._rStar;
         } else {
           this.phincfact += (this._rStar - this.phincfact) * ratioAlpha;
@@ -703,8 +768,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         if (this.phasein >= 1) {
           this.phasein -= Math.floor(this.phasein);
           if (this.phasein < 0 || this.phasein >= 1) this.phasein = 0;
-          this._pitchMark = ((this.cbiwr - N2) % N + N) % N;
-          this._captureFrag();
+          this._onAnalysisPeriod();
         }
 
         if (this.phaseout >= 1) {
@@ -719,6 +783,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this.phincfact = 1;
         this._rStar = 1;
         this.fragsize = 0;
+        this._psolaHalf = 0;
+        this._psolaNeedEpoch = true;
+        this._epochOff = 0;
         this._armed = false;
         this._stable = 0;
         this._everLocked = false;

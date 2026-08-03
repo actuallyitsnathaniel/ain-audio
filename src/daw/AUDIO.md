@@ -51,19 +51,19 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `reverb` | Convolver + predelay + tone         | Ableton-style hall: decay / size / damping / diffusion / predelay / lo·hi cut / mix. Synth IR via `makeReverbIR`. |
 | `eq` | Native biquad cascade | Pro-Q–style parametric EQ: up to 12 bands, shapes (bell/LS/HS/LC/HC/notch/BP/tilt), drag/Q editor, solo, per-band **dyn**, accurate response curve (incl. live dyn), input RTA, **ST/M/S**. Shared `BandCurveEditor` with speccomp. |
 | `impartialer` | AudioWorklet (STFT) | Phase 1–3: global transpose, in-key snap, force-remap. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
-| `centinel` | AudioWorklet (YIN + Fairbanks / PSOLA) | Autotalent-style hard-tune (N/2 latency): `stays_locked` + hold commit, **speed** = ratio chase (ms; 0 = robot), flex / amount / tracking / mix / key·scale·custom / midi follow / transpose. **formant** ≥50% → period PSOLA. humanize inert. Presets: **pop** (~25 ms, track 100%) · soft · robot. |
+| `centinel` | AudioWorklet (YIN + Fairbanks / PSOLA) | Hard-tune (N/2 latency): `stays_locked` + hold commit; **speed** = *within-note* ratio ease only (ms; 0 = robot — note changes always snap). flex / amount / tracking / mix / key·scale·custom / midi / transpose. **formant** ≥50% → period PSOLA (experimental). humanize inert. Presets: **pop** · soft · robot. |
 | `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
-
-**Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Phase B:
-`stays_locked` (±0.4 st) + hold (~30 ms) before committing a new note; while
-pending, ratio eases to 1 (no old-target diphthong); on commit, OLA phases are
-seeded. Phase C: soft **speed** exponentially chases `phincfact → R*` at sample
-rate (0 = robot snap). Note-commit hold is ~12 ms (short on purpose — it stacks
-with speed). Phase D: `formant ≥ 50%` → pitch-mark PSOLA. Detector stays
-YIN; if octave/noise still hurts, evaluate [SwiftF0](https://arxiv.org/abs/2508.18440)
-or [PESTO](https://doi.org/10.5334/tismir.251) as a WASM/ONNX sidecar — do not
-rewrite the shifter for F0.
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
+
+**Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Note commit:
+`stays_locked` (±0.4 st) + hold (~18 ms); pending freezes `R*` (OLA keeps
+running — no dry↔wet gate); on commit, seed-snap `phincfact = R*`. Soft
+**speed** only eases *within-note* ratio errors under ~40¢ (Fairbanks formants
+ride the ratio — soft-gliding a note boundary = vowel morph). Robot = always
+snap. `formant ≥ 50%` → period PSOLA: energy-peak epoch on voice onset, ~2·PE
+grain snapshot, no resample, COLA `peOut/peIn` (experimental — A/B vs Fairbanks).
+Detector stays YIN; neural F0 (SwiftF0 / PESTO) is a later sidecar if detection
+still limits — not the shifter.
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
 `input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/

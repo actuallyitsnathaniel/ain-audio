@@ -53,11 +53,12 @@ Implemented from scratch, following these published techniques:
   phase-in/phase-out, Hann fragment, cubic interp). Centinel reimplements the
   *approach* in original JS — not a paste of the GPL LADSPA sources.
 - **[Silvertune](https://github.com/epsilver/silvertune)** / [silvertune-web](https://github.com/verticalrectangle/silvertune-web)
-  — behavioral reference for Centinel soft speed: `stays_locked` hysteresis,
-  hold-before-commit, and exponential chase of **pitch ratio** (not MIDI springs).
+  — behavioral reference for Centinel: `stays_locked` hysteresis, hold-before-commit,
+  and chase of **pitch ratio** (not MIDI springs). Under Fairbanks, Centinel limits
+  soft chase to *within-note* errors so note boundaries stay robot-snap.
 - **[zita-at2](https://hal.science/hal-05096064)** — Fons Adriaensen (LAC 2025).
   Period-synchronous PSOLA for formant-preserving retune; Centinel’s formant
-  dial (≥50%) uses a JS reimplementation of that grain placement idea.
+  dial (≥50%) places ~2·PE grains on analysis pitch marks (experimental).
 - **SwiftF0 / PESTO** (2025) — candidate neural F0 sidecars if YIN still limits
   Centinel; not adopted yet (keep classical detector until ratio+PSOLA settle).
 - **TD-PSOLA** — classic monophonic pitch-correction family; Centinel defaults to

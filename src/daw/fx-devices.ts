@@ -206,8 +206,8 @@ export interface FxParams {
     bands: EqBand[];
   };
   /**
-   * Monophonic pitch sentinel — Autotalent-style Fairbanks OLA.
-   * Expression knobs shape the MIDI target; anti-click audio path stays intact.
+   * Monophonic pitch sentinel — Fairbanks OLA (+ optional period PSOLA).
+   * Soft speed = within-note ratio ease only; note boundaries always snap.
    */
   centinel: {
     on: boolean;
@@ -220,7 +220,10 @@ export interface FxParams {
      * become the retune targets; falls back to the scale map when none are held.
      */
     midiFollow: boolean;
-    /** Exponential chase of pitch ratio (ms); 0 = hard lock. Resets on note change. */
+    /**
+     * Within-note exponential chase of pitch ratio (ms). 0 = always snap.
+     * Note commits / large jumps always snap (Fairbanks cannot soft-glide boundaries).
+     */
     speed: number;
     /** 0..1 how far to pull toward the target. */
     amount: number;
@@ -230,7 +233,7 @@ export interface FxParams {
     humanize: number;
     /** 0..1 pitch tracking (1 = grabby / commercial “100%”; 0 = picky gate). */
     tracking: number;
-    /** 0 = Fairbanks OLA · ≥0.5 = period PSOLA (formant-friendlier). */
+    /** 0 = Fairbanks OLA · ≥0.5 = period PSOLA (experimental). */
     formant: number;
     mix: number;
     transpose: number;

@@ -430,12 +430,13 @@ shift path on the same analyze/synthesize spine.
 (archived former Centinel — **not** registered; do not confuse with live
 [`worklets/centinel-processor.js`](worklets/centinel-processor.js)).
 
-Live **centinel** is YIN + **stays_locked / hold** note commit + **ratio chase**
-(`speed` ms; 0 = robot) into either Autotalent-style Fairbanks OLA or period
-**PSOLA** when `formant ≥ 0.5` (N=2048, latency N/2). Soft MIDI springs were
-removed — they diphthonged by lagging `out` while `in` tracked live det.
-Neural F0 (PESTO / SwiftF0) is a later detector option if YIN still limits quality;
-do not swap the shifter for that. The YIN + phase-vocoder path was the wrong latency class for
+Live **centinel** is YIN + **stays_locked / hold** note commit + **ratio** control
+into Fairbanks OLA (or period **PSOLA** when `formant ≥ 0.5`). Soft **speed** is
+*within-note* ratio ease only — note boundaries always snap (Fairbanks cannot
+soft-glide without formant morph). Soft MIDI springs were removed — they
+diphthonged by lagging `out` while `in` tracked live det. Neural F0 (PESTO /
+SwiftF0) is a later detector option if YIN still limits quality; do not swap the
+shifter for that. The YIN + phase-vocoder path was the wrong latency class for
 Auto-Tune–style hard lock, but it is a solid starting point for a **spectral-time /
 smear** effect that *wants* STFT group delay and hop-rate morphing.
 
