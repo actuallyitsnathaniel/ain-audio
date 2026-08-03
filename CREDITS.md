@@ -19,7 +19,7 @@ point of use in the code/docs.
   WARP mode: pitch-preserving tempo-fit + duration-preserving transpose, rendered offline into
   cached buffers in `engine.ts` (`stretchRender`).
 - [fflate](https://github.com/101arrowz/fflate) — zip pack/unpack for the AIN
-  `.ain` project format (`src/daw/ain-pack.ts`: arrangement + collected import assets).
+  `.ain` project format (`src/daw/ain-pack.ts`: WAV preview + zip arrangement pack).
 
 ## Runtime libraries (other)
 
@@ -46,7 +46,22 @@ Implemented from scratch, following these published techniques:
   (`src/daw/components/audio-lab/filter-math.ts`, `FilterGraph.tsx`).
 - **[YIN](http://auditory.org/postings/2002/26.html)** — Alain de Cheveigné & Hideki Kawahara.
   Fundamental-frequency estimator used by the centinel worklet
-  (`src/daw/worklets/centinel-processor.js`).
+  (`src/daw/worklets/centinel-processor.js`) and the pinned spectral-smear archive
+  (`src/daw/worklets/spectral-smear-processor.js`).
+- **[Autotalent](http://tombaran.info/autotalent.html)** — Thomas A. Baran.
+  Pitch-synchronous Fairbanks overlap-add hard-tune technique (circular buffer,
+  phase-in/phase-out, Hann fragment, cubic interp). Centinel reimplements the
+  *approach* in original JS — not a paste of the GPL LADSPA sources.
+- **[Silvertune](https://github.com/epsilver/silvertune)** / [silvertune-web](https://github.com/verticalrectangle/silvertune-web)
+  — behavioral reference for Centinel soft speed: `stays_locked` hysteresis,
+  hold-before-commit, and exponential chase of **pitch ratio** (not MIDI springs).
+- **[zita-at2](https://hal.science/hal-05096064)** — Fons Adriaensen (LAC 2025).
+  Period-synchronous PSOLA for formant-preserving retune; Centinel’s formant
+  dial (≥50%) uses a JS reimplementation of that grain placement idea.
+- **SwiftF0 / PESTO** (2025) — candidate neural F0 sidecars if YIN still limits
+  Centinel; not adopted yet (keep classical detector until ratio+PSOLA settle).
+- **TD-PSOLA** — classic monophonic pitch-correction family; Centinel defaults to
+  Autotalent Fairbanks, with optional PSOLA when formant is engaged.
 - **[Paul Kellet's refined pink-noise method](https://www.firstpr.com.au/dsp/pink-noise/)** —
   the pink-noise filter coefficients in the synth's noise oscillator (`src/daw/engine.ts` → `noiseBuf`).
 - **["A Tale of Two Clocks"](https://web.dev/articles/audio-scheduling)** — Chris Wilson.

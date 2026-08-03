@@ -45,6 +45,7 @@ import {
   clearAudio,
   canPersistOpus,
   encodePersistable,
+  encodeWavPcm16,
   lastPersistCodec,
   sniffMime,
 } from "./data/audio-store";
@@ -493,6 +494,8 @@ class AudioEngine {
   private _redo: UndoSnap[] = [];
   private _clipboard: { clips: ArrClip[]; trackKinds: TrackKind[] } | null =
     null;
+  /** Device clipboard — type + params only (fresh id on paste). Separate from clip clipboard. */
+  private _fxClipboard: { type: FxDeviceType; params: unknown } | null = null;
   private static UNDO_MAX = 60;
   private _metroThrough = -1; // last beat we've scheduled a click for (arrangement clock)
   arrangement: Arrangement = loadArrangement();
@@ -788,6 +791,40 @@ class AudioEngine {
   /** Latest spectral viz frame from a master-chain device (poll from rAF). */
   readMasterFxViz(deviceId: string) {
     return this._masterFx?.readViz(deviceId) ?? null;
+  }
+
+  hasFxClipboard(): boolean {
+    return !!this._fxClipboard;
+  }
+
+  copyMasterDevice(deviceId: string) {
+    const d = this.masterDevices().find((x) => x.id === deviceId);
+    if (!d) return;
+    this._fxClipboard = { type: d.type, params: structuredClone(d.params) };
+    this.emit("fx");
+  }
+
+  pasteMasterDevice(atIndex?: number) {
+    if (!this._fxClipboard) return;
+    this.ensureCtx();
+    const type = this._fxClipboard.type;
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim")
+      void this.ensureSpectralWorklets();
+    this._masterFx!.insertDevice(this._fxClipboard, atIndex);
+    this.saveMasterFx();
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim") {
+      void this.ensureSpectralWorklets().then((ok) => {
+        if (ok) this._masterFx?.applyAll(this.bpm);
+      });
+    }
+  }
+
+  duplicateMasterDevice(deviceId: string) {
+    const list = this.masterDevices();
+    const i = list.findIndex((x) => x.id === deviceId);
+    if (i < 0) return;
+    this.copyMasterDevice(deviceId);
+    this.pasteMasterDevice(i + 1);
   }
 
   private applyWet(instant?: boolean) {
@@ -3617,6 +3654,48 @@ class AudioEngine {
     return this._arrStrips[trackId]?.fx.readViz(deviceId) ?? null;
   }
 
+  copyTrackDevice(trackId: string, deviceId: string) {
+    const d = this.trackDevices(trackId).find((x) => x.id === deviceId);
+    if (!d) return;
+    this._fxClipboard = { type: d.type, params: structuredClone(d.params) };
+    this.emit("fx");
+  }
+
+  /** Label of the device on the FX clipboard (for paste menus), or null. */
+  fxClipboardLabel(): string | null {
+    return this._fxClipboard ? FX_DEVICES[this._fxClipboard.type].label : null;
+  }
+
+  pasteTrackDevice(trackId: string, atIndex?: number) {
+    if (!this._fxClipboard) return;
+    const type = this._fxClipboard.type;
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim")
+      void this.ensureSpectralWorklets();
+    const r = this.trackFx(trackId);
+    if (!r) return;
+    r.s.fx.insertDevice(this._fxClipboard, atIndex);
+    r.t.devices = r.s.fx.states();
+    this.saveArr();
+    this.emit("fx");
+    this.refreshTrackAdc();
+    if (type === "impartialer" || type === "speccomp" || type === "centinel" || type === "cliplim") {
+      void this.ensureSpectralWorklets().then((ok) => {
+        if (ok) {
+          r.s.fx.applyAll(this.bpm);
+          this.refreshTrackAdc();
+        }
+      });
+    }
+  }
+
+  duplicateTrackDevice(trackId: string, deviceId: string) {
+    const list = this.trackDevices(trackId);
+    const i = list.findIndex((x) => x.id === deviceId);
+    if (i < 0) return;
+    this.copyTrackDevice(trackId, deviceId);
+    this.pasteTrackDevice(trackId, i + 1);
+  }
+
   toggleTrackMute(id: string) {
     const t = this.findTrack(id);
     if (t) t.mute = !t.mute;
@@ -4557,6 +4636,7 @@ class AudioEngine {
     }
     this.insertBeat = 0;
     this.clearSelection();
+    this._lastMixBounce = null;
     this._undo = [];
     this._redo = [];
     this._clipboard = null;
@@ -4564,10 +4644,14 @@ class AudioEngine {
   }
 
   /**
-   * Collect-and-save: zip arrangement + every imported/recorded buffer (not built-in
-   * catalog samples) into a downloadable `.ain`. Working copy stays in LS + IndexedDB.
+   * Collect-and-save: PCM16 WAV master bounce + zip (arrangement + imports) +
+   * AIN1 trailer → downloadable `.ain`. Working copy stays in LS + IndexedDB.
+   * Uses the last mix bounce when present; otherwise records one first.
    */
-  async exportAin(name = "project"): Promise<void> {
+  async exportAin(
+    name = "project",
+    opts?: { wavMask?: boolean },
+  ): Promise<void> {
     this.saveArr();
     const ids = referencedImportIds(this.arrangement);
     const stored = await allAudio();
@@ -4589,22 +4673,32 @@ class AudioEngine {
             clipName = cl.content.name || cl.name || clipName;
       assets.push({ bufId, bytes, name: clipName });
     }
+    const previewWav = await this.ensureAinPreviewWav();
     const blob = packAin({
       name,
       arrangement: this.arrangement,
       assets,
       masterFx: this.masterDevices(),
+      previewWav,
     });
-    downloadBlob(blob, safeAinFilename(name));
+    downloadBlob(blob, safeAinFilename(name, opts));
+  }
+
+  /** Last realtime mix bounce (MediaRecorder blob), used as .ain preview source. */
+  private _lastMixBounce: { bytes: ArrayBuffer; mime: string } | null = null;
+
+  hasMixBounce(): boolean {
+    return !!this._lastMixBounce;
   }
 
   /**
    * Realtime mix bounce: record the master bus while playing the arrangement
-   * (full FX / MIDI / drums — whatever you hear). Downloads .webm (Opus) or .m4a.
+   * (full FX / MIDI / drums — whatever you hear). Returns the recorded blob and
+   * caches it for `.ain` preview embedding.
    */
   bouncing = false;
-  async bounceMix(name = "mix"): Promise<void> {
-    if (this.bouncing) return;
+  async recordMixBounce(): Promise<Blob> {
+    if (this.bouncing) throw new Error("Bounce already in progress");
     const c = this.ensureCtx();
     const n = this.nodes;
     if (!n) throw new Error("Audio engine not ready");
@@ -4653,14 +4747,11 @@ class AudioEngine {
       await new Promise<void>((r) => setTimeout(r, 250)); // flush into recorder
       if (rec.state === "recording") rec.stop();
       const blob = await finished;
-      const ext = mime.includes("mp4") ? "m4a" : "webm";
-      const base = name
-        .trim()
-        .replace(/[^\w-]+/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 64);
-      downloadBlob(blob, `${base || "mix"}.${ext}`);
+      this._lastMixBounce = {
+        bytes: await blob.arrayBuffer(),
+        mime: blob.type || mime,
+      };
+      return blob;
     } finally {
       try {
         n.master.disconnect(dest);
@@ -4670,6 +4761,40 @@ class AudioEngine {
       this.bouncing = false;
       this.emit("transport");
     }
+  }
+
+  /** Decode last bounce (or record one) → PCM16 WAV for the .ain playable head. */
+  private async ensureAinPreviewWav(): Promise<ArrayBuffer> {
+    if (!this._lastMixBounce) await this.recordMixBounce();
+    const bounce = this._lastMixBounce;
+    if (!bounce) throw new Error("Couldn't capture mix bounce for .ain preview");
+    const c = this.ensureCtx();
+    let buf: AudioBuffer;
+    try {
+      buf = await c.decodeAudioData(bounce.bytes.slice(0));
+    } catch {
+      throw new Error(
+        "Couldn't decode mix bounce for .ain preview (try Bounce Mix… first)",
+      );
+    }
+    return encodeWavPcm16(buf);
+  }
+
+  /**
+   * Realtime mix bounce → download .webm (Opus) or .m4a. Also refreshes the
+   * cached bounce used when saving `.ain`.
+   */
+  async bounceMix(name = "mix"): Promise<void> {
+    const blob = await this.recordMixBounce();
+    const mime = blob.type;
+    const ext = mime.includes("mp4") ? "m4a" : "webm";
+    const base = name
+      .trim()
+      .replace(/[^\w-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 64);
+    downloadBlob(blob, `${base || "mix"}.${ext}`);
   }
 
   /**
@@ -4692,6 +4817,11 @@ class AudioEngine {
       } catch {
         /* undecodable asset — clip stays silent until re-import */
       }
+    }
+
+    // Cache container preview as the last mix bounce when present
+    if (pack.preview && pack.preview.byteLength > 44) {
+      this._lastMixBounce = { bytes: pack.preview, mime: "audio/wav" };
     }
 
     const arr = pack.arrangement;

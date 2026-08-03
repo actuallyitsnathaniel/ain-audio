@@ -1,16 +1,31 @@
-// Centinel — monophonic auto-pitch corrector with humanizing controls.
-// YIN f0 detect → scale snap → speed/flex/humanize-smoothed correction →
-// phase-vocoder global shift + optional formant preserve.
+// Centinel — monophonic pitch corrector (Fairbanks / optional PSOLA).
+// YIN f0 → Phase B stays_locked+hold commit → scale snap → Phase C ratio chase → OLA.
+// formant ≥ 0.5 → period PSOLA; else Fairbanks. humanize inert.
 //
-// Dry/wet mixes INSIDE the worklet against a latency-aligned dry delay.
-// Viz: scrolling detected / target / corrected MIDI (Auto-Tune–style graph).
-//
-// Pitch detection: YIN (de Cheveigné & Kawahara).
+// Circular buffers N=2048; latency = N/2.
 
-const PRESETS = {
-  low: { fftSize: 2048, hop: 512 },
-  high: { fftSize: 4096, hop: 1024 },
-};
+const N = 2048;
+const N2 = N >> 1;
+const NOVERLAP = 4;
+const DETECT_EVERY = N / NOVERLAP;
+const F_MIN = 80;
+const F_MAX = 700;
+const AREF = 440;
+const VIZ_BINS = 96;
+const MIDI_LO = 36;
+const MIDI_HI = 84;
+const VIZ_EVERY = 2;
+const STABLE_NEED = 3;
+const MAX_JUMP_SEMI = 7;
+const FACT_MIN = 0.5;
+const FACT_MAX = 2.0;
+const RMS_GATE = 0.01;
+const UNVOICED_DROP = 40;
+
+/** Silvertune-style: ignore YIN wander within this while locked (semitones). */
+const STAYS_LOCKED_SEMI = 0.4;
+/** Hold before committing a new note (ms). Short enough for pop; not stacked-hard. */
+const HOLD_MS = 18;
 
 const SCALE_PCS = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -18,7 +33,6 @@ const SCALE_PCS = {
   dorian: [0, 2, 3, 5, 7, 9, 10],
   chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
 };
-
 const DEFAULT_CUSTOM = [0, 2, 4, 5, 7, 9, 11];
 
 function scalePcsOf(scale, customPcs) {
@@ -31,7 +45,6 @@ function scalePcsOf(scale, customPcs) {
   return SCALE_PCS[scale] || SCALE_PCS.major;
 }
 
-/** Snap detected MIDI toward the nearest held MIDI note (octave-matched). */
 function nearestMidiNote(det, notes) {
   let best = det;
   let bestAbs = Infinity;
@@ -47,90 +60,12 @@ function nearestMidiNote(det, notes) {
   return best;
 }
 
-const VIZ_BINS = 96;
-const MIDI_LO = 36;
-const MIDI_HI = 84;
-const YIN_SIZE = 1024;
-
-function makeHann(n) {
-  const w = new Float32Array(n);
-  for (let i = 0; i < n; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / n));
-  return w;
-}
-
-function fft(re, im, inverse) {
-  const n = re.length;
-  for (let i = 1, j = 0; i < n; i++) {
-    let bit = n >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) {
-      let t = re[i];
-      re[i] = re[j];
-      re[j] = t;
-      t = im[i];
-      im[i] = im[j];
-      im[j] = t;
-    }
-  }
-  for (let len = 2; len <= n; len <<= 1) {
-    const ang = ((inverse ? 2 : -2) * Math.PI) / len;
-    const wlenRe = Math.cos(ang);
-    const wlenIm = Math.sin(ang);
-    for (let i = 0; i < n; i += len) {
-      let wRe = 1;
-      let wIm = 0;
-      for (let j = 0; j < len / 2; j++) {
-        const uRe = re[i + j];
-        const uIm = im[i + j];
-        const vRe = re[i + j + len / 2] * wRe - im[i + j + len / 2] * wIm;
-        const vIm = re[i + j + len / 2] * wIm + im[i + j + len / 2] * wRe;
-        re[i + j] = uRe + vRe;
-        im[i + j] = uIm + vIm;
-        re[i + j + len / 2] = uRe - vRe;
-        im[i + j + len / 2] = uIm - vIm;
-        const nRe = wRe * wlenRe - wIm * wlenIm;
-        wIm = wRe * wlenIm + wIm * wlenRe;
-        wRe = nRe;
-      }
-    }
-  }
-  if (inverse) {
-    const inv = 1 / n;
-    for (let i = 0; i < n; i++) {
-      re[i] *= inv;
-      im[i] *= inv;
-    }
-  }
-}
-
-function createChannel(fftSize, hop) {
-  const half = fftSize / 2;
-  return {
-    inFifo: new Float32Array(fftSize),
-    outFifo: new Float32Array(fftSize),
-    outQueue: new Float32Array(hop),
-    dryDelay: new Float32Array(fftSize),
-    fill: 0,
-    outRead: 0,
-    outAvail: 0,
-    dryIdx: 0,
-    re: new Float32Array(fftSize),
-    im: new Float32Array(fftSize),
-    lastPhase: new Float32Array(half + 1),
-    sumPhase: new Float32Array(half + 1),
-    mag: new Float32Array(half + 1),
-    freq: new Float32Array(half + 1),
-    synMag: new Float32Array(half + 1),
-    synFreq: new Float32Array(half + 1),
-    env: new Float32Array(half + 1),
-    synEnv: new Float32Array(half + 1),
-    synFine: new Float32Array(half + 1),
-  };
-}
-
 function hzToMidi(hz) {
-  return 69 + (12 * Math.log(hz / 440)) / Math.LN2;
+  return 69 + (12 * Math.log(hz / AREF)) / Math.LN2;
+}
+
+function midiToHz(m) {
+  return AREF * Math.pow(2, (m - 69) / 12);
 }
 
 function midiToNorm(m) {
@@ -155,7 +90,6 @@ function nearestScaleMidi(midi, key, scalePcs) {
   return midi + best;
 }
 
-/** Snap candidate MIDI into ±6 semitones of `ref` (kills YIN octave flips). */
 function octaveLock(midi, ref) {
   let m = midi;
   while (m - ref > 6) m -= 12;
@@ -163,10 +97,6 @@ function octaveLock(midi, ref) {
   return m;
 }
 
-/**
- * YIN pitch estimate. Mutates scratch d/cmnd.
- * @see de Cheveigné & Kawahara, YIN
- */
 function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
   const n = buf.length;
   const tauMax = Math.min(n - 2, Math.floor(sr / fMin));
@@ -175,7 +105,8 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
 
   for (let tau = 1; tau <= tauMax; tau++) {
     let sum = 0;
-    for (let i = 0; i < n - tau; i++) {
+    const lim = n - tau;
+    for (let i = 0; i < lim; i++) {
       const delta = buf[i] - buf[i + tau];
       sum += delta * delta;
     }
@@ -189,7 +120,7 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
     cmnd[tau] = running > 0 ? (d[tau] * tau) / running : 1;
   }
 
-  const thresh = 0.15;
+  const thresh = 0.12;
   let tau = tauMin;
   for (; tau <= tauMax; tau++) {
     if (cmnd[tau] < thresh) {
@@ -198,6 +129,14 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
     }
   }
   if (tau >= tauMax || cmnd[tau] >= 1) return { f0: 0, clarity: 0 };
+
+  const tau2 = tau * 2;
+  if (tau2 + 1 <= tauMax) {
+    let t2 = tau2;
+    if (t2 > 1 && cmnd[t2 - 1] < cmnd[t2]) t2--;
+    if (t2 + 1 <= tauMax && cmnd[t2 + 1] < cmnd[t2]) t2++;
+    if (cmnd[t2] <= cmnd[tau] * 1.08) tau = t2;
+  }
 
   const x0 = tau > 1 ? cmnd[tau - 1] : cmnd[tau];
   const x1 = cmnd[tau];
@@ -210,107 +149,22 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
   return { f0, clarity };
 }
 
-function fillEnvelope(mag, half, env, passes) {
-  for (let k = 0; k <= half; k++) env[k] = Math.log(mag[k] + 1e-12);
-  for (let p = 0; p < passes; p++) {
-    let prev = env[0];
-    for (let k = 1; k < half; k++) {
-      const cur = env[k];
-      const next = env[k + 1];
-      env[k] = 0.25 * prev + 0.5 * cur + 0.25 * next;
-      prev = cur;
-    }
-  }
-  for (let k = 0; k <= half; k++) env[k] = Math.exp(env[k]);
-}
-
-/**
- * Global β pitch shift via phase vocoder.
- * `formant` 0 = formants ride pitch · 1 = keep spectral envelope.
- */
-function processFrame(ch, window, fftSize, hop, pitchRatio, formant) {
-  const half = fftSize / 2;
-  const { re, im, lastPhase, sumPhase, mag, freq, synMag, synFreq, env, synEnv, synFine } = ch;
-  const fAmt = Math.max(0, Math.min(1, formant));
-
-  for (let i = 0; i < fftSize; i++) {
-    re[i] = ch.inFifo[i] * window[i];
-    im[i] = 0;
-  }
-  fft(re, im, false);
-
-  const expect = (2 * Math.PI * hop) / fftSize;
-  for (let k = 0; k <= half; k++) {
-    const mr = re[k];
-    const mi = im[k];
-    const m = Math.hypot(mr, mi);
-    const p = Math.atan2(mi, mr);
-    let delta = p - lastPhase[k];
-    lastPhase[k] = p;
-    delta -= k * expect;
-    const qpd = Math.round(delta / Math.PI);
-    if (qpd >= 0) delta -= Math.PI * (qpd + (qpd & 1));
-    else delta -= Math.PI * (qpd - (qpd & 1));
-    mag[k] = m;
-    freq[k] = ((k * expect + delta) * fftSize) / (2 * Math.PI * hop);
-  }
-
-  synMag.fill(0);
-  synFreq.fill(0);
-
-  if (fAmt < 0.02) {
-    for (let k = 0; k <= half; k++) {
-      if (mag[k] < 1e-12) continue;
-      const dest = (k * pitchRatio + 0.5) | 0;
-      if (dest < 0 || dest > half) continue;
-      synMag[dest] += mag[k];
-      synFreq[dest] = freq[k] * pitchRatio;
-    }
-  } else {
-    fillEnvelope(mag, half, env, 5);
-    synFine.fill(0);
-    synEnv.fill(0);
-    const formantRatio = pitchRatio + (1 - pitchRatio) * fAmt;
-    for (let k = 0; k <= half; k++) {
-      if (mag[k] < 1e-12) continue;
-      const e = env[k] || 1e-12;
-      const fine = mag[k] / e;
-      const dFine = (k * pitchRatio + 0.5) | 0;
-      if (dFine >= 0 && dFine <= half) {
-        synFine[dFine] += fine;
-        synFreq[dFine] = freq[k] * pitchRatio;
-      }
-      const dEnv = (k * formantRatio + 0.5) | 0;
-      if (dEnv >= 0 && dEnv <= half && e > synEnv[dEnv]) synEnv[dEnv] = e;
-    }
-    for (let k = 0; k <= half; k++) {
-      synMag[k] = synFine[k] * (synEnv[k] > 1e-12 ? synEnv[k] : 1e-12);
-    }
-  }
-
-  for (let k = 0; k <= half; k++) {
-    const p = sumPhase[k];
-    re[k] = synMag[k] * Math.cos(p);
-    im[k] = synMag[k] * Math.sin(p);
-    sumPhase[k] += (2 * Math.PI * synFreq[k] * hop) / fftSize;
-  }
-  for (let k = 1; k < half; k++) {
-    re[fftSize - k] = re[k];
-    im[fftSize - k] = -im[k];
-  }
-  im[0] = 0;
-  im[half] = 0;
-  fft(re, im, true);
-  for (let i = 0; i < fftSize; i++) {
-    ch.outFifo[i] += re[i] * window[i];
-  }
-}
-
-function identityFrame(ch, window, fftSize) {
-  for (let i = 0; i < fftSize; i++) {
-    const w = window[i];
-    ch.outFifo[i] += ch.inFifo[i] * w * w;
-  }
+function cubicAt(buf, indd) {
+  const n = buf.length;
+  const ind1 = Math.floor(indd);
+  const ind0 = ind1 - 1;
+  const ind2 = ind1 + 1;
+  const ind3 = ind1 + 2;
+  const val0 = buf[((ind0 % n) + n) % n];
+  const val1 = buf[((ind1 % n) + n) % n];
+  const val2 = buf[((ind2 % n) + n) % n];
+  const val3 = buf[((ind3 % n) + n) % n];
+  let vald = 0;
+  vald -= 0.166666666667 * val0 * (indd - ind1) * (indd - ind2) * (indd - ind3);
+  vald += 0.5 * val1 * (indd - ind0) * (indd - ind2) * (indd - ind3);
+  vald -= 0.5 * val2 * (indd - ind0) * (indd - ind1) * (indd - ind3);
+  vald += 0.166666666667 * val3 * (indd - ind0) * (indd - ind1) * (indd - ind2);
+  return vald;
 }
 
 class AinCentinelProcessor extends AudioWorkletProcessor {
@@ -318,25 +172,34 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     return [
       { name: "mix", defaultValue: 1, minValue: 0, maxValue: 1, automationRate: "k-rate" },
       { name: "amount", defaultValue: 1, minValue: 0, maxValue: 1, automationRate: "k-rate" },
-      { name: "speed", defaultValue: 40, minValue: 0, maxValue: 400, automationRate: "k-rate" },
-      { name: "flex", defaultValue: 12, minValue: 0, maxValue: 100, automationRate: "k-rate" },
-      { name: "humanize", defaultValue: 0.4, minValue: 0, maxValue: 1, automationRate: "k-rate" },
-      { name: "tracking", defaultValue: 0.35, minValue: 0, maxValue: 1, automationRate: "k-rate" },
-      { name: "formant", defaultValue: 0.7, minValue: 0, maxValue: 1, automationRate: "k-rate" },
+      { name: "speed", defaultValue: 25, minValue: 0, maxValue: 400, automationRate: "k-rate" },
+      { name: "flex", defaultValue: 0, minValue: 0, maxValue: 100, automationRate: "k-rate" },
+      { name: "humanize", defaultValue: 0, minValue: 0, maxValue: 1, automationRate: "k-rate" },
+      { name: "tracking", defaultValue: 1, minValue: 0, maxValue: 1, automationRate: "k-rate" },
+      { name: "formant", defaultValue: 0, minValue: 0, maxValue: 1, automationRate: "k-rate" },
       { name: "transpose", defaultValue: 0, minValue: -12, maxValue: 12, automationRate: "k-rate" },
     ];
   }
 
-  constructor(options) {
+  constructor() {
     super();
-    const q = (options.processorOptions && options.processorOptions.quality) || "low";
-    const preset = PRESETS[q] || PRESETS.low;
-    this.fftSize = preset.fftSize;
-    this.hop = preset.hop;
-    this.window = makeHann(this.fftSize);
-    this.olaGain = (2 * this.hop) / this.fftSize;
-    this.L = createChannel(this.fftSize, this.hop);
-    this.R = createChannel(this.fftSize, this.hop);
+    this.cbiL = new Float32Array(N);
+    this.cbiR = new Float32Array(N);
+    this.cboL = new Float32Array(N);
+    this.cboR = new Float32Array(N);
+    this.fragL = new Float32Array(N);
+    this.fragR = new Float32Array(N);
+    this.cbiwr = 0;
+    this.cbord = 0;
+
+    this.hann = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      this.hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N);
+    }
+
+    this._yinScratch = new Float32Array(N2);
+    this._yinD = new Float32Array(N2);
+    this._yinCmnd = new Float32Array(N2);
 
     this._on = true;
     this._key = 0;
@@ -347,22 +210,46 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._viz = true;
     this._empty = null;
 
-    this._yinBuf = new Float32Array(YIN_SIZE);
-    this._yinWrite = 0;
-    this._yinFilled = false;
-    this._yinScratch = new Float32Array(YIN_SIZE);
-    this._yinD = new Float32Array(YIN_SIZE);
-    this._yinCmnd = new Float32Array(YIN_SIZE);
+    this.phasein = 0;
+    this.phaseout = 0;
+    this.inphinc = AREF / sampleRate;
+    this.outphinc = this.inphinc;
+    this.phincfact = 1;
+    this._phincSlew = 1;
+    /** Target pitch ratio R* = hz(committedWant)/hz(lockedDet); chased in process. */
+    this._rStar = 1;
+    this.fragsize = 0;
+    /** Input write index at last period mark (PSOLA grain center). */
+    this._pitchMark = 0;
+
     this._detMidi = 60;
     this._tgtMidi = 60;
     this._outMidi = 60;
-    this._centerMidi = 60;
     this._corrMidi = 60;
+    /** Locked input pitch for ratio denominator (stays_locked). */
+    this._lockedDet = 60;
+    /** Committed snapped target for ratio numerator (hold-gated). */
+    this._committedWant = 60;
+    this._holdCand = 60;
+    this._holdAccumMs = 0;
+    /** True while waiting for HOLD_MS before a note commit. */
+    this._pendingHold = false;
+    this._noteLocked = false;
     this._havePitch = false;
     this._voiced = false;
     this._clarity = 0;
-    this._liveRatio = 1;
-    this._yinEvery = 0; // run YIN every other hop (CPU)
+    this._stable = 0;
+    this._armed = false;
+    this._everLocked = false;
+    this._olaGain = 0;
+    this._unvoicedN = 0;
+    this._analysisRms = 0;
+    this._speedMs = 0;
+    this._formant = 0;
+    this._vizTick = 0;
+    this._warmup = N;
+    this._detectDt = DETECT_EVERY / sampleRate;
+    this._hpCoeff = Math.exp((-2 * Math.PI * 120) / sampleRate);
 
     this._vizDet = new Float32Array(VIZ_BINS);
     this._vizTgt = new Float32Array(VIZ_BINS);
@@ -378,39 +265,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         return;
       }
       if (d.type !== "config") return;
-      let reset = false;
-      if (typeof d.on === "boolean") {
-        if (d.on !== this._on) reset = true;
-        this._on = d.on;
-      }
-      if (typeof d.key === "number") {
-        const k = ((d.key % 12) + 12) % 12;
-        if (k !== this._key) reset = true;
-        this._key = k;
-      }
-      if (typeof d.scale === "string") {
-        if (d.scale !== this._scale) reset = true;
-        this._scale = d.scale;
-      }
+      if (typeof d.on === "boolean") this._on = d.on;
+      if (typeof d.key === "number") this._key = ((d.key % 12) + 12) % 12;
+      if (typeof d.scale === "string") this._scale = d.scale;
       if (Array.isArray(d.customPcs)) {
         this._customPcs = d.customPcs.filter((n) => n >= 0 && n <= 11);
       }
       if (typeof d.midiFollow === "boolean") this._midiFollow = d.midiFollow;
       if (typeof d.viz === "boolean") this._viz = d.viz;
-      if (reset) this._resetSynthState();
     };
-  }
-
-  _resetSynthState() {
-    for (const ch of [this.L, this.R]) {
-      ch.lastPhase.fill(0);
-      ch.sumPhase.fill(0);
-      ch.outFifo.fill(0);
-      ch.outQueue.fill(0);
-      ch.outAvail = 0;
-      ch.outRead = 0;
-    }
-    this._liveRatio = 1;
   }
 
   _emptyInput(n) {
@@ -425,159 +288,341 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._vizDet[VIZ_BINS - 1] = midiToNorm(det);
     this._vizTgt[VIZ_BINS - 1] = midiToNorm(tgt);
     this._vizOut[VIZ_BINS - 1] = midiToNorm(out);
-    if (this._viz) {
-      this.port.postMessage({
-        type: "viz",
-        n: VIZ_BINS,
-        a: this._vizDet,
-        b: this._vizTgt,
-        xa: this._vizOut,
-      });
-    }
+    if (!this._viz) return;
+    const a = this._vizDet.slice();
+    const b = this._vizTgt.slice();
+    const xa = this._vizOut.slice();
+    this.port.postMessage({ type: "viz", n: VIZ_BINS, a, b, xa }, [
+      a.buffer,
+      b.buffer,
+      xa.buffer,
+    ]);
   }
 
-  _updatePitch(amount, speedMs, flexCents, humanize, tracking, transpose) {
-    const hopSec = this.hop / sampleRate;
-    const scalePcs = scalePcsOf(this._scale, this._customPcs);
-    const gate = 0.12 + tracking * 0.55;
-
-    this._yinEvery++;
-    const runYin = this._yinFilled && this._yinEvery % 2 === 0;
-
-    if (runYin) {
-      const tmp = this._yinScratch;
-      const w = this._yinWrite;
-      tmp.set(this._yinBuf.subarray(w), 0);
-      tmp.set(this._yinBuf.subarray(0, w), YIN_SIZE - w);
-
-      const { f0, clarity } = yinPitch(tmp, sampleRate, 70, 900, this._yinD, this._yinCmnd);
-      this._clarity = clarity;
-
-      if (clarity >= gate && f0 > 0) {
-        let midi = hzToMidi(f0);
-        if (this._havePitch) midi = octaveLock(midi, this._detMidi);
-        if (!this._havePitch) {
-          this._detMidi = midi;
-          this._centerMidi = midi;
-          this._corrMidi = midi;
-          this._outMidi = midi;
-          this._havePitch = true;
-        } else {
-          this._detMidi += (midi - this._detMidi) * 0.5;
-        }
-        this._voiced = true;
+  _readMonoWindow(into) {
+    const n = into.length;
+    let idx = this.cbiwr - n;
+    if (idx < 0) idx += N;
+    const R = this._hpCoeff;
+    let hp = 0;
+    let prev = 0;
+    let sumSq = 0;
+    for (let i = 0; i < n; i++) {
+      const j = (idx + i) % N;
+      const x = 0.5 * (this.cbiL[j] + this.cbiR[j]);
+      if (i === 0) {
+        prev = x;
+        hp = 0;
       } else {
-        this._voiced = false;
-        this._clarity *= 0.92;
+        hp = R * (hp + x - prev);
+        prev = x;
       }
+      const w = 0.35 + 0.65 * (i / (n - 1 || 1));
+      const y = hp * w;
+      into[i] = y;
+      sumSq += y * y;
     }
+    this._analysisRms = Math.sqrt(sumSq / n);
+  }
 
-    const det = this._detMidi;
+  _setUnityPhases(midi) {
+    const hz = midiToHz(midi);
+    this.inphinc = hz / sampleRate;
+    this.outphinc = this.inphinc;
+    this.phincfact = 1;
+    this._phincSlew = 1;
+  }
+
+  /**
+   * On note commit: always snap ratio. Fairbanks moves formants with pitch ratio —
+   * chasing R* across a note change sounds like a vowel diphthong.
+   * Soft speed only eases *small* within-note corrections in process().
+   */
+  _seedPhases(rStar) {
+    const r = Math.max(FACT_MIN, Math.min(FACT_MAX, rStar));
+    this._rStar = r;
+    this.phincfact = r;
+    this._phincSlew = r;
+  }
+
+  /** Snap locked det → scale/MIDI want (amount + flex). */
+  _wantFromDet(det, amount, flexCents, transpose) {
+    const scalePcs = scalePcsOf(this._scale, this._customPcs);
     let tgt;
     if (this._midiFollow && this._midiNotes.length > 0) {
       tgt = nearestMidiNote(det, this._midiNotes) + transpose;
     } else {
       tgt = nearestScaleMidi(det, this._key, scalePcs) + transpose;
     }
-    this._tgtMidi = tgt;
+    const err = tgt - det;
+    const absErr = Math.abs(err);
+    const flexSemi = Math.max(0, flexCents) / 100;
+    const amt = Math.max(0, Math.min(1, amount));
+    let pull = err;
+    if (absErr <= flexSemi) pull = 0;
+    else pull = err - Math.sign(err) * flexSemi;
+    const want = det + pull * amt;
+    return { tgt, want };
+  }
 
-    // unvoiced → ease correction toward transpose-only (don't yank the trail)
-    if (!this._voiced || this._clarity < 0.1) {
-      const idle = Math.pow(2, transpose / 12);
-      this._liveRatio += (idle - this._liveRatio) * 0.12;
-      this._pushViz(det, tgt, this._outMidi);
-      return this._liveRatio;
+  /**
+   * Phase B — stays_locked + hold.
+   * committedWant is STICKY until a real note commit.
+   * Pending hold FREEZES lockedDet + R* (OLA keeps running — no dry↔wet stutter).
+   * Phase C — soft speed chases R* while locked on the same note.
+   */
+  _applyCorrection(rawMidi, amount, speedMs, flexCents, transpose) {
+    const dtMs = this._detectDt * 1000;
+    let justCommitted = false;
+
+    if (!this._noteLocked) {
+      this._lockedDet = rawMidi;
+      this._holdCand = rawMidi;
+      this._holdAccumMs = 0;
+      this._pendingHold = false;
+      this._noteLocked = true;
+      const first = this._wantFromDet(rawMidi, amount, flexCents, transpose);
+      this._committedWant = first.want;
+      this._tgtMidi = first.tgt;
+      justCommitted = true;
+    } else if (Math.abs(rawMidi - this._lockedDet) <= STAYS_LOCKED_SEMI) {
+      this._lockedDet += (rawMidi - this._lockedDet) * 0.15;
+      this._holdCand = this._lockedDet;
+      this._holdAccumMs = 0;
+      this._pendingHold = false;
+      const held = this._wantFromDet(this._lockedDet, amount, flexCents, transpose);
+      this._tgtMidi = held.tgt;
+      if (Math.abs(held.want - this._committedWant) > 0.55) {
+        this._holdCand = rawMidi;
+        this._holdAccumMs = dtMs;
+        this._pendingHold = true;
+      }
+    } else if (Math.abs(rawMidi - this._holdCand) <= STAYS_LOCKED_SEMI) {
+      this._holdCand += (rawMidi - this._holdCand) * 0.4;
+      this._holdAccumMs += dtMs;
+      this._pendingHold = true;
+      if (this._holdAccumMs >= HOLD_MS) {
+        this._lockedDet = this._holdCand;
+        this._holdAccumMs = 0;
+        this._pendingHold = false;
+        const c = this._wantFromDet(this._lockedDet, amount, flexCents, transpose);
+        this._committedWant = c.want;
+        this._tgtMidi = c.tgt;
+        justCommitted = true;
+      }
+    } else {
+      this._holdCand = rawMidi;
+      this._holdAccumMs = dtMs;
+      this._pendingHold = true;
     }
 
-    const errCents = (tgt - det) * 100;
-    const flex = Math.max(0, flexCents);
-    let pullCents = errCents;
-    if (Math.abs(errCents) <= flex) pullCents = 0;
-    else pullCents = errCents - Math.sign(errCents) * flex;
+    const det = this._lockedDet;
+    this._detMidi = det;
+    this._corrMidi = this._committedWant;
+    const tgt = this._tgtMidi;
 
-    const centerTau = 0.08 + humanize * 0.22;
-    const cA = 1 - Math.exp(-hopSec / centerTau);
-    this._centerMidi += (det - this._centerMidi) * cA;
-    const vibrato = det - this._centerMidi;
-
-    const wantCenter = this._centerMidi + (pullCents / 100) * amount;
-    const spd = Math.max(0, speedMs);
-    if (spd < 0.5) this._corrMidi = wantCenter;
-    else {
-      const a = 1 - Math.exp(-hopSec / (spd / 1000));
-      this._corrMidi += (wantCenter - this._corrMidi) * a;
+    const inHz = midiToHz(det);
+    // Pending: freeze R* (don't retarget mid-hold). OLA keeps going — no dry gate.
+    if (!this._pendingHold) {
+      const outHz = midiToHz(this._committedWant);
+      let rStar = outHz / Math.max(1e-12, inHz);
+      if (rStar < FACT_MIN) rStar = FACT_MIN;
+      if (rStar > FACT_MAX) rStar = FACT_MAX;
+      this._rStar = rStar;
     }
 
-    const outMidi = this._corrMidi + vibrato * humanize;
+    if (justCommitted) {
+      this._seedPhases(this._rStar);
+    }
+
+    this.inphinc = inHz / sampleRate;
+    this.outphinc = this.inphinc * this.phincfact;
+    const outMidi = hzToMidi(inHz * this.phincfact);
     this._outMidi = outMidi;
-    this._pushViz(det, tgt, outMidi);
-
-    return Math.pow(2, (outMidi - det) / 12);
+    return { det, tgt, out: outMidi };
   }
 
-  _feedYin(mono) {
-    this._yinBuf[this._yinWrite] = mono;
-    this._yinWrite++;
-    if (this._yinWrite >= YIN_SIZE) {
-      this._yinWrite = 0;
-      this._yinFilled = true;
+  _lowRate(amount, speedMs, flexCents, tracking, transpose) {
+    if (this._warmup > 0) {
+      this._warmup -= DETECT_EVERY;
+      this.phincfact = 1;
+      this._phincSlew = 1;
+      return;
+    }
+
+    this._readMonoWindow(this._yinScratch);
+    const { f0, clarity } = yinPitch(
+      this._yinScratch,
+      sampleRate,
+      F_MIN,
+      F_MAX,
+      this._yinD,
+      this._yinCmnd,
+    );
+    this._clarity = clarity;
+    const gate = 0.14 + (1 - Math.max(0, Math.min(1, tracking))) * 0.5;
+    const loudEnough = this._analysisRms >= RMS_GATE;
+
+    let det = this._detMidi;
+    let tgt = this._tgtMidi;
+    let out = this._outMidi;
+
+    if (loudEnough && clarity >= gate && f0 > 0) {
+      let midi = hzToMidi(f0);
+      if (this._havePitch) {
+        midi = octaveLock(midi, this._lockedDet || this._detMidi);
+        const jump = Math.abs(midi - (this._lockedDet || this._detMidi));
+        if (jump > MAX_JUMP_SEMI) {
+          this._stable = Math.max(0, this._stable - 2);
+          midi = this._lockedDet || this._detMidi;
+        } else {
+          this._stable++;
+        }
+      } else {
+        if (this._stable === 0) {
+          this._detMidi = midi;
+          this._lockedDet = midi;
+          this._corrMidi = midi;
+          this._stable = 1;
+        } else if (Math.abs(midi - this._detMidi) <= 1.5) {
+          this._detMidi += (midi - this._detMidi) * 0.5;
+          midi = this._detMidi;
+          this._stable++;
+        } else {
+          this._detMidi = midi;
+          this._stable = 1;
+        }
+        midi = this._detMidi;
+        if (this._stable >= STABLE_NEED) {
+          this._havePitch = true;
+          this._armed = true;
+          this._lockedDet = midi;
+          this._committedWant = midi;
+          this._noteLocked = true;
+          this._holdCand = midi;
+          this._holdAccumMs = 0;
+          this._pendingHold = false;
+          this._corrMidi = midi;
+        }
+      }
+
+      this._voiced = true;
+      this._unvoicedN = 0;
+
+      if (this._armed) {
+        this._everLocked = true;
+        const c = this._applyCorrection(midi, amount, speedMs, flexCents, transpose);
+        det = c.det;
+        tgt = c.tgt;
+        out = c.out;
+      } else {
+        this._setUnityPhases(midi);
+        det = midi;
+        this._detMidi = midi;
+        tgt = nearestScaleMidi(midi, this._key, scalePcsOf(this._scale, this._customPcs)) + transpose;
+        this._tgtMidi = tgt;
+        out = midi;
+      }
+    } else {
+      this._voiced = false;
+      this._unvoicedN++;
+      this._clarity *= 0.9;
+      this._stable = Math.max(0, this._stable - 1);
+      this.phincfact += (1 - this.phincfact) * 0.12;
+      this._phincSlew += (this.phincfact - this._phincSlew) * 0.12;
+      this.outphinc = this.inphinc * Math.max(FACT_MIN, Math.min(FACT_MAX, this.phincfact));
+      if (this._unvoicedN >= UNVOICED_DROP) {
+        this._armed = false;
+        this._havePitch = false;
+        this._noteLocked = false;
+        this._pendingHold = false;
+        this._holdAccumMs = 0;
+      }
+      tgt = nearestScaleMidi(det, this._key, scalePcsOf(this._scale, this._customPcs)) + transpose;
+      this._tgtMidi = tgt;
+      out = det;
+    }
+
+    this._vizTick++;
+    if (this._vizTick >= VIZ_EVERY) {
+      this._vizTick = 0;
+      this._pushViz(det, tgt, this._armed && this._voiced ? out : det);
     }
   }
 
-  _step(ch, x, mix, doShift, pitchOpts, formant, isMaster) {
-    const { fftSize, hop, olaGain } = this;
-
-    const dry = ch.dryDelay[ch.dryIdx];
-    ch.dryDelay[ch.dryIdx] = x;
-    ch.dryIdx++;
-    if (ch.dryIdx >= fftSize) ch.dryIdx = 0;
-
-    let wet = 0;
-    if (ch.outAvail > 0) {
-      wet = ch.outQueue[ch.outRead] * olaGain;
-      ch.outRead++;
-      ch.outAvail--;
+  _captureFrag() {
+    const ti2 = this.cbiwr - N2;
+    for (let ti = -N2; ti < N2; ti++) {
+      const src = ((ti + ti2) % N + N) % N;
+      const dst = ((ti + N) % N + N) % N;
+      this.fragL[dst] = this.cbiL[src];
+      this.fragR[dst] = this.cbiR[src];
     }
+  }
 
-    ch.inFifo[ch.fill] = x;
-    ch.fill++;
+  /** Fairbanks: resample fragment by phincfact (formants move with pitch). */
+  _placeFragFairbanks() {
+    let fragsize = this.fragsize * 2;
+    if (fragsize > N) fragsize = N;
+    this.fragsize = 0;
 
-    if (ch.fill >= fftSize) {
-      let ratio = this._liveRatio || 1;
-      if (isMaster && pitchOpts && this._on) {
-        ratio = this._updatePitch(
-          pitchOpts.amount,
-          pitchOpts.speed,
-          pitchOpts.flex,
-          pitchOpts.humanize,
-          pitchOpts.tracking,
-          pitchOpts.transpose,
-        );
-        this._liveRatio = ratio;
-      } else if (isMaster && !this._on) {
-        this._liveRatio = 1;
-        ratio = 1;
-      } else {
-        ratio = this._liveRatio || 1;
-      }
+    const fact = this._phincSlew;
+    let ti3 = (fragsize / Math.max(0.5, fact)) | 0;
+    if (ti3 >= N2) ti3 = N2 - 1;
+    if (ti3 < 16) return;
 
-      if (doShift && Math.abs(ratio - 1) > 0.0005) {
-        processFrame(ch, this.window, fftSize, hop, ratio, formant);
-      } else {
-        identityFrame(ch, this.window, fftSize);
-      }
-
-      for (let i = 0; i < hop; i++) ch.outQueue[i] = ch.outFifo[i];
-      ch.outRead = 0;
-      ch.outAvail = hop;
-      ch.inFifo.copyWithin(0, hop);
-      ch.outFifo.copyWithin(0, hop);
-      ch.outFifo.fill(0, fftSize - hop);
-      ch.fill = fftSize - hop;
+    const ti2 = this.cbord + N2;
+    const half = (ti3 / 2) | 0;
+    for (let ti = -half; ti < half; ti++) {
+      const hIdx = N2 + (((ti * N) / ti3) | 0);
+      const tf = this.hann[((hIdx % N) + N) % N];
+      const indd = fact * ti;
+      const valdL = cubicAt(this.fragL, indd);
+      const valdR = cubicAt(this.fragR, indd);
+      const dst = ((ti + ti2) % N + N) % N;
+      this.cboL[dst] += valdL * tf;
+      this.cboR[dst] += valdR * tf;
     }
+  }
 
-    if (mix < 0.0001) return dry;
-    return dry * (1 - mix) + wet * mix;
+  /**
+   * Period PSOLA (zita-at2-style): grain ~2·PE_in from a delayed pitch mark
+   * (never the write head — that reads wrap garbage and sounds like noise).
+   * No resample → formants stay; hop = peOut; gain × peOut/peIn for COLA.
+   */
+  _placeFragPsola() {
+    this.fragsize = 0;
+    const inHz = midiToHz(this._lockedDet);
+    let peIn = sampleRate / Math.max(F_MIN, Math.min(F_MAX, inHz));
+    if (peIn < 16) peIn = 16;
+    if (peIn > N2 - 4) peIn = N2 - 4;
+    const fact = Math.max(FACT_MIN, Math.min(FACT_MAX, this._phincSlew));
+    let peOut = peIn / fact;
+    if (peOut < 16) peOut = 16;
+    if (peOut > N2 - 4) peOut = N2 - 4;
+
+    const grainLen = Math.min(N - 2, Math.floor(2 * peIn));
+    const half = grainLen >> 1;
+    if (half < 8) return;
+
+    // Always look back into settled input (same region Fairbanks captures)
+    const srcCenter = ((this.cbiwr - N2) % N + N) % N;
+    const dstCenter = this.cbord + N2;
+    // Pitch-up packs more grains → scale down so overlaps don't clip/harsh
+    const ola = Math.max(0.25, Math.min(1.25, peOut / peIn));
+    for (let i = -half; i < half; i++) {
+      const w = (0.5 - 0.5 * Math.cos((Math.PI * (i + half)) / half)) * ola;
+      const src = ((srcCenter + i) % N + N) % N;
+      const dst = ((dstCenter + i) % N + N) % N;
+      this.cboL[dst] += this.cbiL[src] * w;
+      this.cboR[dst] += this.cbiR[src] * w;
+    }
+  }
+
+  _placeFrag() {
+    // Hard switch only when clearly engaged — avoids accidental PSOLA from tiny knob moves
+    if (this._formant >= 0.5) this._placeFragPsola();
+    else this._placeFragFairbanks();
   }
 
   process(inputs, outputs, parameters) {
@@ -591,27 +636,139 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const inL = (input && input[0]) || this._emptyInput(n);
     const inR = (input && input[1]) || inL;
     const stereo = outR !== outL;
-
     const mix0 = parameters.mix[0];
-    const formant = parameters.formant[0];
-    const pitchOpts = {
-      amount: parameters.amount[0],
-      speed: parameters.speed[0],
-      flex: parameters.flex[0],
-      humanize: parameters.humanize[0],
-      tracking: parameters.tracking[0],
-      transpose: parameters.transpose[0],
-    };
+    const amount = parameters.amount[0];
+    const speed = parameters.speed[0];
+    const flex = parameters.flex[0];
+    const tracking = parameters.tracking[0];
+    const transpose = parameters.transpose[0];
+    this._speedMs = Math.max(0, speed);
+    this._formant = parameters.formant[0];
+
+    // Soft speed: chase only small ratio errors. Large jumps snap — Fairbanks
+    // formants ride the ratio, so a long chase reads as a vowel diphthong.
+    const spd = this._speedMs;
+    let ratioAlpha = 1;
+    if (spd >= 0.5) {
+      const tauSamp = Math.max(1, (spd / 1000) * sampleRate);
+      ratioAlpha = 1 - Math.exp(-1 / tauSamp);
+    }
+    // Tiny ease after snaps so placeFrag doesn't zipper (~0.5 ms)
+    const slewAlpha = 1 - Math.exp(-1 / Math.max(1, 0.0005 * sampleRate));
+    const FORMANT_SNAP_CENTS = 40;
 
     for (let i = 0; i < n; i++) {
-      const mix = this._on ? mix0 : 0;
       const xl = inL[i] || 0;
       const xr = inR[i] || 0;
-      this._feedYin(0.5 * (xl + xr));
 
-      const doShift = this._on && mix > 0.001;
-      outL[i] = this._step(this.L, xl, mix, doShift, pitchOpts, formant, true);
-      if (stereo) outR[i] = this._step(this.R, xr, mix, doShift, null, formant, false);
+      this.cbiL[this.cbiwr] = xl;
+      this.cbiR[this.cbiwr] = xr;
+
+      if (this.cbiwr % DETECT_EVERY === 0) {
+        this._lowRate(amount, speed, flex, tracking, transpose);
+      }
+
+      const dryIdx = ((this.cbiwr - N2) % N + N) % N;
+      const dryL = this.cbiL[dryIdx];
+      const dryR = this.cbiR[dryIdx];
+
+      if (this._on) {
+        const cur = Math.max(1e-6, this.phincfact);
+        const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
+        if (spd < 0.5 || Math.abs(ratioCents) > FORMANT_SNAP_CENTS) {
+          this.phincfact = this._rStar;
+        } else {
+          this.phincfact += (this._rStar - this.phincfact) * ratioAlpha;
+        }
+        this._phincSlew += (this.phincfact - this._phincSlew) * slewAlpha;
+        this.outphinc = this.inphinc * this._phincSlew;
+
+        if (!(this.inphinc > 1e-6) || !(this.inphinc < 0.5)) {
+          this.inphinc = AREF / sampleRate;
+        }
+        if (!(this.outphinc > 1e-6) || !(this.outphinc < 0.5)) {
+          this.outphinc = this.inphinc;
+        }
+
+        if (this._everLocked) {
+          this._olaGain += (1 - this._olaGain) * 0.04;
+          if (this._olaGain > 0.999) this._olaGain = 1;
+        } else {
+          this._olaGain += (0 - this._olaGain) * 0.01;
+        }
+
+        this.phasein += this.inphinc;
+        this.phaseout += this.outphinc;
+
+        if (this.phasein >= 1) {
+          this.phasein -= Math.floor(this.phasein);
+          if (this.phasein < 0 || this.phasein >= 1) this.phasein = 0;
+          this._pitchMark = ((this.cbiwr - N2) % N + N) % N;
+          this._captureFrag();
+        }
+
+        if (this.phaseout >= 1) {
+          this.phaseout -= Math.floor(this.phaseout);
+          if (this.phaseout < 0 || this.phaseout >= 1) this.phaseout = 0;
+          this._placeFrag();
+        }
+        this.fragsize++;
+        if (this.fragsize > N) this.fragsize = N;
+      } else {
+        this._phincSlew = 1;
+        this.phincfact = 1;
+        this._rStar = 1;
+        this.fragsize = 0;
+        this._armed = false;
+        this._stable = 0;
+        this._everLocked = false;
+        this._noteLocked = false;
+        this._pendingHold = false;
+        this._holdAccumMs = 0;
+        this._olaGain += (0 - this._olaGain) * 0.01;
+        this.phasein = 0;
+        this.phaseout = 0;
+      }
+
+      let wetL = this.cboL[this.cbord];
+      let wetR = this.cboR[this.cbord];
+      this.cboL[this.cbord] = 0;
+      this.cboR[this.cbord] = 0;
+
+      // Soft peak limit only — never swap wet→dry (that stuttered at grain/hop rate)
+      const lim = 1.5;
+      if (wetL > lim) wetL = lim;
+      else if (wetL < -lim) wetL = -lim;
+      if (wetR > lim) wetR = lim;
+      else if (wetR < -lim) wetR = -lim;
+
+      const g = this._olaGain;
+      let shiftedL;
+      let shiftedR;
+      if (g > 0.995) {
+        shiftedL = wetL;
+        shiftedR = wetR;
+      } else {
+        shiftedL = dryL * (1 - g) + wetL * g;
+        shiftedR = dryR * (1 - g) + wetR * g;
+      }
+
+      const mix = this._on ? mix0 : 0;
+      if (mix < 0.0001 || g < 0.0001) {
+        outL[i] = dryL;
+        if (stereo) outR[i] = dryR;
+      } else if (mix > 0.995) {
+        outL[i] = shiftedL;
+        if (stereo) outR[i] = shiftedR;
+      } else {
+        outL[i] = dryL * (1 - mix) + shiftedL * mix;
+        if (stereo) outR[i] = dryR * (1 - mix) + shiftedR * mix;
+      }
+
+      this.cbiwr++;
+      if (this.cbiwr >= N) this.cbiwr = 0;
+      this.cbord++;
+      if (this.cbord >= N) this.cbord = 0;
     }
     return true;
   }

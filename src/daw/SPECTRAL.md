@@ -295,7 +295,8 @@ These were the first **intentionally latent** FX-rack devices. Shipped:
   (`number | ((params, sampleRate) => number)`).
 - **Mini-ADC wired** — track strips pad via post-FX `DelayNode` to the longest peer
   (`engine.refreshTrackAdc`). `cliplim` reports lookahead samples; STFT devices report FFT size.
-- Impartialer / speccomp / centinel report latency from the active quality preset.
+- Impartialer / speccomp report latency from the active quality preset.
+  Centinel reports `N/2` samples (Autotalent-style Fairbanks OLA; not STFT).
 
 Broadband `comp` stays zero-latency native. Spectral comp is a **separate** device type.
 
@@ -305,7 +306,8 @@ Broadband `comp` stays zero-latency native. Spectral comp is a **separate** devi
 type FxDeviceType =
   | "filter" | "comp" | "delay" | "chorus" | "disperser" | "crush" | "reverb"
   | "impartialer"    // pitch snap / remap
-  | "centinel"          // monophonic pitch sentinel (YIN + PV)
+  | "centinel"          // monophonic hard-tune (Autotalent Fairbanks OLA; not STFT)
+  // future: spectral-time / smear — see §11 (pinned YIN+PV archive)
   | "speccomp"          // spectral compressor
   | "cliplim";          // lookahead clip + preserve (worklet; category native)
 ```
@@ -418,3 +420,48 @@ Docs / credits
 
 That order maximizes reuse: compressor validates bands/envelopes; impartialer then adds the
 shift path on the same analyze/synthesize spine.
+
+***
+
+## 11. Pinned: spectral-time / smear (ex-Centinel YIN+PV)
+
+**Status:** architecture pinned, not shipped as a rack device yet.
+**Code seed:** [`worklets/spectral-smear-processor.js`](worklets/spectral-smear-processor.js)
+(archived former Centinel — **not** registered; do not confuse with live
+[`worklets/centinel-processor.js`](worklets/centinel-processor.js)).
+
+Live **centinel** is YIN + **stays_locked / hold** note commit + **ratio chase**
+(`speed` ms; 0 = robot) into either Autotalent-style Fairbanks OLA or period
+**PSOLA** when `formant ≥ 0.5` (N=2048, latency N/2). Soft MIDI springs were
+removed — they diphthonged by lagging `out` while `in` tracked live det.
+Neural F0 (PESTO / SwiftF0) is a later detector option if YIN still limits quality;
+do not swap the shifter for that. The YIN + phase-vocoder path was the wrong latency class for
+Auto-Tune–style hard lock, but it is a solid starting point for a **spectral-time /
+smear** effect that *wants* STFT group delay and hop-rate morphing.
+
+### Capabilities to carry forward
+
+| Piece | Notes |
+| --- | --- |
+| STFT quality presets | `low` 2048/512 · `high` 4096/1024 — report `latencySamples = fftSize` |
+| Global β PV shift | bin remap + phase propagation (`processFrame`) |
+| Formant preserve | log-mag envelope smooth + fine/env split remap |
+| YIN f0 (optional) | useful if smear is pitch-aware / pitched freeze |
+| Scale / MIDI target map | musical decision layer already wired in the archive |
+| speed / flex / humanize | smoothing of β over hops — reads as smear/glide when slow |
+| Stereo dual FFT | L/R independent PV state |
+| Dry/wet vs delay | delay length = `fftSize` (latency-aligned) |
+| Pitch-graph viz | reuse pattern: scrolling det / target / out MIDI norms |
+
+### Product sketch (later)
+
+Not a tuner. Think: spectral smear, freeze-adjacent trails, pitched blur, “time in
+the frequency domain” — the PV path’s smear and latency become the *feature*.
+Possible names TBD (`smear` / `spectime` / …). Registry type stays separate from
+`centinel`; shared STFT core still the long-term extract (§6.4).
+
+### Why Centinel left this stack
+
+Hard lock requires period-scale latency and period-rate updates. Hop-quantized PV
+β cannot compete with Antares-class response. Keep this archive for the smear
+device; do not re-merge it into Centinel.

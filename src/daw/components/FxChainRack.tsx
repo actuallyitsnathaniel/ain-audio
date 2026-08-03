@@ -957,7 +957,7 @@ function DevicePanel({
     case "centinel": {
       const p = d.params as FxParams["centinel"];
       const vizOn = p.viz !== false;
-      const formant = p.formant ?? 0.7;
+      const formant = p.formant ?? 0;
       return (
         <DeviceShell
           name="CENTINEL"
@@ -970,62 +970,60 @@ function DevicePanel({
                 label="viz"
                 on={vizOn}
                 enabled
-                title="Pitch graph — blue in · green target · accent corrected"
+                title="Pitch graph — blue = detected · green = target · accent = corrected"
                 onClick={() => set({ viz: !vizOn })}
               />
               <FxChip
-                label="nat"
-                on={
-                  Math.abs(p.speed - 40) < 1 &&
-                  Math.abs(p.flex - 12) < 1 &&
-                  Math.abs(p.humanize - 0.4) < 0.05 &&
-                  Math.abs(formant - 0.7) < 0.05
-                }
+                label="pop"
+                on={Math.abs(p.speed - 25) < 1 && Math.abs((p.tracking ?? 0) - 1) < 0.05}
                 enabled={p.on}
-                title="Natural — soft retune, keep vibrato + formants"
+                title="Pop — ~25ms ratio chase, tracking wide open (typical mix retune)"
                 onClick={() =>
                   set({
-                    speed: 40,
-                    flex: 12,
-                    humanize: 0.4,
+                    speed: 25,
+                    flex: 0,
+                    humanize: 0,
                     amount: 1,
-                    formant: 0.7,
-                    tracking: 0.35,
+                    formant: 0,
+                    tracking: 1,
                   })
                 }
               />
               <FxChip
                 label="soft"
-                on={
-                  Math.abs(p.speed - 120) < 1 &&
-                  Math.abs(p.humanize - 0.7) < 0.05
-                }
+                on={Math.abs(p.speed - 120) < 1 && p.humanize < 0.05}
                 enabled={p.on}
-                title="Subtle — slow pull, wide flex, mostly human"
+                title="Soft — slower ratio chase (~120ms)"
                 onClick={() =>
                   set({
                     speed: 120,
-                    flex: 25,
-                    humanize: 0.7,
-                    amount: 0.7,
-                    formant: 0.85,
-                    tracking: 0.3,
+                    flex: 0,
+                    humanize: 0,
+                    amount: 1,
+                    formant: 0,
+                    tracking: 1,
                   })
                 }
               />
               <FxChip
                 label="robot"
-                on={p.speed < 0.5 && p.flex < 0.5 && p.humanize < 0.05}
+                on={
+                  p.speed < 0.5 &&
+                  p.flex < 0.5 &&
+                  p.humanize < 0.05 &&
+                  Math.abs((p.amount ?? 1) - 1) < 0.05
+                }
                 enabled={p.on}
-                title="Hard lock — instant retune, kill vibrato (classic Auto-Tune)"
+                title="Hard lock — instant ratio snap"
                 onClick={() =>
                   set({
                     speed: 0,
                     flex: 0,
                     humanize: 0,
                     amount: 1,
-                    formant: 0.35,
-                    tracking: 0.25,
+                    formant: 0,
+                    tracking: 1,
+                    transpose: 0,
                   })
                 }
               />
@@ -1064,16 +1062,18 @@ function DevicePanel({
                       title={
                         "Toggle " +
                         (NOTE_NAMES[abs] ?? pc) +
-                        " in the custom scale map (switches to custom)"
+                        " in the custom scale map"
                       }
                       onClick={() => {
                         const base =
                           p.scale === "custom"
                             ? (p.customPcs ?? DEFAULT_CENTINEL_CUSTOM_PCS).slice()
-                            : (SCALE_PCS[p.scale as ImpartialerScale] ?? SCALE_PCS.major).slice();
+                            : (
+                                SCALE_PCS[p.scale as ImpartialerScale] ?? SCALE_PCS.major
+                              ).slice();
                         const idx = base.indexOf(pc);
                         if (idx >= 0) {
-                          if (base.length <= 1) return; // keep at least one degree
+                          if (base.length <= 1) return;
                           base.splice(idx, 1);
                         } else base.push(pc);
                         base.sort((a, b) => a - b);
@@ -1095,16 +1095,18 @@ function DevicePanel({
             label="key"
             disabled={!p.on}
             fmt={(v) => NOTE_NAMES[Math.round(v)] ?? "C"}
+            tip="Key center — scale degrees are relative to this root (C=0 … B=11)"
           />
           <Knob
             value={p.speed}
             min={0}
             max={400}
-            defaultValue={40}
+            defaultValue={25}
             onChange={(v) => set({ speed: v })}
             label="speed"
             disabled={!p.on}
             fmt={(v) => (v < 0.5 ? "lock" : Math.round(v) + "ms")}
+            tip="Retune speed — exponential chase of pitch ratio (ms). 0 = robot hard lock. Resets on note change."
           />
           <Knob
             value={p.amount}
@@ -1115,46 +1117,51 @@ function DevicePanel({
             label="amount"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Correction strength — how far to pull toward the target note"
           />
           <Knob
             value={p.flex}
             min={0}
             max={100}
-            defaultValue={12}
+            defaultValue={0}
             onChange={(v) => set({ flex: v })}
             label="flex"
             disabled={!p.on}
             fmt={(v) => Math.round(v) + "¢"}
+            tip="Dead-zone in cents — leave intentional detune alone inside this window"
           />
           <Knob
             value={p.humanize}
             min={0}
             max={1}
-            defaultValue={0.4}
+            defaultValue={0}
             onChange={(v) => set({ humanize: v })}
             label="human"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Not wired yet — leave at 0"
           />
           <Knob
             value={formant}
             min={0}
             max={1}
-            defaultValue={0.7}
+            defaultValue={0}
             onChange={(v) => set({ formant: v })}
             label="formant"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
+            tip="0–49% = Fairbanks (formants follow pitch) · 50%+ = PSOLA (formant-friendlier). Formant “diphthongs” on Fairbanks are from ratio chase — leave at 0 for pop."
           />
           <Knob
             value={p.tracking}
             min={0}
             max={1}
-            defaultValue={0.35}
+            defaultValue={1}
             onChange={(v) => set({ tracking: v })}
             label="track"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Pitch tracking — 100% = grabby (follow quieter/faster moves); lower = pickier (ignore tails/noise)"
           />
           <Knob
             value={p.mix}
@@ -1165,6 +1172,7 @@ function DevicePanel({
             label="mix"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Dry/wet — latency-aligned so blends don’t comb"
           />
           <Knob
             value={p.transpose}
@@ -1176,6 +1184,7 @@ function DevicePanel({
             label="trans"
             disabled={!p.on}
             fmt={(v) => (v > 0 ? "+" : "") + Math.round(v)}
+            tip="Transpose target in semitones — shift the whole correction map (±12)"
           />
           <div className="flex flex-col gap-1 self-center">
             <FxChip
@@ -1191,7 +1200,13 @@ function DevicePanel({
                 label={sc === "chromatic" ? "chr" : sc.slice(0, 3)}
                 on={p.scale === sc}
                 enabled={p.on}
-                title={sc}
+                title={
+                  sc === "chromatic"
+                    ? "Chromatic — snap to nearest semitone"
+                    : sc.charAt(0).toUpperCase() +
+                      sc.slice(1) +
+                      " — snap to nearest scale degree"
+                }
                 onClick={() =>
                   set({
                     scale: sc as CentinelScale,
@@ -1204,7 +1219,7 @@ function DevicePanel({
               label="map"
               on={p.scale === "custom"}
               enabled={p.on}
-              title="Custom scale map — edit degrees with the note chips below"
+              title="Custom scale map — toggle degrees with the note chips under the graph"
               onClick={() =>
                 set({
                   scale: "custom" as CentinelScale,
@@ -1214,20 +1229,6 @@ function DevicePanel({
                   ).slice(),
                 })
               }
-            />
-            <FxChip
-              label="lo"
-              on={p.quality === "low"}
-              enabled={p.on}
-              title="low latency (2048 FFT)"
-              onClick={() => set({ quality: "low" })}
-            />
-            <FxChip
-              label="hi"
-              on={p.quality === "high"}
-              enabled={p.on}
-              title="high quality (4096 FFT, more latency)"
-              onClick={() => set({ quality: "high" })}
             />
           </div>
         </DeviceShell>
@@ -1880,6 +1881,11 @@ export function FxChainRack({
   onRemove,
   onMove,
   onSetParams,
+  onCopy,
+  onPaste,
+  onDuplicate,
+  canPaste,
+  pasteLabel,
   readViz,
   tail,
 }: {
@@ -1888,6 +1894,15 @@ export function FxChainRack({
   onRemove: (id: string) => void;
   onMove: (id: string, toIndex: number) => void;
   onSetParams: (id: string, params: unknown) => void;
+  /** Copy device type+params into the FX clipboard (cross-track). */
+  onCopy?: (id: string) => void;
+  /** Paste clipboard device onto this chain (append unless index given by caller). */
+  onPaste?: () => void;
+  /** Duplicate in-place (same chain, after source). */
+  onDuplicate?: (id: string) => void;
+  canPaste?: boolean;
+  /** Short name of clipboard device for menu hint. */
+  pasteLabel?: string | null;
   /** Poll spectral viz frames (master / track scope). */
   readViz?: (deviceId: string) => FxVizSlot | null;
   tail?: ReactNode;
@@ -2195,6 +2210,38 @@ export function FxChainRack({
               key={d.id}
               data-fxid={d.id}
               className="relative shrink-0 will-change-transform"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openContextMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  title: FX_DEVICES[d.type].label,
+                  items: [
+                    {
+                      label: "copy",
+                      disabled: !onCopy,
+                      onClick: () => onCopy?.(d.id),
+                    },
+                    {
+                      label: "duplicate",
+                      disabled: !onDuplicate,
+                      onClick: () => onDuplicate?.(d.id),
+                    },
+                    {
+                      label: "paste",
+                      disabled: !onPaste || !canPaste,
+                      onClick: () => onPaste?.(),
+                    },
+                    { separator: true },
+                    {
+                      label: "remove",
+                      danger: true,
+                      onClick: () => onRemove(d.id),
+                    },
+                  ],
+                });
+              }}
             >
               {folded.has(d.id) ? (
                 // folded: a slim vertical strip — power dot + rotated name; click to expand.
@@ -2292,6 +2339,17 @@ export function FxChainRack({
               anchor: btn,
               title: "add device",
               items: [
+                ...(onPaste
+                  ? [
+                      {
+                        label: "paste device",
+                        hint: canPaste && pasteLabel ? pasteLabel : undefined,
+                        disabled: !canPaste,
+                        onClick: () => onPaste(),
+                      },
+                      { separator: true as const },
+                    ]
+                  : []),
                 ...native.map((t) => ({
                   label: FX_DEVICES[t].label,
                   onClick: () => onAdd(t),

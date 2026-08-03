@@ -36,12 +36,14 @@ export type DelayFeel = "straight" | "dotted" | "triplet";
 export type FilterMode = "low" | "high" | "band" | "notch";
 export const FILTER_MODES: FilterMode[] = ["low", "high", "band", "notch"];
 export type ImpartialerScale = "major" | "minor" | "dorian" | "chromatic";
+/** Centinel scales — major/minor/dorian/chromatic + custom degree map. */
 export type CentinelScale = ImpartialerScale | "custom";
 export type ImpartialerMappingMode = "off" | "snap" | "remap";
 export type SpectralQuality = "low" | "high";
 
 export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;
 export const IMPARTIALER_SCALES: ImpartialerScale[] = ["major", "minor", "dorian", "chromatic"];
+export const CENTINEL_SCALES: CentinelScale[] = ["major", "minor", "dorian", "chromatic"];
 /** Relative pitch classes for a custom centinel map (seeded from major). */
 export const DEFAULT_CENTINEL_CUSTOM_PCS = [0, 2, 4, 5, 7, 9, 11];
 export const SCALE_PCS: Record<ImpartialerScale, number[]> = {
@@ -56,7 +58,7 @@ export function centinelScalePcs(scale: CentinelScale, customPcs?: number[]): nu
     const pcs = (customPcs ?? []).filter((n) => n >= 0 && n <= 11);
     return pcs.length ? [...new Set(pcs)].sort((a, b) => a - b) : DEFAULT_CENTINEL_CUSTOM_PCS.slice();
   }
-  return SCALE_PCS[scale] ?? SCALE_PCS.major;
+  return (SCALE_PCS[scale] ?? SCALE_PCS.major).slice();
 }
 
 // tempo-sync divisions for the delay device
@@ -203,7 +205,10 @@ export interface FxParams {
     /** Pro-Q–style parametric bands (static + optional per-band dynamics). */
     bands: EqBand[];
   };
-  /** Monophonic pitch sentinel — YIN + PV; speed/flex/humanize keep (or kill) the take. */
+  /**
+   * Monophonic pitch sentinel — Autotalent-style Fairbanks OLA.
+   * Expression knobs shape the MIDI target; anti-click audio path stays intact.
+   */
   centinel: {
     on: boolean;
     key: number;
@@ -215,21 +220,20 @@ export interface FxParams {
      * become the retune targets; falls back to the scale map when none are held.
      */
     midiFollow: boolean;
-    /** Retune speed in ms — 0 = hard lock (robot), ~40–120 natural, 200+ very loose. */
+    /** Exponential chase of pitch ratio (ms); 0 = hard lock. Resets on note change. */
     speed: number;
     /** 0..1 how far to pull toward the target. */
     amount: number;
     /** Cents dead-zone — leave human detune alone inside this window. */
     flex: number;
-    /** 0..1 preserve vibrato / correct center only. */
+    /** Not wired yet. */
     humanize: number;
-    /** 0..1 pitch-detect gate (higher = pickier). */
+    /** 0..1 pitch tracking (1 = grabby / commercial “100%”; 0 = picky gate). */
     tracking: number;
-    /** 0 = formants ride pitch · 1 = keep spectral envelope. */
+    /** 0 = Fairbanks OLA · ≥0.5 = period PSOLA (formant-friendlier). */
     formant: number;
     mix: number;
     transpose: number;
-    quality: SpectralQuality;
     viz: boolean;
   };
   /**
@@ -939,21 +943,80 @@ function buildSpeccomp(ctx: AudioContext): FxDeviceNodes {
   );
 }
 
+/** Circular-buffer size for Centinel (Autotalent-style). Latency = N/2. */
+export const CENTINEL_N = 2048;
+
+function centinelLatencySamples(): number {
+  return CENTINEL_N >> 1;
+}
+
 function buildCentinel(ctx: AudioContext): FxDeviceNodes {
-  return buildSpectralWorklet(
-    ctx,
-    "ain-centinel",
-    "centinel",
-    (node, p, t) => {
+  const inGain = ctx.createGain();
+  const outGain = ctx.createGain();
+  const viz = createFxVizSlot("centinel");
+  let node: AudioWorkletNode | null = null;
+  let passthrough = false;
+
+  const mount = () => {
+    if (node) return true;
+    try {
+      node = new AudioWorkletNode(ctx, "ain-centinel", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        channelCount: 2,
+      });
+      node.port.onmessage = (ev) => {
+        const d = ev.data;
+        if (!d || d.type !== "viz") return;
+        ingestFxVizMessage(viz, d);
+      };
+      if (passthrough) {
+        try {
+          inGain.disconnect(outGain);
+        } catch {
+          /* ok */
+        }
+        passthrough = false;
+      }
+      inGain.connect(node);
+      node.connect(outGain);
+      return true;
+    } catch {
+      if (!passthrough) {
+        inGain.connect(outGain);
+        passthrough = true;
+      }
+      return false;
+    }
+  };
+  mount();
+
+  return {
+    in: inGain,
+    out: outGain,
+    viz,
+    setMidiTargets: (notes) => {
+      try {
+        node?.port.postMessage({ type: "midi", notes });
+      } catch {
+        /* node gone */
+      }
+    },
+    apply: (p, c) => {
+      if (!node || passthrough) mount();
+      if (!node) return;
       const fx = p as FxParams["centinel"];
+      const t = c.currentTime;
       const mix = fx.on ? fx.mix : 0;
       node.parameters.get("mix")?.setTargetAtTime(mix, t, 0.03);
       node.parameters.get("amount")?.setTargetAtTime(fx.amount, t, 0.03);
-      node.parameters.get("speed")?.setTargetAtTime(fx.speed, t, 0.03);
+      // Speed must jump — setTarget lag made tiny knob moves feel glacial
+      node.parameters.get("speed")?.setValueAtTime(fx.speed, t);
       node.parameters.get("flex")?.setTargetAtTime(fx.flex, t, 0.03);
       node.parameters.get("humanize")?.setTargetAtTime(fx.humanize, t, 0.03);
       node.parameters.get("tracking")?.setTargetAtTime(fx.tracking, t, 0.03);
-      node.parameters.get("formant")?.setTargetAtTime(fx.formant ?? 0.7, t, 0.03);
+      node.parameters.get("formant")?.setTargetAtTime(fx.formant ?? 0, t, 0.03);
       node.parameters.get("transpose")?.setTargetAtTime(fx.transpose, t, 0.03);
       node.port.postMessage({
         type: "config",
@@ -965,8 +1028,7 @@ function buildCentinel(ctx: AudioContext): FxDeviceNodes {
         viz: !!fx.viz,
       });
     },
-    (p) => (p as FxParams["centinel"]).quality,
-  );
+  };
 }
 
 function cliplimLatencySamples(params: unknown, sampleRate: number): number {
@@ -1530,7 +1592,7 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
   },
   centinel: {
     label: "centinel",
-    category: "spectral",
+    category: "native",
     build: buildCentinel,
     defaults: () =>
       ({
@@ -1539,18 +1601,17 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         scale: "major",
         customPcs: DEFAULT_CENTINEL_CUSTOM_PCS.slice(),
         midiFollow: false,
-        speed: 40,
+        speed: 25,
         amount: 1,
-        flex: 12,
-        humanize: 0.4,
-        tracking: 0.35,
-        formant: 0.7,
+        flex: 0,
+        humanize: 0,
+        tracking: 1,
+        formant: 0,
         mix: 1,
         transpose: 0,
-        quality: "low",
         viz: true,
       }) as FxParams["centinel"],
-    latencySamples: (params) => spectralLatencySamples(params),
+    latencySamples: () => centinelLatencySamples(),
   },
   cliplim: {
     label: "cliplim",
@@ -1730,22 +1791,31 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
         const customPcs = Array.isArray(prev.customPcs)
           ? (prev.customPcs as number[]).filter((n) => n >= 0 && n <= 11)
           : DEFAULT_CENTINEL_CUSTOM_PCS.slice();
-        const scale =
+        const scale: CentinelScale =
           prev.scale === "custom" ||
-          prev.scale === "major" ||
           prev.scale === "minor" ||
           prev.scale === "dorian" ||
           prev.scale === "chromatic"
             ? prev.scale
             : "major";
+        const defs = FX_DEVICES.centinel.defaults() as FxParams["centinel"];
         return {
           ...s,
           params: {
+            ...defs,
             ...prev,
             scale,
             customPcs: customPcs.length ? customPcs : DEFAULT_CENTINEL_CUSTOM_PCS.slice(),
+            key: typeof prev.key === "number" ? ((prev.key % 12) + 12) % 12 : 0,
             midiFollow: !!prev.midiFollow,
-            formant: prev.formant === undefined ? 0.7 : prev.formant,
+            speed: typeof prev.speed === "number" ? prev.speed : defs.speed,
+            amount: typeof prev.amount === "number" ? prev.amount : defs.amount,
+            flex: typeof prev.flex === "number" ? prev.flex : defs.flex,
+            humanize: typeof prev.humanize === "number" ? prev.humanize : defs.humanize,
+            tracking: typeof prev.tracking === "number" ? prev.tracking : defs.tracking,
+            formant: typeof prev.formant === "number" ? prev.formant : defs.formant,
+            mix: typeof prev.mix === "number" ? prev.mix : defs.mix,
+            transpose: typeof prev.transpose === "number" ? prev.transpose : 0,
             viz: prev.viz !== false,
           },
         };

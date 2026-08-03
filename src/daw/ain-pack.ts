@@ -1,9 +1,14 @@
 // ── .ain — AIN project format ───────────────────────────────────────────────
 // Portable project container for actuallyitsnathaniel (extension invented here).
-// Under the hood it's a zip so it's storage-friendly and inspectable, but the
-// layout + manifest identity are fixed — this is not a generic archive.
 //
-// Layout:
+// On-disk shape (v2 container — audio-primary polyglot):
+//   [ PCM16 WAV master bounce ][ zip project pack ][ 16-byte AIN1 trailer ]
+//
+// Media players that honor the RIFF size field play the bounce and ignore the
+// trailer. The studio reads the trailer, slices the zip, and loads the session.
+// Legacy v1 files (raw zip starting with PK) still open.
+//
+// Zip layout (unchanged):
 //   README.txt               human identity card
 //   manifest.json            format id + version + asset index
 //   arrangement.json         session doc
@@ -18,7 +23,7 @@ import { sniffMime } from "./data/audio-store";
 import { kitLaneBufIds } from "./data/kits";
 import type { FxDeviceState } from "./fx-chain";
 
-/** Current pack schema version (reject newer on open). */
+/** Pack schema version inside the zip (reject newer on open). */
 export const AIN_VERSION = 1;
 /** File extension — invented for this studio. */
 export const AIN_EXT = ".ain";
@@ -26,10 +31,21 @@ export const AIN_EXT = ".ain";
  * Manifest `format` id. Stable string — change only with a version bump + migration.
  */
 export const AIN_FORMAT = "ain" as const;
-/** Vendor MIME (zip payload). Browsers may still sniff as application/zip. */
-export const AIN_MIME = "application/vnd.ain.project+zip";
+/**
+ * Download / sniff MIME — file starts as PCM WAV so players + some OSes treat it
+ * as audio. Legacy zip-only packs used application/vnd.ain.project+zip.
+ */
+export const AIN_MIME = "audio/wav";
+export const AIN_MIME_LEGACY = "application/vnd.ain.project+zip";
 export const AIN_HOMEPAGE = "https://audio.actuallyitsnathaniel.com";
 export const AIN_APP = "AIN";
+/** File-type mark — refraction on black (`public/icons/`). */
+export const AIN_ICON = "/icons/ain-file.png";
+export const AIN_ICON_256 = "/icons/ain-file-256.png";
+
+/** Trailer magic at EOF — identifies audio+zip container. */
+export const AIN_TRAILER_MAGIC = "AIN1";
+export const AIN_TRAILER_BYTES = 16;
 
 export type AinManifest = {
   format: typeof AIN_FORMAT;
@@ -48,6 +64,8 @@ export type AinPack = {
   arrangement: Arrangement;
   assets: { bufId: string; bytes: ArrayBuffer; name?: string }[];
   masterFx?: FxDeviceState[];
+  /** Master bounce bytes from the container head (WAV), when present. */
+  preview?: ArrayBuffer;
 };
 
 function extFor(bytes: ArrayBuffer, name?: string): string {
@@ -66,7 +84,7 @@ function extFor(bytes: ArrayBuffer, name?: string): string {
 }
 
 const DEFAULT_NOTE =
-  "AIN project — collect-and-save pack (arrangement + imported audio).";
+  "AIN project — PCM16 WAV mix preview + zip pack (arrangement + imports).";
 
 function readmeText(name: string): string {
   return [
@@ -75,12 +93,14 @@ function readmeText(name: string): string {
     AIN_HOMEPAGE,
     "",
     `Name: ${name}`,
-    `Format: ${AIN_FORMAT}  v${AIN_VERSION}`,
+    `Format: ${AIN_FORMAT}  v${AIN_VERSION}  (container ${AIN_TRAILER_MAGIC})`,
     "",
-    "This file is a zip with a fixed layout. Open it in the studio, or unzip",
-    "to inspect. See manifest.json for the machine-readable index.",
+    "This file starts as a playable PCM WAV (latest master bounce). After the",
+    "WAV is a zip project pack, then a 16-byte AIN1 trailer. Open in the studio,",
+    "or play in any media player that ignores trailing RIFF bytes. Unzip the",
+    "middle slice to inspect (see trailer for offsets).",
     "",
-    "Collected under assets/: imported and recorded audio only.",
+    "Zip contains: README, manifest, arrangement, optional master-fx, assets/.",
     "Built-in catalog samples are referenced, not packed.",
     "",
   ].join("\n");
@@ -101,12 +121,12 @@ export function referencedImportIds(a: Arrangement): Set<string> {
   return ids;
 }
 
-export function packAin(opts: {
+function buildZip(opts: {
   name: string;
   arrangement: Arrangement;
   assets: { bufId: string; bytes: ArrayBuffer; name?: string }[];
   masterFx?: FxDeviceState[];
-}): Blob {
+}): Uint8Array {
   const files: Record<string, Uint8Array> = {};
   const assetMeta: AinManifest["assets"] = [];
 
@@ -133,16 +153,98 @@ export function packAin(opts: {
   if (opts.masterFx)
     files["master-fx.json"] = strToU8(JSON.stringify(opts.masterFx));
 
-  const zipped = zipSync(files, { level: 6 });
-  return new Blob([zipped], { type: AIN_MIME });
+  return zipSync(files, { level: 6 });
 }
 
-export function unpackAin(data: ArrayBuffer): AinPack {
+function writeTrailer(audioLen: number, zipLen: number): Uint8Array {
+  const t = new Uint8Array(AIN_TRAILER_BYTES);
+  const v = new DataView(t.buffer);
+  for (let i = 0; i < 4; i++)
+    t[i] = AIN_TRAILER_MAGIC.charCodeAt(i);
+  v.setUint32(4, audioLen >>> 0, true);
+  v.setUint32(8, zipLen >>> 0, true);
+  v.setUint32(12, 0, true); // flags / reserved
+  return t;
+}
+
+/** Parse AIN1 trailer at EOF. Returns null if not a v2 container. */
+export function readAinTrailer(
+  data: ArrayBuffer,
+): { audioLen: number; zipLen: number } | null {
+  if (data.byteLength < AIN_TRAILER_BYTES) return null;
+  const u8 = new Uint8Array(data);
+  const off = u8.length - AIN_TRAILER_BYTES;
+  const magic = String.fromCharCode(u8[off]!, u8[off + 1]!, u8[off + 2]!, u8[off + 3]!);
+  if (magic !== AIN_TRAILER_MAGIC) return null;
+  const v = new DataView(data, off, AIN_TRAILER_BYTES);
+  const audioLen = v.getUint32(4, true);
+  const zipLen = v.getUint32(8, true);
+  if (audioLen + zipLen + AIN_TRAILER_BYTES !== data.byteLength) return null;
+  if (audioLen < 12 || zipLen < 4) return null;
+  return { audioLen, zipLen };
+}
+
+function isZipLocalHeader(u8: Uint8Array, at = 0): boolean {
+  return (
+    u8.length >= at + 4 &&
+    u8[at] === 0x50 &&
+    u8[at + 1] === 0x4b &&
+    u8[at + 2] === 0x03 &&
+    u8[at + 3] === 0x04
+  );
+}
+
+/**
+ * Split an .ain file into preview WAV + project zip.
+ * Supports AIN1 trailer containers and legacy raw-zip packs.
+ */
+export function splitAinContainer(data: ArrayBuffer): {
+  preview?: ArrayBuffer;
+  zip: ArrayBuffer;
+} {
+  const trailer = readAinTrailer(data);
+  if (trailer) {
+    const { audioLen, zipLen } = trailer;
+    return {
+      preview: data.slice(0, audioLen),
+      zip: data.slice(audioLen, audioLen + zipLen),
+    };
+  }
+  const u8 = new Uint8Array(data);
+  if (isZipLocalHeader(u8)) return { zip: data };
+  throw new Error("Not a valid .ain project (corrupt or not an AIN pack)");
+}
+
+/**
+ * Pack arrangement + assets into a downloadable `.ain`:
+ * PCM16 WAV preview (master bounce) + zip + AIN1 trailer.
+ */
+export function packAin(opts: {
+  name: string;
+  arrangement: Arrangement;
+  assets: { bufId: string; bytes: ArrayBuffer; name?: string }[];
+  masterFx?: FxDeviceState[];
+  /** Required PCM16 WAV bytes for the playable head. */
+  previewWav: ArrayBuffer;
+}): Blob {
+  const zipped = buildZip(opts);
+  const preview = new Uint8Array(opts.previewWav);
+  const trailer = writeTrailer(preview.byteLength, zipped.byteLength);
+  const out = new Uint8Array(
+    preview.byteLength + zipped.byteLength + trailer.byteLength,
+  );
+  out.set(preview, 0);
+  out.set(zipped, preview.byteLength);
+  out.set(trailer, preview.byteLength + zipped.byteLength);
+  return new Blob([out], { type: AIN_MIME });
+}
+
+function unpackZip(zipData: ArrayBuffer): Omit<AinPack, "preview"> {
   let files: Record<string, Uint8Array>;
   try {
-    files = unzipSync(new Uint8Array(data));
+    files = unzipSync(new Uint8Array(zipData));
   } catch {
-    throw new Error("Not a valid .ain project (corrupt or not an AIN pack)");
+    throw new Error("Not a valid .ain project (corrupt zip pack)");
   }
 
   const manRaw = files["manifest.json"];
@@ -214,6 +316,11 @@ export function unpackAin(data: ArrayBuffer): AinPack {
   return { manifest, arrangement, assets, masterFx };
 }
 
+export function unpackAin(data: ArrayBuffer): AinPack {
+  const { preview, zip } = splitAinContainer(data);
+  return { ...unpackZip(zip), preview };
+}
+
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -226,12 +333,25 @@ export function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export function safeAinFilename(name: string): string {
-  const base = name
-    .trim()
-    .replace(/[^\w-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 64);
-  return `${base || "project"}${AIN_EXT}`;
+export function safeAinBasename(name: string): string {
+  return (
+    name
+      .trim()
+      .replace(/[^\w-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 64) || "project"
+  );
+}
+
+/**
+ * Download filename for an AIN pack. Same polyglot bytes either way —
+ * `.wav` is an extension mask so Finder Quick Look treats it as audio.
+ */
+export function safeAinFilename(
+  name: string,
+  opts?: { wavMask?: boolean },
+): string {
+  const base = safeAinBasename(name);
+  return opts?.wavMask ? `${base}.wav` : `${base}${AIN_EXT}`;
 }

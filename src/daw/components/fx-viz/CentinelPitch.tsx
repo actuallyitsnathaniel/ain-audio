@@ -130,7 +130,7 @@ export function CentinelPitch({
       ref={ref}
       className="w-full rounded-[3px] border border-line bg-[#0c0c10]"
       style={{ height }}
-      title="Detected (blue) · target (green) · corrected (accent)"
+      data-tip="Pitch graph — blue = detected f0 · green = scale target · accent = hard-snapped output"
     />
   );
 }

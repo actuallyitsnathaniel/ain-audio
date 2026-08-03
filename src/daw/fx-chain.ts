@@ -73,6 +73,27 @@ export class FxChain {
     return state;
   }
 
+  /** Paste / duplicate — new id, cloned params (never reuse source id). */
+  insertDevice(
+    src: { type: FxDeviceType; params: unknown },
+    atIndex?: number,
+  ): FxDeviceState {
+    const state: FxDeviceState = {
+      id: newFxId(),
+      type: src.type,
+      params: structuredClone(src.params),
+    };
+    const entry: LiveDevice = { state, nodes: FX_DEVICES[src.type].build(this.ctx) };
+    const i =
+      atIndex == null
+        ? this.live.length
+        : Math.max(0, Math.min(atIndex | 0, this.live.length));
+    this.live.splice(i, 0, entry);
+    this.wire();
+    this.applyOne(i, 120);
+    return state;
+  }
+
   removeDevice(id: string) {
     const i = this.live.findIndex((d) => d.state.id === id);
     if (i < 0) return;

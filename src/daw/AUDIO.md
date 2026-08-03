@@ -51,8 +51,18 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `reverb` | Convolver + predelay + tone         | Ableton-style hall: decay / size / damping / diffusion / predelay / lo·hi cut / mix. Synth IR via `makeReverbIR`. |
 | `eq` | Native biquad cascade | Pro-Q–style parametric EQ: up to 12 bands, shapes (bell/LS/HS/LC/HC/notch/BP/tilt), drag/Q editor, solo, per-band **dyn**, accurate response curve (incl. live dyn), input RTA, **ST/M/S**. Shared `BandCurveEditor` with speccomp. |
 | `impartialer` | AudioWorklet (STFT) | Phase 1–3: global transpose, in-key snap, force-remap. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
-| `centinel` | AudioWorklet (YIN + STFT) | Monophonic pitch sentinel. **speed** / **flex** / **humanize** / **formant** / amount / tracking / mix / key·scale·**custom map** / **midi follow** / transpose. Presets: nat · soft · robot. Pitch-graph viz. |
+| `centinel` | AudioWorklet (YIN + Fairbanks / PSOLA) | Autotalent-style hard-tune (N/2 latency): `stays_locked` + hold commit, **speed** = ratio chase (ms; 0 = robot), flex / amount / tracking / mix / key·scale·custom / midi follow / transpose. **formant** ≥50% → period PSOLA. humanize inert. Presets: **pop** (~25 ms, track 100%) · soft · robot. |
 | `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
+
+**Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Phase B:
+`stays_locked` (±0.4 st) + hold (~30 ms) before committing a new note; while
+pending, ratio eases to 1 (no old-target diphthong); on commit, OLA phases are
+seeded. Phase C: soft **speed** exponentially chases `phincfact → R*` at sample
+rate (0 = robot snap). Note-commit hold is ~12 ms (short on purpose — it stacks
+with speed). Phase D: `formant ≥ 50%` → pitch-mark PSOLA. Detector stays
+YIN; if octave/noise still hurts, evaluate [SwiftF0](https://arxiv.org/abs/2508.18440)
+or [PESTO](https://doi.org/10.5334/tismir.251) as a WASM/ONNX sidecar — do not
+rewrite the shifter for F0.
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
@@ -135,11 +145,12 @@ decision layers; see [SPECTRAL.md](SPECTRAL.md)). Never a monolith engine rewrit
 
 **Latency:** `FxDeviceDef` may declare optional `latencySamples` (`number` or
 `(params, sampleRate) => number`). Native devices omit it (treat as 0). Spectral
-devices report FFT size; `cliplim` reports lookahead samples. **Mini-ADC is wired:**
-each track strip has a post-FX `DelayNode` that pads shorter tracks up to the longest
-peer latency at the sum bus (`engine.refreshTrackAdc`). Devices that keep delay when
-bypassed (STFT / cliplim) still count toward the sum. Impartialer / centinel / cliplim
-also mix dry/wet against a matching internal delay so blends do not comb.
+devices report FFT size; `centinel` reports `N/2` (1024 @ N=2048); `cliplim`
+reports lookahead samples. **Mini-ADC is wired:** each track strip has a post-FX
+`DelayNode` that pads shorter tracks up to the longest peer latency at the sum bus
+(`engine.refreshTrackAdc`). Devices that keep delay when bypassed (STFT / centinel /
+cliplim) still count toward the sum. They also mix dry/wet against a matching
+internal delay so blends do not comb.
 
 ## Loudness safety (two independent safeguards, both default ON)
 
@@ -421,24 +432,42 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
 
 ### `.ain` — AIN project format
 
-Portable project file for actuallyitsnathaniel (extension invented here). Container
-is a zip (`fflate`) for storage-friendly size + inspectability; layout + manifest
-id are fixed — not a generic archive. Working copy stays `localStorage`
-(`ain-arrangement`) + IndexedDB; Save/Open live in the **File** menu
-([FileMenu](components/arrangement/FileMenu.tsx), top-left above transport).
+Portable project file for actuallyitsnathaniel (extension invented here).
 
-| Path | Contents |
-|------|----------|
+**On-disk container (audio-primary polyglot):**
+
+```
+[ PCM16 WAV — latest master bounce ][ zip project pack ][ 16-byte AIN1 trailer ]
+```
+
+Media players that honor the RIFF size field play the bounce and ignore the
+trailing zip + trailer. The studio reads the trailer, slices the zip, and loads
+the session. Legacy raw-zip `.ain` files (start with `PK`) still open.
+
+**Extension mask:** Save defaults to `.ain`; optional “Save with .wav name
+(Finder preview)” downloads the **same bytes** as `.wav` so macOS Quick Look
+works with no helper. Open accepts either extension (trailer sniff).
+
+Working copy stays `localStorage` (`ain-arrangement`) + IndexedDB; Save/Open live
+in the **File** menu ([FileMenu](components/arrangement/FileMenu.tsx) +
+[SaveAinPanel](components/arrangement/SaveAinPanel.tsx)). **Bounce Mix…** caches
+the bounce used as the WAV head; Save without a bounce records one first.
+
+| Zip path | Contents |
+|----------|----------|
 | `README.txt` | Human identity card (app, homepage, format) |
 | `manifest.json` | `{ format: "ain", version, name, app, homepage, note, assets[] }` |
 | `arrangement.json` | Full arrangement doc (tracks, clips, per-track FX) |
 | `master-fx.json` | Optional master-bus device chain |
 | `assets/<bufId>.<ext>` | Every **imported / recorded** buffer referenced by an audio clip |
 
-MIME: `application/vnd.ain.project+zip`. Built-in catalog samples (URL / `loopId` refs)
-are **not** duplicated — recipients need the same site build. Engine: `exportAin` /
-`importAin` in [ain-pack.ts](ain-pack.ts) + [engine.ts](engine.ts). Open replaces the
-studio (same wipe as New project).
+Trailer (`AIN1` + `audioLen` + `zipLen` + reserved, little-endian). Download MIME:
+`audio/wav`. Built-in catalog samples (URL / `loopId` refs) are **not** duplicated.
+Engine: `exportAin` / `importAin` / `packAin` in [ain-pack.ts](ain-pack.ts) +
+[engine.ts](engine.ts). Open replaces the studio (same wipe as New project).
+
+macOS Finder icon / Quick Look still need a UTI registration (tiny native helper
+or desktop shell) — see [docs/AIN-MACOS.md](../../docs/AIN-MACOS.md).
 
   **Audio prefs** (`ain-audio-prefs`, **File → I/O Preferences…** → small panel):
   - **Input** — `enumerateDevices` list; `deviceId: { exact }` on open (falls back to

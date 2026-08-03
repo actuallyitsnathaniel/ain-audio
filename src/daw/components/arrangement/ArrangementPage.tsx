@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
+import { useAinFileLaunch } from "../../hooks/useAinFileLaunch";
 import { SectionHead } from "../SectionHead";
 import { TrackSection } from "../TrackSection";
 import { Knob } from "../Knob";
@@ -283,6 +284,11 @@ function TrackFxPanel({ t }: { t: ArrTrack }) {
         onRemove={(id) => engine.removeTrackDevice(t.id, id)}
         onMove={(id, to) => engine.moveTrackDevice(t.id, id, to)}
         onSetParams={(id, p) => engine.setTrackDeviceParams(t.id, id, p)}
+        onCopy={(id) => engine.copyTrackDevice(t.id, id)}
+        onPaste={() => engine.pasteTrackDevice(t.id)}
+        onDuplicate={(id) => engine.duplicateTrackDevice(t.id, id)}
+        canPaste={engine.hasFxClipboard()}
+        pasteLabel={engine.fxClipboardLabel()}
         readViz={(id) => engine.readTrackFxViz(t.id, id)}
       />
     </div>
@@ -291,6 +297,7 @@ function TrackFxPanel({ t }: { t: ArrTrack }) {
 
 export function ArrangementPage() {
   const eng = useEngine(["arrange", "transport", "preset", "patch", "synth", "select", "fx", "clip"]);
+  useAinFileLaunch();
   const tracks = eng.arrangement.tracks;
   // which track's FX panel is open (toggled from the track header's fx chip)
   const [fxTrackId, setFxTrackId] = useState<string | null>(null);

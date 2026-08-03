@@ -232,6 +232,44 @@ export async function pruneAudio(keepIds: Set<string>): Promise<void> {
   db.close();
 }
 
+// ── WAV encode (PCM16) — AIN preview head / players that dislike float WAV ────
+/** 16-bit PCM WAVE — Finder/QuickTime-friendly; RIFF size ignores trailing AIN trailer. */
+export function encodeWavPcm16(buf: AudioBuffer): ArrayBuffer {
+  const ch = buf.numberOfChannels;
+  const n = buf.length;
+  const sr = buf.sampleRate;
+  const blockAlign = ch * 2;
+  const dataSize = n * blockAlign;
+  const out = new ArrayBuffer(44 + dataSize);
+  const v = new DataView(out);
+  const str = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  str(0, "RIFF");
+  v.setUint32(4, 36 + dataSize, true);
+  str(8, "WAVE");
+  str(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); // PCM
+  v.setUint16(22, ch, true);
+  v.setUint32(24, sr, true);
+  v.setUint32(28, sr * blockAlign, true);
+  v.setUint16(32, blockAlign, true);
+  v.setUint16(34, 16, true);
+  str(36, "data");
+  v.setUint32(40, dataSize, true);
+  const chans: Float32Array[] = [];
+  for (let c = 0; c < ch; c++) chans.push(buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < n; i++)
+    for (let c = 0; c < ch; c++) {
+      const s = Math.max(-1, Math.min(1, chans[c]![i]!));
+      v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      o += 2;
+    }
+  return out;
+}
+
 // ── WAV encode (fallback when Opus/WebCodecs unavailable) ─────────────────────
 // 32-bit float WAV (format 3 + `fact` chunk) — lossless, universal decodeAudioData.
 export function encodeWav(buf: AudioBuffer): ArrayBuffer {

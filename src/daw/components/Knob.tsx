@@ -27,6 +27,7 @@ export function Knob({
   fmt = null,
   bipolar = false,
   disabled = false,
+  tip = null,
 }: {
   value: number;
   onChange: (v: number) => void;
@@ -38,6 +39,8 @@ export function Knob({
   fmt?: ((v: number) => string) | null;
   bipolar?: boolean;
   disabled?: boolean;
+  /** Hover-info / tips text (`data-tip`). */
+  tip?: string | null;
 }) {
   const norm = (value - min) / (max - min);
   const drag = useRef<{ y: number; norm: number } | null>(null);
@@ -90,6 +93,7 @@ export function Knob({
     <div
       className={"flex flex-col items-center gap-0.5 " + (disabled ? "opacity-[0.38]" : "")}
       style={{ width: size + 16 }}
+      {...(tip ? { "data-tip": tip } : {})}
     >
       <svg
         viewBox="0 0 64 64"

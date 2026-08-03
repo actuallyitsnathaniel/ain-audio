@@ -40,6 +40,11 @@ export function FxRack({ hint }: { hint?: string }) {
         onRemove={(id) => engine.removeMasterDevice(id)}
         onMove={(id, to) => engine.moveMasterDevice(id, to)}
         onSetParams={(id, p) => engine.setMasterDeviceParams(id, p)}
+        onCopy={(id) => engine.copyMasterDevice(id)}
+        onPaste={() => engine.pasteMasterDevice()}
+        onDuplicate={(id) => engine.duplicateMasterDevice(id)}
+        canPaste={engine.hasFxClipboard()}
+        pasteLabel={engine.fxClipboardLabel()}
         readViz={(id) => engine.readMasterFxViz(id)}
         tail={
           <>

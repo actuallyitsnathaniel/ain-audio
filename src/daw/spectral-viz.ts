@@ -23,6 +23,7 @@ export type FxVizKind =
  *              `xa[0..EQ_MAX_BANDS)` = live per-band gains incl. dynamics (dB);
  *              `xb` = absolute spectrum dB per bin (analyser scale)
  * centinel:    `a`/`b` = scrolling detected / target MIDI (norm 0..1 over C2–C6);
+ *              `xa` = hard-snapped MIDI (Autotalent Fairbanks path);
  *              `xa` = corrected output pitch history
  * cliplim:     `a`/`b` = scrolling input / output peak history (0..1 linear)
  * comp:        `a` = scrolling gain reduction (0..1 ≈ 0..24 dB)
