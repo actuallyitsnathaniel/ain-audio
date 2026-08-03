@@ -51,19 +51,17 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `reverb` | Convolver + predelay + tone         | Ableton-style hall: decay / size / damping / diffusion / predelay / lo·hi cut / mix. Synth IR via `makeReverbIR`. |
 | `eq` | Native biquad cascade | Pro-Q–style parametric EQ: up to 12 bands, shapes (bell/LS/HS/LC/HC/notch/BP/tilt), drag/Q editor, solo, per-band **dyn**, accurate response curve (incl. live dyn), input RTA, **ST/M/S**. Shared `BandCurveEditor` with speccomp. |
 | `impartialer` | AudioWorklet (STFT) | Phase 1–3: global transpose, in-key snap, force-remap. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
-| `centinel` | AudioWorklet (YIN + Fairbanks / PSOLA) | Hard-tune (N/2 latency): `stays_locked` + hold commit; **speed** = *within-note* ratio ease only (ms; 0 = robot — note changes always snap). flex / amount / tracking / mix / key·scale·custom / midi / transpose. **formant** ≥50% → period PSOLA (experimental). humanize inert. Presets: **pop** · soft · robot. |
+| `centinel` | AudioWorklet (YIN + Fairbanks / PSOLA) | Auto-Tune–style **input type** (Soprano / Alto·Tenor / Low Male / Instrument / Bass) sets YIN fMin–fMax. Soft/PSOLA retune + do-no-harm clamp. Presets: **pop** · soft · robot. |
 | `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
 
 **Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Note commit:
-`stays_locked` (±0.4 st) + hold (~18 ms); pending freezes `R*` (OLA keeps
-running — no dry↔wet gate); on commit, seed-snap `phincfact = R*`. Soft
-**speed** only eases *within-note* ratio errors under ~40¢ (Fairbanks formants
-ride the ratio — soft-gliding a note boundary = vowel morph). Robot = always
-snap. `formant ≥ 50%` → period PSOLA: energy-peak epoch on voice onset, ~2·PE
-grain snapshot, no resample, COLA `peOut/peIn` (experimental — A/B vs Fairbanks).
-Detector stays YIN; neural F0 (SwiftF0 / PESTO) is a later sidecar if detection
-still limits — not the shifter.
+`stays_locked` (±0.4 st) + hysteretic hold (base ~18 ms, stretches with soft
+speed); sticky scale **target** until raw is clearly closer to another note
+(+0.35 st hysteresis — no midpoint flip-flops). `R*` always tracks sticky
+want / live det (output stays on the intended note while deciding); soft chases
+`R*` without crossing it. Fairbanks: within-note soft only + seed-snap on
+commit. PSOLA (`formant ≥ 50%`): full soft across notes. Detector stays YIN.
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
 `input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/

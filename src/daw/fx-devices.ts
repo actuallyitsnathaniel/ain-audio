@@ -38,12 +38,38 @@ export const FILTER_MODES: FilterMode[] = ["low", "high", "band", "notch"];
 export type ImpartialerScale = "major" | "minor" | "dorian" | "chromatic";
 /** Centinel scales — major/minor/dorian/chromatic + custom degree map. */
 export type CentinelScale = ImpartialerScale | "custom";
+/**
+ * Auto-Tune–style input type — constrains YIN f0 search so low notes don’t
+ * octave-up and trash PSOLA formants.
+ */
+export type CentinelInputType =
+  | "soprano"
+  | "altoTenor"
+  | "lowMale"
+  | "instrument"
+  | "bassInst";
 export type ImpartialerMappingMode = "off" | "snap" | "remap";
 export type SpectralQuality = "low" | "high";
 
 export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;
 export const IMPARTIALER_SCALES: ImpartialerScale[] = ["major", "minor", "dorian", "chromatic"];
 export const CENTINEL_SCALES: CentinelScale[] = ["major", "minor", "dorian", "chromatic"];
+export const CENTINEL_INPUT_TYPES: CentinelInputType[] = [
+  "soprano",
+  "altoTenor",
+  "lowMale",
+  "instrument",
+  "bassInst",
+];
+/** Hz bands ≈ Antares Input Type (analysis window limits true bass floor). */
+export const CENTINEL_INPUT_HZ: Record<CentinelInputType, { fMin: number; fMax: number; label: string }> =
+  {
+    soprano: { fMin: 200, fMax: 1200, label: "Soprano" },
+    altoTenor: { fMin: 110, fMax: 700, label: "Alto / Tenor" },
+    lowMale: { fMin: 70, fMax: 380, label: "Low Male" },
+    instrument: { fMin: 80, fMax: 1000, label: "Instrument" },
+    bassInst: { fMin: 45, fMax: 250, label: "Bass Inst." },
+  };
 /** Relative pitch classes for a custom centinel map (seeded from major). */
 export const DEFAULT_CENTINEL_CUSTOM_PCS = [0, 2, 4, 5, 7, 9, 11];
 export const SCALE_PCS: Record<ImpartialerScale, number[]> = {
@@ -221,8 +247,12 @@ export interface FxParams {
      */
     midiFollow: boolean;
     /**
-     * Within-note exponential chase of pitch ratio (ms). 0 = always snap.
-     * Note commits / large jumps always snap (Fairbanks cannot soft-glide boundaries).
+     * Auto-Tune–style input type — YIN fMin/fMax band (default alto/tenor).
+     */
+    inputType: CentinelInputType;
+    /**
+     * Within-note (Fairbanks) or full (PSOLA) exponential chase of pitch ratio (ms).
+     * 0 = always snap. With formant≥0.5, soft chases across note commits too.
      */
     speed: number;
     /** 0..1 how far to pull toward the target. */
@@ -1028,6 +1058,7 @@ function buildCentinel(ctx: AudioContext): FxDeviceNodes {
         scale: fx.scale,
         customPcs: fx.customPcs ?? DEFAULT_CENTINEL_CUSTOM_PCS,
         midiFollow: !!fx.midiFollow,
+        inputType: fx.inputType ?? "altoTenor",
         viz: !!fx.viz,
       });
     },
@@ -1604,12 +1635,13 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         scale: "major",
         customPcs: DEFAULT_CENTINEL_CUSTOM_PCS.slice(),
         midiFollow: false,
-        speed: 25,
+        inputType: "altoTenor",
+        speed: 30,
         amount: 1,
         flex: 0,
         humanize: 0,
         tracking: 1,
-        formant: 0,
+        formant: 1,
         mix: 1,
         transpose: 0,
         viz: true,
@@ -1811,6 +1843,14 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
             customPcs: customPcs.length ? customPcs : DEFAULT_CENTINEL_CUSTOM_PCS.slice(),
             key: typeof prev.key === "number" ? ((prev.key % 12) + 12) % 12 : 0,
             midiFollow: !!prev.midiFollow,
+            inputType:
+              prev.inputType === "soprano" ||
+              prev.inputType === "altoTenor" ||
+              prev.inputType === "lowMale" ||
+              prev.inputType === "instrument" ||
+              prev.inputType === "bassInst"
+                ? prev.inputType
+                : defs.inputType,
             speed: typeof prev.speed === "number" ? prev.speed : defs.speed,
             amount: typeof prev.amount === "number" ? prev.amount : defs.amount,
             flex: typeof prev.flex === "number" ? prev.flex : defs.flex,

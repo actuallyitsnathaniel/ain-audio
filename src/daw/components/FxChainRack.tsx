@@ -18,11 +18,14 @@ import {
   IMPARTIALER_SCALES,
   SCALE_PCS,
   DEFAULT_CENTINEL_CUSTOM_PCS,
+  CENTINEL_INPUT_TYPES,
+  CENTINEL_INPUT_HZ,
   type FilterMode,
   type FxDeviceType,
   type FxParams,
   type ImpartialerScale,
   type CentinelScale,
+  type CentinelInputType,
 } from "../fx-devices";
 import type { FxDeviceState } from "../fx-chain";
 import type { FxVizSlot } from "../spectral-viz";
@@ -975,32 +978,40 @@ function DevicePanel({
               />
               <FxChip
                 label="pop"
-                on={Math.abs(p.speed - 25) < 1 && Math.abs((p.tracking ?? 0) - 1) < 0.05}
+                on={
+                  Math.abs(p.speed - 25) < 1 &&
+                  Math.abs((p.tracking ?? 0) - 1) < 0.05 &&
+                  (p.formant ?? 0) >= 0.5
+                }
                 enabled={p.on}
-                title="Pop — snap on note change + ~25ms within-note ease, track 100% (Fairbanks)"
+                title="Pop — ~25ms soft ratio under PSOLA (formant on), track 100%"
                 onClick={() =>
                   set({
                     speed: 25,
                     flex: 0,
                     humanize: 0,
                     amount: 1,
-                    formant: 0,
+                    formant: 1,
                     tracking: 1,
                   })
                 }
               />
               <FxChip
                 label="soft"
-                on={Math.abs(p.speed - 120) < 1 && p.humanize < 0.05}
+                on={
+                  Math.abs(p.speed - 120) < 1 &&
+                  p.humanize < 0.05 &&
+                  (p.formant ?? 0) >= 0.5
+                }
                 enabled={p.on}
-                title="Soft — slower within-note ease (~120ms); note changes still snap"
+                title="Soft — ~120ms ratio chase under PSOLA"
                 onClick={() =>
                   set({
                     speed: 120,
                     flex: 0,
                     humanize: 0,
                     amount: 1,
-                    formant: 0,
+                    formant: 1,
                     tracking: 1,
                   })
                 }
@@ -1014,7 +1025,7 @@ function DevicePanel({
                   Math.abs((p.amount ?? 1) - 1) < 0.05
                 }
                 enabled={p.on}
-                title="Hard lock — always snap R* (best Fairbanks baseline)"
+                title="Hard lock — always snap R* (Fairbanks if formant off)"
                 onClick={() =>
                   set({
                     speed: 0,
@@ -1106,7 +1117,7 @@ function DevicePanel({
             label="speed"
             disabled={!p.on}
             fmt={(v) => (v < 0.5 ? "lock" : Math.round(v) + "ms")}
-            tip="Within-note micro-ease of pitch ratio (ms). Note changes always snap like robot. 0 = always snap. Fairbanks can’t soft-glide a note change without vowel morph."
+            tip="Retune speed (ms). 0 = robot. Soft/pop under PSOLA chase the sticky note — but output is clamped so it can never be more off-key than the dry signal vs the natural scale note."
           />
           <Knob
             value={p.amount}
@@ -1150,7 +1161,7 @@ function DevicePanel({
             label="formant"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="0–49% = Fairbanks · 50%+ = full PSOLA (hard switch — 50% and 100% are the same path). Unvoiced falls back to Fairbanks so consonants survive. Experimental."
+            tip="0–49% = Fairbanks (formants follow pitch; soft = within-note only) · 50%+ = PSOLA — enables real soft speed across notes. Pop/soft presets turn this on."
           />
           <Knob
             value={p.tracking}
@@ -1194,6 +1205,36 @@ function DevicePanel({
               title="MIDI follow — retune to held keys / hardware / sounding MIDI clips; scale is the fallback"
               onClick={() => set({ midiFollow: !p.midiFollow })}
             />
+            {CENTINEL_INPUT_TYPES.map((it) => {
+              const meta = CENTINEL_INPUT_HZ[it];
+              const short =
+                it === "altoTenor"
+                  ? "a/t"
+                  : it === "lowMale"
+                    ? "low"
+                    : it === "bassInst"
+                      ? "bass"
+                      : it === "instrument"
+                        ? "inst"
+                        : "sop";
+              return (
+                <FxChip
+                  key={it}
+                  label={short}
+                  on={(p.inputType ?? "altoTenor") === it}
+                  enabled={p.on}
+                  title={
+                    meta.label +
+                    " input — YIN " +
+                    meta.fMin +
+                    "–" +
+                    meta.fMax +
+                    " Hz (Auto-Tune–style; use Low Male / Bass for low octaves)"
+                  }
+                  onClick={() => set({ inputType: it as CentinelInputType })}
+                />
+              );
+            })}
             {IMPARTIALER_SCALES.map((sc) => (
               <FxChip
                 key={sc}
