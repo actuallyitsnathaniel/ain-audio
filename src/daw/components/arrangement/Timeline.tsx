@@ -4,7 +4,8 @@
 // blocks placed at [beatToX(startBeat), trackY]; drag to move (snap, ⌘=free),
 // drag the right edge to resize, ⌥-drag/⌘D to duplicate, double-click a MIDI clip
 // to edit it below, right-click for the menu. The top ruler shows bars + the loop
-// brace + playhead; click/drag the ruler to seek / set the loop.
+// brace + playhead; click/drag seeks, drag brace grips/body to edit the loop,
+// Shift-drag paints a new brace. Double-click ruler → loop from selection / toggle.
 
 import { useEffect, useRef } from "react";
 import type { MutableRefObject, PointerEvent as ReactPointerEvent } from "react";
@@ -15,11 +16,13 @@ import { clipBeats } from "../../data/clips";
 import { DRUM_BASE } from "../../data/drum-midi";
 import { type ArrClip, type ArrTrack, slippedLocals } from "../../data/arrangement";
 
-const HEAD_H = 26; // ruler height (must match ArrangementPage)
+const HEAD_H = 30; // ruler height (must match ArrangementPage) — tall enough for brace grips
 const ROW_H = 64; // track lane height (must match ArrangementPage ROW_H)
 const KEY_W = 0; // no gutter (headers are a separate column)
 const MIN_PPB = 4;
 const MAX_PPB = 64;
+/** Hit radius (px) for loop-brace start/end grips — generous so they aren't finicky. */
+const BRACE_GRIP = 10;
 
 const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#54adbd";
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -34,7 +37,12 @@ type Drag =
   // Shift+⌥ drag: slip content under fixed clip bounds (does NOT move startBeat)
   | { mode: "slip"; trackId: string; clipId: string; grabBeat: number; baseSlip: number; moved: boolean }
   | { mode: "seek"; last: number }
-  | { mode: "brace"; anchor: number }
+  /** Draw a new brace from anchor→pointer (Shift/⌘ on empty ruler). */
+  | { mode: "brace-draw"; anchor: number }
+  /** Resize existing brace start / end grip. */
+  | { mode: "brace-edge"; which: "start" | "end" }
+  /** Slide the whole brace; `grab` is pointer beat at drag start. */
+  | { mode: "brace-move"; grab: number; baseStart: number; baseEnd: number }
   // drag over empty lane space: paint a time selection + marquee-select intersecting clips
   | { mode: "marquee"; x0: number; y0: number; anchorBeat: number; anchorTrack: number; moved: boolean }
   | null;
@@ -91,23 +99,52 @@ export function Timeline({
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
 
+  // hit-test the loop brace in the ruler: start grip · end grip · body (move)
+  const hitBrace = (
+    x: number,
+  ): "start" | "end" | "body" | null => {
+    const loop = engine.arrangement.loop;
+    if (!loop?.on) return null;
+    const lx = beatToX(loop.start);
+    const rx = beatToX(loop.end);
+    if (Math.abs(x - lx) <= BRACE_GRIP) return "start";
+    if (Math.abs(x - rx) <= BRACE_GRIP) return "end";
+    if (x > lx + BRACE_GRIP && x < rx - BRACE_GRIP) return "body";
+    return null;
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const cv = ref.current!;
     cv.setPointerCapture(e.pointerId);
     const { x, y } = localXY(e);
 
-    // ruler: click to seek, drag to set the loop brace (⌘/shift while dragging).
-    // Scrubbing QUANTIZES to the grid (snap, or whole beats when snap is off) — a
-    // seek re-anchors the clock + restarts sources, so it fires only when the target
-    // crosses onto a NEW gridline, never continuously with the mouse. ⌘ = free.
+    // ruler: brace grips first (no modifier), then Shift/⌘-drag draws a new brace,
+    // bare click/drag seeks. Scrubbing QUANTIZES to the grid (⌘ = free).
     if (y < HEAD_H) {
-      const beat = Math.max(0, cmd(e) ? xToBeat(x) : scrubQuantize(xToBeat(x)));
-      if (e.shiftKey) {
-        drag.current = { mode: "brace", anchor: beat };
-      } else {
-        engine.seekArrangement(beat);
-        drag.current = { mode: "seek", last: beat };
+      const raw = Math.max(0, xToBeat(x));
+      const beat = Math.max(0, cmd(e) ? raw : scrubQuantize(raw));
+      const grip = hitBrace(x);
+      if (grip === "start" || grip === "end") {
+        drag.current = { mode: "brace-edge", which: grip };
+        return;
       }
+      if (grip === "body" && !e.shiftKey && !cmd(e)) {
+        const loop = engine.arrangement.loop!;
+        drag.current = {
+          mode: "brace-move",
+          grab: beat,
+          baseStart: loop.start,
+          baseEnd: loop.end,
+        };
+        return;
+      }
+      if (e.shiftKey || (cmd(e) && e.altKey)) {
+        // Shift-drag (or ⌘⌥-drag) paints a fresh brace
+        drag.current = { mode: "brace-draw", anchor: beat };
+        return;
+      }
+      engine.seekArrangement(beat);
+      drag.current = { mode: "seek", last: beat };
       return;
     }
 
@@ -171,12 +208,26 @@ export function Timeline({
     if (cv && cv.style.cursor !== c) cv.style.cursor = c;
   };
   const hoverCursor = (x: number, y: number): string => {
-    if (y < HEAD_H) return "pointer"; // ruler: seek (shift = loop brace)
+    if (y < HEAD_H) {
+      const grip = hitBrace(x);
+      if (grip === "start" || grip === "end") return "ew-resize";
+      if (grip === "body") return "grab";
+      return "pointer";
+    }
     const hit = hitClip(x, y);
     if (hit) return hit.edge ? "ew-resize" : "grab";
     return yToTrackIndex(y) < tracks().length ? "crosshair" : "default"; // lane: marquee/insert
   };
-  const DRAG_CURSOR: Record<string, string> = { move: "grabbing", resize: "ew-resize", slip: "ew-resize", marquee: "crosshair", seek: "pointer", brace: "col-resize" };
+  const DRAG_CURSOR: Record<string, string> = {
+    move: "grabbing",
+    resize: "ew-resize",
+    slip: "ew-resize",
+    marquee: "crosshair",
+    seek: "pointer",
+    "brace-draw": "col-resize",
+    "brace-edge": "ew-resize",
+    "brace-move": "grabbing",
+  };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const d = drag.current;
@@ -194,10 +245,25 @@ export function Timeline({
         engine.seekArrangement(target);
         d.last = target;
       }
-    } else if (d.mode === "brace") {
+    } else if (d.mode === "brace-draw") {
       const s = Math.min(d.anchor, beat);
       const en = Math.max(d.anchor, beat);
       if (en > s) engine.setArrangementLoop(s, en, true);
+    } else if (d.mode === "brace-edge") {
+      const loop = engine.arrangement.loop;
+      if (!loop) return;
+      if (d.which === "start") {
+        const next = Math.min(beat, loop.end - 0.25);
+        engine.setArrangementLoop(Math.max(0, next), loop.end, true);
+      } else {
+        const next = Math.max(beat, loop.start + 0.25);
+        engine.setArrangementLoop(loop.start, next, true);
+      }
+    } else if (d.mode === "brace-move") {
+      const len = d.baseEnd - d.baseStart;
+      let start = d.baseStart + (beat - d.grab);
+      if (start < 0) start = 0;
+      engine.setArrangementLoop(start, start + len, true);
     } else if (d.mode === "move") {
       if (!d.moved) engine.pushUndo(); // snapshot ONCE at the start of the drag
       if (!d.moved && d.dup) {
@@ -291,7 +357,13 @@ export function Timeline({
   const onDoubleClick = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = localXY(e);
     if (y < HEAD_H) {
-      engine.setInsertBeat(0); // double-click the ruler → insert marker back to start
+      // double-click ruler: if there's a time/clip selection → set the loop brace to
+      // it; otherwise toggle loop on/off (Ableton-ish "make this the loop")
+      if (!engine.loopFromSelection()) {
+        const l = engine.arrangement.loop;
+        if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
+        else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
+      }
       return;
     }
     const hit = hitClip(x, y);
@@ -310,9 +382,45 @@ export function Timeline({
     e.preventDefault();
     const r = ref.current!.getBoundingClientRect();
     const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top;
     const beat = snapBeat(xToBeat(cx), cmd(e));
     engine.setInsertBeat(Math.max(0, beat)); // where "split here" cuts / paste lands
-    const hit = hitClip(cx, e.clientY - r.top);
+
+    // ruler / brace context
+    if (cy < HEAD_H) {
+      const loop = engine.arrangement.loop;
+      openContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        title: "loop brace",
+        items: [
+          {
+            label: loop?.on ? "disable loop" : "enable loop",
+            hint: "L",
+            onClick: () => {
+              if (loop) engine.setArrangementLoop(loop.start, loop.end, !loop.on);
+              else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
+            },
+          },
+          {
+            label: "set loop to selection",
+            hint: "⌘L",
+            disabled: !engine.timeSel && engine.selClips.size === 0,
+            onClick: () => engine.loopFromSelection(),
+          },
+          {
+            label: "loop 4 bars from here",
+            onClick: () => {
+              const bpb = engine.arrangement.beatsPerBar;
+              engine.setArrangementLoop(beat, beat + bpb * 4, true);
+            },
+          },
+        ],
+      });
+      return;
+    }
+
+    const hit = hitClip(cx, cy);
     if (!hit) {
       // empty space menu — paste here / select all
       openContextMenu({
@@ -530,17 +638,34 @@ export function Timeline({
     if (loop?.on) {
       const lx = beatToX(loop.start);
       const lw = Math.max(2, (loop.end - loop.start) * view.current.ppb);
-      g.fillStyle = "color-mix(in srgb, " + ac + " 22%, transparent)";
+      // shade the loop region down through the lanes (reads as a real brace, not a
+      // ruler-only decoration)
+      g.fillStyle = "color-mix(in srgb, " + ac + " 7%, transparent)";
+      g.fillRect(lx, HEAD_H, lw, h - HEAD_H);
+      g.fillStyle = "color-mix(in srgb, " + ac + " 28%, transparent)";
       g.fillRect(lx, 1, lw, HEAD_H - 3);
       g.strokeStyle = ac;
-      g.globalAlpha = 0.85;
+      g.globalAlpha = 0.9;
       g.lineWidth = 1;
       g.strokeRect(lx + 0.5, 1.5, lw - 1, HEAD_H - 4);
-      // end grips (Ableton-ish brace handles)
+      // chunky end grips (draggable — no Shift required)
       g.globalAlpha = 1;
       g.fillStyle = ac;
-      g.fillRect(lx, 3, 2, HEAD_H - 7);
-      g.fillRect(lx + lw - 2, 3, 2, HEAD_H - 7);
+      g.fillRect(lx, 2, 3, HEAD_H - 5);
+      g.fillRect(lx + lw - 3, 2, 3, HEAD_H - 5);
+      // little triangles so grips read as handles
+      g.beginPath();
+      g.moveTo(lx + 4, 4);
+      g.lineTo(lx + 4, HEAD_H - 5);
+      g.lineTo(lx + 9, HEAD_H / 2);
+      g.closePath();
+      g.fill();
+      g.beginPath();
+      g.moveTo(lx + lw - 4, 4);
+      g.lineTo(lx + lw - 4, HEAD_H - 5);
+      g.lineTo(lx + lw - 9, HEAD_H / 2);
+      g.closePath();
+      g.fill();
     }
 
     // ticks + bar.beat labels (1-based)
@@ -904,7 +1029,7 @@ export function Timeline({
   return (
     <canvas
       ref={ref}
-      className="w-full touch-none rounded-[3px] border border-line bg-inset outline-none select-none"
+      className="w-full touch-none bg-inset outline-none select-none"
       style={{ height }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

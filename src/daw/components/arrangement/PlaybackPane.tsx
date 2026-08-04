@@ -1,8 +1,7 @@
 // ── PLAYBACK PANE — the arrangement transport ─────────────────────────────────
-// Standard DAW playback controls: ⏮ return-to-start · ▶/⏸ play/pause · ⏹ stop,
-// bars.beats + mm:ss readout, tempo (+ tap), time signature, loop (toggle + numeric
-// range), metronome (+ count-in), follow-playhead. Spacebar/Home/L keyboard transport.
-// Session I/O / save / new live in FileMenu (top-left, above this transport).
+// Dense DAW chrome (not a portfolio form row): transport · readout · loop brace
+// controls · metro · grid · tempo. Loop range uses steppers (not finicky number
+// inputs); brace editing itself lives on the timeline ruler.
 
 import { useRef, type ReactNode } from "react";
 import { engine } from "../../engine";
@@ -19,46 +18,75 @@ const SIGS: [number, string][] = [
   [7, "7/8"],
 ];
 
-// ── one uniform control system: every button/select/input is 28px tall, same radius,
-//    border, font. `ctl` is the shared base; state helpers only change color. ──
-const ctl = "flex h-7 items-center justify-center rounded-sm border font-mono text-[10px] transition-colors ";
+const ctl =
+  "flex h-7 items-center justify-center rounded-sm border font-mono text-[10px] transition-colors ";
 const idle = "border-line2 text-dim hover:border-accent hover:text-accent";
 const activeCls = "border-accent bg-accent text-[#111]";
-const onOff = (on: boolean) => (on ? "border-accent text-accent" : "border-line2 text-faint hover:border-accent hover:text-dim");
-const iconBtn = ctl + "w-7.5 "; // square transport buttons
-const px = "px-2.5 "; // standard horizontal padding for text controls
-const fieldSel = ctl + "cursor-pointer appearance-none border-line2 bg-panel2 pl-2 pr-5 text-daw-text hover:border-accent focus:border-accent focus:outline-none";
-const numIn = "h-7 w-9.5 rounded-sm border border-line2 bg-panel2 text-center font-mono text-[10px] text-daw-text focus:border-accent focus:outline-none";
-const cap = "font-mono text-[9px] tracking-[0.06em] text-faint"; // small caption label
+const onOff = (on: boolean) =>
+  on
+    ? "border-accent text-accent bg-[color-mix(in_srgb,var(--accent)_12%,transparent)]"
+    : "border-line2 text-faint hover:border-accent hover:text-dim";
+const iconBtn = ctl + "w-7.5 ";
+const px = "px-2.5 ";
+const fieldSel =
+  ctl +
+  "cursor-pointer appearance-none border-line2 bg-[#121218] pl-2 pr-5 text-daw-text hover:border-accent focus:border-accent focus:outline-none";
+const cap = "font-mono text-[9px] tracking-[0.06em] text-faint";
+const stepBtn =
+  "flex h-7 w-5 shrink-0 items-center justify-center border border-line2 font-mono text-[11px] text-faint transition-colors hover:border-accent hover:text-accent disabled:opacity-30";
 
-// a select styled to the shared control height, with an aligned caret
-function Select({ value, onChange, title, children }: { value: number; onChange: (n: number) => void; title: string; children: ReactNode }) {
+function Select({
+  value,
+  onChange,
+  title,
+  children,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <span className="relative inline-flex">
-      <select value={value} onChange={(e) => onChange(Number(e.target.value))} title={title} className={fieldSel}>
+      <select
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        title={title}
+        className={fieldSel}
+      >
         {children}
       </select>
-      <span className="pointer-events-none absolute top-1/2 right-1.75 -translate-y-1/2 text-[7px] text-faint">▼</span>
+      <span className="pointer-events-none absolute top-1/2 right-1.75 -translate-y-1/2 text-[7px] text-faint">
+        ▼
+      </span>
     </span>
   );
 }
 
+/** Format a beat as bar.beat (1-based), no rounding surprises. */
+function fmtBarBeat(beat: number, bpb: number): string {
+  const bar = Math.floor(beat / bpb) + 1;
+  const b = Math.floor(beat % bpb) + 1;
+  return `${bar}.${b}`;
+}
+
 export function PlaybackPane() {
-  const eng = useEngine(["transport", "arrange", "clip"]);
+  const eng = useEngine(["transport", "arrange", "clip", "select"]);
   const playing = eng.sequencePlaying && eng.arrangeMode;
   const bpb = eng.arrangement.beatsPerBar;
   const loop = eng.arrangement.loop;
+  const loopOn = !!loop?.on;
+  const hasSel = !!(eng.timeSel || eng.selClips.size);
   const barBeat = useRef<HTMLSpanElement>(null);
   const timeStr = useRef<HTMLSpanElement>(null);
   const lastSample = useRef(0);
 
-  // imperative readouts (rAF, no per-frame React render) + UI hitch sampling
   useRafLoop(() => {
     const beat = engine.arrangementPosition();
     if (barBeat.current) {
       const bar = Math.floor(beat / bpb) + 1;
       const b = Math.floor(beat % bpb) + 1;
-      const sub = Math.floor(((beat % 1) * 4)) + 1; // 1/16 subdivision
+      const sub = Math.floor((beat % 1) * 4) + 1;
       barBeat.current.textContent = `${bar}.${b}.${sub}`;
     }
     if (timeStr.current) {
@@ -73,103 +101,253 @@ export function PlaybackPane() {
     lastSample.current = now;
   });
 
-  // keyboard transport lives in ArrangementPage (the page-level key authority), so it
-  // works regardless of DOM focus. Buttons here just call the same engine verbs.
   const toggleLoop = () => {
     const l = engine.arrangement.loop;
     if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
-    else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
+    else engine.setArrangementLoop(0, bpb * 4, true);
   };
 
-  // loop range as bar numbers (1-based)
-  const loopBar = (beat: number) => Math.round(beat / bpb) + 1;
-  const setLoopBar = (which: "start" | "end", bar: number) => {
-    const l = engine.arrangement.loop || { start: 0, end: bpb * 4, on: true };
-    const beat = Math.max(0, (bar - 1) * bpb);
-    const start = which === "start" ? beat : l.start;
-    const end = which === "end" ? beat : l.end;
+  /** Nudge loop start or end by bars (default) or beats (shift). */
+  const nudgeLoop = (
+    which: "start" | "end",
+    dir: -1 | 1,
+    fine: boolean,
+  ) => {
+    const l = engine.arrangement.loop || {
+      start: 0,
+      end: bpb * 4,
+      on: true,
+    };
+    const step = fine ? 1 : bpb;
+    let start = l.start;
+    let end = l.end;
+    if (which === "start") start = Math.max(0, start + dir * step);
+    else end = end + dir * step;
     engine.setArrangementLoop(start, end, l.on ?? true);
   };
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-sm border border-line bg-[#0e0e12] px-3 py-2">
-      {/* transport buttons */}
-      <div className="flex items-center gap-1">
-        <button className={iconBtn + idle} onClick={() => engine.returnToStart()} title="return to start (Home)">⏮</button>
-        <button className={iconBtn + (playing ? activeCls : idle)} onClick={() => engine.toggleArrangement()} title="play / stop (Space)">
-          <span className={playing ? "icon-pause small" : "icon-play small"} aria-hidden />
-        </button>
-        <button
-          className={iconBtn + (eng.recording ? "border-red-500 bg-red-500 text-[#111]" : idle)}
-          onClick={() => engine.toggleRecord()}
-          title="record into the armed track (Shift+R) · MIDI notes or live audio input · count-in applies · press again to punch out"
-        >
-          <span className={"inline-block size-2.5 rounded-full " + (eng.recording ? "bg-[#111]" : "bg-red-500")} aria-hidden />
-        </button>
-        <button className={iconBtn + idle} onClick={() => engine.stopArrangementToStart()} title="stop → return to start">⏹</button>
-      </div>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-line bg-[#0a0a0e] px-2.5 py-1.5">
+        {/* transport */}
+        <div className="flex items-center gap-0.5">
+          <button
+            className={iconBtn + idle}
+            onClick={() => engine.returnToStart()}
+            title="return to start (Home)"
+          >
+            ⏮
+          </button>
+          <button
+            className={iconBtn + (playing ? activeCls : idle)}
+            onClick={() => engine.toggleArrangement()}
+            title="play / stop (Space)"
+          >
+            <span
+              className={playing ? "icon-pause small" : "icon-play small"}
+              aria-hidden
+            />
+          </button>
+          <button
+            className={
+              iconBtn +
+              (eng.recording
+                ? "border-red-500 bg-red-500 text-[#111]"
+                : idle)
+            }
+            onClick={() => engine.toggleRecord()}
+            title="record into the armed track (Shift+R)"
+          >
+            <span
+              className={
+                "inline-block size-2.5 rounded-full " +
+                (eng.recording ? "bg-[#111]" : "bg-red-500")
+              }
+              aria-hidden
+            />
+          </button>
+          <button
+            className={iconBtn + idle}
+            onClick={() => engine.stopArrangementToStart()}
+            title="stop → return to start"
+          >
+            ⏹
+          </button>
+        </div>
 
-      {/* dual readout */}
-      <div className="flex h-7 flex-col justify-center leading-none">
-        <span ref={barBeat} className="font-mono text-[13px] tabular-nums text-accent">1.1.1</span>
-        <span ref={timeStr} className="mt-0.5 font-mono text-[9px] tabular-nums text-faint">0:00.000</span>
-      </div>
-
-      {/* loop: toggle + numeric range (bars) */}
-      <div className="flex items-center gap-1.25">
-        <button className={ctl + px + onOff(!!loop?.on)} onClick={toggleLoop} title="toggle the loop brace (L · or shift+drag the ruler)">
-          loop
-        </button>
-        {loop && (
-          <span className="flex items-center gap-0.75 font-mono text-[9px] text-faint">
-            <input type="number" min={1} value={loopBar(loop.start)} onChange={(e) => setLoopBar("start", Number(e.target.value))} className={numIn} title="loop start (bar)" />
-            <span>–</span>
-            <input type="number" min={1} value={loopBar(loop.end)} onChange={(e) => setLoopBar("end", Number(e.target.value))} className={numIn} title="loop end (bar)" />
+        {/* readout */}
+        <div className="flex h-7 min-w-18 flex-col justify-center leading-none">
+          <span
+            ref={barBeat}
+            className="font-mono text-[13px] tabular-nums text-accent"
+          >
+            1.1.1
           </span>
-        )}
-      </div>
+          <span
+            ref={timeStr}
+            className="mt-0.5 font-mono text-[9px] tabular-nums text-faint"
+          >
+            0:00.000
+          </span>
+        </div>
 
-      {/* time signature */}
-      <label className="flex items-center gap-1.25">
-        <span className={cap}>sig</span>
-        <Select value={bpb} onChange={(n) => engine.setBeatsPerBar(n)} title="time signature (beats per bar)">
-          {SIGS.map(([n, label]) => (
-            <option key={label} value={n} className="bg-panel2">{label}</option>
-          ))}
-        </Select>
-      </label>
+        <span className="hidden h-5 w-px bg-line sm:block" aria-hidden />
 
-      {/* metronome + count-in */}
-      <div className="flex items-center gap-1.5">
-        <button className={ctl + px + onOff(eng.metronome)} onClick={() => engine.setMetronome(!eng.metronome)} title="metronome click">
-          ♩ click
-        </button>
-        <label className="flex items-center gap-1.25">
-          <span className={cap}>count</span>
-          <Select value={eng.countInBars} onChange={(n) => engine.setCountInBars(n)} title="count-in bars before playback rolls">
-            <option value={0}>off</option>
-            <option value={1}>1 bar</option>
-            <option value={2}>2 bars</option>
+        {/* loop — steppers, not number inputs */}
+        <div
+          className={
+            "flex items-center gap-0.5 rounded-sm " +
+            (loopOn
+              ? "bg-[color-mix(in_srgb,var(--accent)_8%,transparent)]"
+              : "")
+          }
+        >
+          <button
+            className={ctl + px + onOff(loopOn)}
+            onClick={toggleLoop}
+            title="toggle loop (L) · drag brace grips on the ruler · Shift-drag to draw"
+          >
+            loop
+          </button>
+          <div
+            className={
+              "flex items-center gap-px " + (loopOn ? "opacity-100" : "opacity-45")
+            }
+          >
+            <button
+              type="button"
+              className={stepBtn + " rounded-l-sm"}
+              disabled={!loop}
+              onClick={(e) => nudgeLoop("start", -1, e.shiftKey)}
+              title="loop start earlier (Shift = 1 beat)"
+            >
+              ‹
+            </button>
+            <span
+              className="flex h-7 min-w-9 items-center justify-center border-y border-line2 bg-[#121218] px-1 font-mono text-[10px] tabular-nums text-daw-text"
+              title="loop start (bar.beat)"
+            >
+              {loop ? fmtBarBeat(loop.start, bpb) : "—"}
+            </span>
+            <button
+              type="button"
+              className={stepBtn}
+              disabled={!loop}
+              onClick={(e) => nudgeLoop("start", 1, e.shiftKey)}
+              title="loop start later (Shift = 1 beat)"
+            >
+              ›
+            </button>
+            <span className="px-0.5 font-mono text-[9px] text-faint">–</span>
+            <button
+              type="button"
+              className={stepBtn}
+              disabled={!loop}
+              onClick={(e) => nudgeLoop("end", -1, e.shiftKey)}
+              title="loop end earlier (Shift = 1 beat)"
+            >
+              ‹
+            </button>
+            <span
+              className="flex h-7 min-w-9 items-center justify-center border-y border-line2 bg-[#121218] px-1 font-mono text-[10px] tabular-nums text-daw-text"
+              title="loop end (bar.beat)"
+            >
+              {loop ? fmtBarBeat(loop.end, bpb) : "—"}
+            </span>
+            <button
+              type="button"
+              className={stepBtn + " rounded-r-sm"}
+              disabled={!loop}
+              onClick={(e) => nudgeLoop("end", 1, e.shiftKey)}
+              title="loop end later (Shift = 1 beat)"
+            >
+              ›
+            </button>
+          </div>
+          <button
+            type="button"
+            className={ctl + "px-1.5 " + onOff(false)}
+            disabled={!hasSel}
+            onClick={() => engine.loopFromSelection()}
+            title="set loop brace to the time / clip selection (⌘L)"
+          >
+            sel
+          </button>
+        </div>
+
+        <span className="hidden h-5 w-px bg-line md:block" aria-hidden />
+
+        {/* sig + metro */}
+        <label className="flex items-center gap-1">
+          <span className={cap}>sig</span>
+          <Select
+            value={bpb}
+            onChange={(n) => engine.setBeatsPerBar(n)}
+            title="time signature"
+          >
+            {SIGS.map(([n, label]) => (
+              <option key={label} value={n} className="bg-panel2">
+                {label}
+              </option>
+            ))}
           </Select>
         </label>
-      </div>
 
-      {/* snap / launch / follow / keys — folded out of the primary bar */}
-      <GridMenu />
-
-      {/* tempo + tap — stay with transport (File menu owns I/O / project) */}
-      <span className="ml-auto flex items-center gap-2.5">
-        <button className={ctl + px + idle} onClick={() => engine.tapTempo()} title="tap tempo — hit repeatedly to set the BPM">
-          tap
+        <button
+          className={ctl + px + onOff(eng.metronome)}
+          onClick={() => engine.setMetronome(!eng.metronome)}
+          title="metronome"
+        >
+          ♩
         </button>
-        <Knob value={eng.arrangement.bpm} min={40} max={220} defaultValue={120} size={40} onChange={(v) => engine.setArrangementBpm(v)} label="tempo" fmt={(v) => Math.round(v) + " bpm"} />
-      </span>
+        <label className="flex items-center gap-1">
+          <span className={cap}>in</span>
+          <Select
+            value={eng.countInBars}
+            onChange={(n) => engine.setCountInBars(n)}
+            title="count-in bars"
+          >
+            <option value={0}>off</option>
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+          </Select>
+        </label>
+
+        <button
+          className={ctl + px + onOff(eng.followPlayhead)}
+          onClick={() => engine.setFollowPlayhead(!eng.followPlayhead)}
+          title="follow playhead"
+        >
+          follow
+        </button>
+
+        <GridMenu />
+
+        {/* tempo */}
+        <span className="ml-auto flex items-center gap-2">
+          <button
+            className={ctl + px + idle}
+            onClick={() => engine.tapTempo()}
+            title="tap tempo"
+          >
+            tap
+          </button>
+          <Knob
+            value={eng.arrangement.bpm}
+            min={40}
+            max={220}
+            defaultValue={120}
+            size={36}
+            onChange={(v) => engine.setArrangementBpm(v)}
+            label="tempo"
+            fmt={(v) => Math.round(v) + ""}
+          />
+        </span>
       </div>
 
-      {eng.recording && eng.arrangement.loop?.on && (
-        <div className="font-mono text-[9.5px] text-faint" role="status">
-          punch = loop brace — audio only keeps PCM inside the loop
+      {eng.recording && loopOn && (
+        <div className="px-2.5 font-mono text-[9.5px] text-faint" role="status">
+          punch = loop brace — audio keeps PCM inside the loop
         </div>
       )}
     </div>

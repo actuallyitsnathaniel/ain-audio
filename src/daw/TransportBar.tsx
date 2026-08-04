@@ -121,6 +121,8 @@ export function TransportBar() {
     }
   };
 
+  const onStudio = location.pathname === "/studio";
+
   return (
     <header className="tbar-bg fixed top-0 inset-x-0  z-50 flex h-13 items-center gap-5 border-b border-line px-4 max-[760px]:gap-2.5 max-[760px]:overflow-x-auto">
       <button
@@ -132,10 +134,16 @@ export function TransportBar() {
       >
         <span className="size-3.5  rounded-xs bg-accent" />
         <span className="font-mono text-[12px] font-semibold tracking-[0.14em]">
-          AIN·AUDIO
+          AIN·
+          {onStudio ? (
+            <span className="text-accent">STUDIO</span>
+          ) : (
+            "AUDIO"
+          )}
         </span>
       </button>
-      <MiniTransport />
+      {/* Portfolio A/B player — hidden on /studio (has its own transport) */}
+      {!onStudio && <MiniTransport />}
       <nav className="ml-auto flex gap-0.5 max-[760px]:gap-0">
         {NAV.map((n) => (
           <button
@@ -149,7 +157,7 @@ export function TransportBar() {
         <button
           className={
             "rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] tracking-[0.06em] whitespace-nowrap transition-[color,background] duration-150 hover:bg-panel2 max-[760px]:px-1.75 " +
-            (location.pathname === "/studio" ? "text-accent" : "text-dim hover:text-daw-text")
+            (onStudio ? "text-accent" : "text-dim hover:text-daw-text")
           }
           onClick={() => navigate("/studio")}
         >

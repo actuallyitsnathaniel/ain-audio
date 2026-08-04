@@ -89,7 +89,7 @@ export function GridMenu() {
   }, [open]);
 
   const summary = snapLabel(eng.snapBeats, bpb);
-  const activeExtras = eng.followPlayhead || eng.midiKeys || eng.launchQuant > 0;
+  const activeExtras = eng.midiKeys || eng.launchQuant > 0;
 
   return (
     <div ref={root} className="relative">
@@ -97,7 +97,7 @@ export function GridMenu() {
         type="button"
         className={ctl + px + onOff(open || activeExtras)}
         onClick={() => setOpen((o) => !o)}
-        title="grid — snap, launch quantize, follow playhead, computer MIDI keys"
+        title="grid — snap, launch quantize, computer MIDI keys"
         aria-expanded={open}
       >
         grid · {summary}
@@ -145,14 +145,6 @@ export function GridMenu() {
           </label>
 
           <div className="flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              className={ctl + px + onOff(eng.followPlayhead)}
-              onClick={() => engine.setFollowPlayhead(!eng.followPlayhead)}
-              title="auto-scroll the timeline to follow the playhead"
-            >
-              follow
-            </button>
             <button
               type="button"
               className={ctl + px + onOff(eng.midiKeys)}

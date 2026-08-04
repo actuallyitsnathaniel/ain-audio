@@ -4063,13 +4063,36 @@ class AudioEngine {
     this.saveArr();
   }
   setArrangementLoop(start: number, end: number, on: boolean) {
-    this.arrangement.loop = {
-      start: Math.max(0, start),
-      end: Math.max(start + 0.25, end),
-      on,
-    };
+    const a = Math.max(0, Math.min(start, end));
+    const b = Math.max(a + 0.25, Math.max(start, end));
+    this.arrangement.loop = { start: a, end: b, on };
     this.loopOn = on;
     this.saveArr();
+  }
+
+  /** Turn the loop brace on spanning the time selection, or the selected clips. */
+  loopFromSelection(): boolean {
+    const ts = this.timeSel;
+    if (ts && ts.end > ts.start + 1e-6) {
+      this.setArrangementLoop(ts.start, ts.end, true);
+      return true;
+    }
+    if (this.selClips.size) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const t of this.arrangement.tracks) {
+        for (const c of t.clips) {
+          if (!this.selClips.has(c.id)) continue;
+          lo = Math.min(lo, c.startBeat);
+          hi = Math.max(hi, c.startBeat + c.lengthBeats);
+        }
+      }
+      if (hi > lo + 1e-6) {
+        this.setArrangementLoop(lo, hi, true);
+        return true;
+      }
+    }
+    return false;
   }
 
   // Voice one drum lane at `when`, into `dest`. Sample path reuses the same

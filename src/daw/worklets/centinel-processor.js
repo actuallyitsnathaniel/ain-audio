@@ -3,10 +3,11 @@
 // Soft speed: Fairbanks = within-note only; formant≥0.5 PSOLA = full ratio chase (D6).
 // formant ≥ 0.5 → period PSOLA on clear vowels (hysteresis + crossfade to Fairbanks).
 // Humanize = slower retune on sustains. Natural Vibrato scales AC residual.
+// Detector confidence: multipitch/reverb → hold retarget, ease correction.
 // Circular buffers N=2048; latency = N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-04l-soft-want";
+const CENTINEL_BUILD = "2026-08-04q-revert-gap";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -70,7 +71,7 @@ const PSOLA_GATE_MS = 22;
 /** Release formant-mode unity once PSOLA mix is at least this high. */
 const ONSET_PSOLA_READY = 0.88;
 /** Dry↔corrected wet crossfade (ms). Hard cuts here were the post-fixant pops. */
-const WET_XFADE_MS = 12;
+const WET_XFADE_MS = 18;
 /**
  * After a note commit, prefer a fresh PSOLA grain for this long (ms).
  * No dual-grain OLA — overlapping old+new grains read as a slap/delay.
@@ -89,6 +90,15 @@ const COMMIT_SOFT_MS = 90;
 const COMMIT_SOFT_FLOOR_MS = 85;
 /** Cold wet fade — slower than normal so the dry→tuned handoff isn't a step. */
 const COLD_WET_XFADE_MS = 28;
+/**
+ * Detector confidence (reverb / multipitch). Below RETARGET: don't start a new
+ * note hold. Below CORRECT: blend want toward dry. Ambiguous frames also floor
+ * soft Retune Speed briefly.
+ */
+const CONF_RETARGET = 0.55;
+const CONF_CORRECT = 0.42;
+const REVERB_SOFT_MS = 140;
+const REVERB_SOFT_FLOOR_MS = 100;
 /**
  * Humanize (Auto-Tune–style): after this note age, stretch Retune Speed on
  * sustains so short notes stay tight while long notes breathe.
@@ -175,11 +185,15 @@ function nearestScaleMidi(midi, key, scalePcs) {
 }
 
 /** Hold time: longer when soft so we don't commit to a wrong neighbor mid-glide. */
-function holdMsForSpeed(speedMs, coldStart) {
+function holdMsForSpeed(speedMs, coldStart, pitchConf) {
   if (!(speedMs >= 0.5)) return HOLD_MS_BASE;
   let ms = Math.max(HOLD_MS_BASE, Math.min(90, speedMs * 0.45));
   // Cold re-arm: slightly longer hold so the first note of a run isn't a wrong snap.
   if (coldStart) ms = Math.max(ms, Math.min(110, ms + 35));
+  // Reverb / low confidence: commit slower — fewer false neighbor snaps.
+  if (pitchConf < CONF_RETARGET) {
+    ms = Math.max(ms, Math.min(140, ms + 45));
+  }
   return ms;
 }
 
@@ -194,7 +208,7 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
   const n = buf.length;
   const tauMax = Math.min(n - 2, Math.floor(sr / fMin));
   const tauMin = Math.max(2, Math.floor(sr / fMax));
-  if (tauMax <= tauMin + 2) return { f0: 0, clarity: 0 };
+  if (tauMax <= tauMin + 2) return { f0: 0, clarity: 0, confidence: 0, ambiguous: false };
 
   for (let tau = 1; tau <= tauMax; tau++) {
     let sum = 0;
@@ -221,7 +235,9 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
       break;
     }
   }
-  if (tau >= tauMax || cmnd[tau] >= 1) return { f0: 0, clarity: 0 };
+  if (tau >= tauMax || cmnd[tau] >= 1) {
+    return { f0: 0, clarity: 0, confidence: 0, ambiguous: false };
+  }
 
   const tau2 = tau * 2;
   if (tau2 + 1 <= tauMax) {
@@ -240,8 +256,29 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
   const better = denom !== 0 ? tau + (x2 - x0) / denom : tau;
   const f0 = sr / better;
   const clarity = Math.max(0, Math.min(1, 1 - cmnd[tau]));
-  if (!(f0 >= fMin && f0 <= fMax)) return { f0: 0, clarity: 0 };
-  return { f0, clarity };
+  if (!(f0 >= fMin && f0 <= fMax)) {
+    return { f0: 0, clarity: 0, confidence: 0, ambiguous: false };
+  }
+
+  // Reverb / multipitch: a second CMND trough nearly as deep as the primary
+  // (skip octave harmonic neighborhood — those are expected).
+  let second = 1;
+  const nearLo = tau * 0.78;
+  const nearHi = tau * 1.28;
+  const octLo = tau * 1.85;
+  const octHi = tau * 2.2;
+  for (let t = tauMin; t <= tauMax; t++) {
+    if (t >= nearLo && t <= nearHi) continue;
+    if (t >= octLo && t <= octHi) continue;
+    if (cmnd[t] < second) second = cmnd[t];
+  }
+  const ambiguous = second < cmnd[tau] * 1.4 && second < 0.22;
+  let confidence = clarity;
+  if (ambiguous) confidence *= 0.42;
+  // Soften when primary trough isn't crisp either
+  if (cmnd[tau] > 0.1) confidence *= 0.85;
+
+  return { f0, clarity, confidence, ambiguous };
 }
 
 function cubicAt(buf, indd) {
@@ -332,6 +369,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._psolaOla = 0.7;
     /** Sticky want (clarity hysteresis) — gate slews toward this. */
     this._psolaWant = false;
+    /** Sticky Fairbanks/PSOLA path — hysteresis avoids hard-switch clicks. */
+    this._psolaPath = false;
     /** 0..1 Fairbanks→PSOLA crossfade (sample-rate smoothed). */
     this._psolaGate = 0;
     /** ms since arm/re-voice — PSOLA blocked until PSOLA_ONSET_MS. */
@@ -366,6 +405,11 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._havePitch = false;
     this._voiced = false;
     this._clarity = 0;
+    /** Smoothed detector confidence (clarity × multipitch penalty). */
+    this._pitchConf = 0;
+    this._ambiguous = false;
+    /** Brief soft speed floor after ambiguous (reverb) frames. */
+    this._reverbSoftMs = 0;
     this._stable = 0;
     this._armed = false;
     this._everLocked = false;
@@ -536,6 +580,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (this._commitSoftMs > 0 && spd < COMMIT_SOFT_FLOOR_MS) {
         spd = COMMIT_SOFT_FLOOR_MS;
       }
+      if (this._reverbSoftMs > 0 && spd < REVERB_SOFT_FLOOR_MS) {
+        spd = REVERB_SOFT_FLOOR_MS;
+      }
     }
     const h = Math.max(0, Math.min(1, humanize));
     if (h < 0.001 || this._noteAgeMs <= HUMANIZE_SUSTAIN_MS) return spd;
@@ -582,12 +629,17 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
    * another note (hysteresis). Nearest-neighbor alone flip-flops at midpoints.
    */
   _shouldRetarget(rawMidi, amount, flexCents, transpose) {
+    // Reverb multipitch: don't chase a new neighbor on ambiguous frames.
+    if (this._pitchConf < CONF_RETARGET) return false;
     const fresh = this._wantFromDet(rawMidi, amount, flexCents, transpose);
     const sticky = this._committedTgt;
     if (Math.abs(fresh.tgt - sticky) < 0.25) return false;
     const dSticky = Math.abs(rawMidi - sticky);
     const dFresh = Math.abs(rawMidi - fresh.tgt);
-    return dFresh + RETUNE_HYST_SEMI < dSticky;
+    // Stronger hysteresis when confidence is merely OK (verby).
+    const hyst =
+      RETUNE_HYST_SEMI + (1 - Math.min(1, this._pitchConf)) * 0.35;
+    return dFresh + hyst < dSticky;
   }
 
   _commitWant(det, amount, flexCents, transpose) {
@@ -638,7 +690,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
    */
   _applyCorrection(rawMidi, amount, speedMs, flexCents, transpose, vibrato) {
     const dtMs = this._detectDt * 1000;
-    const needHold = holdMsForSpeed(speedMs, this._coldStart);
+    const needHold = holdMsForSpeed(speedMs, this._coldStart, this._pitchConf);
     let justCommitted = false;
 
     if (!this._noteLocked) {
@@ -650,8 +702,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._commitWant(rawMidi, amount, flexCents, transpose);
       justCommitted = true;
     } else if (this._pendingHold) {
-      // Accumulate hold toward a candidate; don't clear on stays_locked chatter
-      if (Math.abs(rawMidi - this._holdCand) <= STAYS_LOCKED_SEMI) {
+      // Reverb: freeze hold clock while ambiguous — abort→recommit clicked.
+      if (this._pitchConf < CONF_RETARGET * 0.9) {
+        this._lockedDet += (rawMidi - this._lockedDet) * 0.1;
+      } else if (Math.abs(rawMidi - this._holdCand) <= STAYS_LOCKED_SEMI) {
         this._holdCand += (rawMidi - this._holdCand) * 0.4;
         this._holdAccumMs += dtMs;
         // Live det still tracks so R* keeps output on sticky want
@@ -714,7 +768,17 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     // Natural Vibrato: −1 flatten … 0 leave … +1 amplify AC residual onto want
     const vibAmt = Math.max(-1, Math.min(1, vibrato));
     const vibSemi = det - this._vibCenter;
-    const wantEff = this._committedWant + vibSemi * vibAmt;
+    let wantEff = this._committedWant + vibSemi * vibAmt;
+    // Continuous conf→dry blend (hard threshold at CONF_CORRECT reintroduced pops).
+    {
+      const lo = CONF_CORRECT * 0.55;
+      const hi = CONF_CORRECT * 1.35;
+      let u = (this._pitchConf - lo) / Math.max(1e-6, hi - lo);
+      if (u < 0) u = 0;
+      if (u > 1) u = 1;
+      u = u * u * (3 - 2 * u);
+      wantEff = det + (wantEff - det) * (0.25 + 0.75 * u);
+    }
     this._wantTgt = wantEff;
     // Soft+PSOLA slews _audibleWant in process(); robot snaps here.
     if (!(this._formant >= 0.5 && this._speedMs >= 0.5)) {
@@ -765,7 +829,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     }
 
     this._readMonoWindow(this._yinScratch);
-    const { f0, clarity } = yinPitch(
+    const { f0, clarity, confidence, ambiguous } = yinPitch(
       this._yinScratch,
       sampleRate,
       this._fMin,
@@ -774,8 +838,17 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._yinCmnd,
     );
     this._clarity = clarity;
+    this._ambiguous = !!ambiguous;
+    // EMA confidence — reverb chatters frame-to-frame
+    const confInst = f0 > 0 ? confidence : clarity * 0.3;
+    if (!this._havePitch) this._pitchConf = confInst;
+    else this._pitchConf += (confInst - this._pitchConf) * 0.28;
+    if (ambiguous) this._reverbSoftMs = REVERB_SOFT_MS;
+
     const gate = 0.14 + (1 - Math.max(0, Math.min(1, tracking))) * 0.5;
     const loudEnough = this._analysisRms >= RMS_GATE;
+    // Voiced vs unvoiced uses clarity. Confidence only damps trust/retarget —
+    // routing ambiguous frames as unvoiced yanked R*→1 and clicked.
 
     let det = this._detMidi;
     let tgt = this._tgtMidi;
@@ -792,6 +865,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           midi = this._lockedDet || this._detMidi;
         } else {
           this._stable++;
+          const trust = Math.max(
+            0.12,
+            Math.min(1, (this._pitchConf - gate) / 0.4),
+          );
+          const prev = this._lockedDet || this._detMidi;
+          midi = prev + (midi - prev) * (0.15 + 0.85 * trust);
         }
       } else {
         if (this._stable === 0) {
@@ -832,6 +911,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._psolaPeStable = 0;
           this._psolaPePrev = 0;
           this._psolaOla = 0.7;
+          this._psolaPath = false;
           // Bare riff/run after silence — soften first audible correction
           this._coldStart = true;
           this._coldStartMs = 0;
@@ -864,13 +944,23 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._tgtMidi = tgt;
         out = midi;
       }
+    } else if (loudEnough && this._armed && this._havePitch) {
+      // Still energy but weak clarity: hold last lock — do not unvoice (R*→1 clicked).
+      this._voiced = true;
+      this._unvoicedN = Math.max(0, this._unvoicedN - 1);
+      this._psolaOnsetMs += this._detectDt * 1000;
+      const midi = this._lockedDet;
+      const c = this._applyCorrection(midi, amount, speedMs, flexCents, transpose, vibrato);
+      det = c.det;
+      tgt = c.tgt;
+      out = c.out;
     } else {
       this._voiced = false;
       this._unvoicedN++;
       this._clarity *= 0.9;
       this._stable = Math.max(0, this._stable - 1);
-      this.phincfact += (1 - this.phincfact) * 0.12;
-      this._phincSlew += (this.phincfact - this._phincSlew) * 0.12;
+      this.phincfact += (1 - this.phincfact) * 0.04;
+      this._phincSlew += (this.phincfact - this._phincSlew) * 0.04;
       this.outphinc = this.inphinc * Math.max(FACT_MIN, Math.min(FACT_MAX, this.phincfact));
       if (this._unvoicedN >= UNVOICED_DROP) {
         this._armed = false;
@@ -884,11 +974,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._psolaOnsetMs = 0;
         this._psolaPeStable = 0;
         this._psolaPePrev = 0;
+        this._psolaPath = false;
         this._clearCommitRecapture();
         this._noteAgeMs = 0;
         this._coldStart = false;
         this._coldStartMs = 0;
         this._commitSoftMs = 0;
+        this._reverbSoftMs = 0;
+        this._pitchConf = 0;
         this._onsetUnity = false;
         this._onsetUnityMs = 0;
         // Stop synthesizing at the *previous* phrase's period across the gap.
@@ -1097,12 +1190,16 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
 
   _placeFrag() {
     if (this._formant < 0.5) {
+      this._psolaPath = false;
       this._placeFragFairbanks(1);
       return;
     }
     const g = this._psolaGate;
-    // Hard switch — dual Fairbanks+PSOLA into the same OLA comb-filters / delays.
-    if (g < 0.5 || this._psolaHalf < 8) {
+    const halfOk = this._psolaHalf >= 8;
+    if (!halfOk) this._psolaPath = false;
+    else if (g >= 0.58) this._psolaPath = true;
+    else if (g < 0.38) this._psolaPath = false;
+    if (!this._psolaPath) {
       this._placeFragFairbanks(1);
       return;
     }
@@ -1204,6 +1301,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         if (this._commitSoftMs > 0) {
           this._commitSoftMs -= 1000 / sampleRate;
           if (this._commitSoftMs < 0) this._commitSoftMs = 0;
+        }
+        if (this._reverbSoftMs > 0) {
+          this._reverbSoftMs -= 1000 / sampleRate;
+          if (this._reverbSoftMs < 0) this._reverbSoftMs = 0;
         }
 
         // Soft+PSOLA: Retune Speed owns want glide (per-sample). Robot snaps in lowRate.
@@ -1317,7 +1418,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
             this._speedMs >= 0.5
           ) {
             const cents = Math.abs(this._wantTgt - this._audibleWant) * 100;
-            if (cents > COLD_WET_CENTS) wantWet = 0;
+            const open =
+              1 - (cents - COLD_WET_CENTS * 0.4) / (COLD_WET_CENTS * 1.2);
+            wantWet = open < 0 ? 0 : open > 1 ? 1 : open;
           }
         }
         this._wetMix += (wantWet - this._wetMix) * wetXfadeAlpha;
@@ -1362,11 +1465,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._psolaGate = 0;
         this._psolaOnsetMs = 0;
         this._psolaPeStable = 0;
+        this._psolaPath = false;
         this._clearCommitRecapture();
         this._noteAgeMs = 0;
         this._coldStart = false;
         this._coldStartMs = 0;
         this._commitSoftMs = 0;
+        this._reverbSoftMs = 0;
+        this._pitchConf = 0;
         this._onsetUnity = false;
         this._onsetUnityMs = 0;
         this._armed = false;

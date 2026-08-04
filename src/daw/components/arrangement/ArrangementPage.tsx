@@ -6,12 +6,9 @@
 // engine's arrangement; everything auto-saves to localStorage.
 
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useAinFileLaunch } from "../../hooks/useAinFileLaunch";
-import { SectionHead } from "../SectionHead";
-import { TrackSection } from "../TrackSection";
 import { Knob } from "../Knob";
 import { FxRack } from "../audio-lab/FxRack";
 import { FxChainRack } from "../FxChainRack";
@@ -29,7 +26,7 @@ import { openContextMenu } from "../context-menu-bus";
 import { requestMidiEnable } from "../midi-gate-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
-const HEAD_H = 26; // must match Timeline
+const HEAD_H = 30; // must match Timeline
 const ROW_H = 64; // must match Timeline ROW_H
 const KIND_BAR: Record<TrackKind, string> = {
   midi: "#4a7fd4",
@@ -471,6 +468,16 @@ export function ArrangementPage() {
         else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
         return;
       }
+      // ⌘L — set loop brace from the time / clip selection (and turn it on)
+      if (key === "l" && meta) {
+        e.preventDefault();
+        if (!engine.loopFromSelection()) {
+          const l = engine.arrangement.loop;
+          if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
+          else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
+        }
+        return;
+      }
       // MIDI record (first slice) — Shift+R so bare R keeps reverse-selection
       if (key === "r" && e.shiftKey && !meta) {
         e.preventDefault();
@@ -598,71 +605,91 @@ export function ArrangementPage() {
   const focusRing = " ring-1 ring-[color-mix(in_srgb,var(--accent)_30%,transparent)]";
 
   return (
-    <main className="relative z-1 pt-16">
-      <TrackSection id="studio" label="studio" rail="05">
-        <SectionHead num="05" title="studio" sub="linear timeline · place midi, drum + audio clips on tracks · runs through the fx rack" />
-
-        <div className="flex flex-col gap-3 rounded-[5px] border border-line bg-panel p-4 max-[767px]:p-3" onPointerDownCapture={() => focusPane("timeline")}>
-          {/* File — top-left above transport (Ableton convention) */}
-          <FileMenu
-            prefsOpen={prefsOpen}
-            onPrefsOpenChange={setPrefsOpen}
-            onRequestAccept={requestAccept}
-            onNewProject={() => {
-              if (
-                window.confirm(
-                  "New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?",
-                )
-              ) {
-                void engine.newProject();
-                setEditSel(null);
-              }
-            }}
-          />
-
-          <PlaybackPane />
-
-          {/* tracks toolbar */}
+    <main
+      id="studio"
+      data-screen-label="studio"
+      className="relative z-1 flex min-h-[calc(100vh-3.5rem)] flex-col pt-14"
+    >
+      {/* Studio app chrome — full-bleed DAW, not a numbered portfolio section.
+          Padding matches the site transport bar (px-4) so File lines up under AIN·STUDIO. */}
+      <div className="mx-auto flex w-full max-w-400 flex-1 flex-col px-4 pb-3 max-[767px]:px-3">
+        {/* toolbar — File flush left; no redundant "studio" title (lives in the nav mark) */}
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-line py-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-[9px] tracking-widest text-faint">TRACKS</span>
+            <FileMenu
+              prefsOpen={prefsOpen}
+              onPrefsOpenChange={setPrefsOpen}
+              onRequestAccept={requestAccept}
+              onNewProject={() => {
+                if (
+                  window.confirm(
+                    "New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?",
+                  )
+                ) {
+                  void engine.newProject();
+                  setEditSel(null);
+                }
+              }}
+            />
+            <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" aria-hidden />
+            <span className="font-mono text-[9px] tracking-widest text-faint">
+              +
+            </span>
             <button
               type="button"
-              className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+              className="flex h-7 items-center rounded-sm border border-line2 px-2 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
               onClick={() => addTrack("midi")}
             >
-              + midi
+              midi
             </button>
             <button
               type="button"
-              className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+              className="flex h-7 items-center rounded-sm border border-line2 px-2 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
               onClick={() => addTrack("drum")}
             >
-              + drum
+              drum
             </button>
             <button
               type="button"
-              className="flex h-7 items-center rounded-sm border border-line2 px-2.5 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
+              className="flex h-7 items-center rounded-sm border border-line2 px-2 font-mono text-[10px] text-dim transition-colors hover:border-accent hover:text-accent"
               onClick={() => addTrack("audio")}
             >
-              + audio
+              audio
             </button>
           </div>
+          <div className="ml-auto flex items-center gap-2">
+            <ShortcutsHelp />
+          </div>
+        </header>
 
-          <StudioStatusStrip
-            onOpenIo={() => {
-              if (!engine.hasAudioAccepted()) {
-                requestAccept(() => setPrefsOpen(true));
-                return;
-              }
-              setPrefsOpen(true);
-            }}
-          />
+        {/* workspace */}
+        <div
+          className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-sm border border-line bg-[#0c0c10]"
+          onPointerDownCapture={() => focusPane("timeline")}
+        >
+          <PlaybackPane />
 
-          {/* track headers (left) + timeline (right), with the MASTER row pinned below */}
-          <div className={"overflow-hidden rounded-sm border border-line" + (editorOpen && paneShown === "timeline" ? focusRing : "")}>
+          <div className="px-2 pt-1.5 pb-1">
+            <StudioStatusStrip
+              onOpenIo={() => {
+                if (!engine.hasAudioAccepted()) {
+                  requestAccept(() => setPrefsOpen(true));
+                  return;
+                }
+                setPrefsOpen(true);
+              }}
+            />
+          </div>
+
+          {/* track headers (left) + timeline (right), MASTER pinned below */}
+          <div
+            className={
+              "mx-2 mb-2 min-h-0 flex-1 overflow-hidden rounded-sm border border-line" +
+              (editorOpen && paneShown === "timeline" ? focusRing : "")
+            }
+          >
             <div className="flex">
               <div className="w-60 shrink-0 border-r border-line bg-[#0e0e12]">
-                {/* spacer strip aligns the header column with the timeline's ruler */}
                 <div className="border-b border-line" style={{ height: HEAD_H }} />
                 {tracks.map((t) => (
                   <TrackHeader
@@ -682,27 +709,30 @@ export function ArrangementPage() {
                 ))}
                 {tracks.length === 0 && (
                   <div className="px-2.5 py-3 font-mono text-[9px] leading-snug text-faint">
-                    no tracks — add midi / drum / audio above, then double-click a lane.
+                    no tracks — add midi / drum / audio above, then double-click a
+                    lane.
                   </div>
                 )}
               </div>
               <div className="min-w-0 flex-1">
                 <Timeline
-                height={Math.max(160, HEAD_H + tracks.length * ROW_H)}
-                onEditClip={(trackId, clipId) => {
-                  setEditSel({ trackId, clipId });
-                  focusPane("editor"); // double-click-to-edit focuses the editor (Ableton)
-                }}
-                zoomApiRef={zoomApiRef}
-              />
+                  height={Math.max(160, HEAD_H + tracks.length * ROW_H)}
+                  onEditClip={(trackId, clipId) => {
+                    setEditSel({ trackId, clipId });
+                    focusPane("editor");
+                  }}
+                  zoomApiRef={zoomApiRef}
+                />
               </div>
             </div>
-            {/* MASTER — the mix bus as its own pinned track row (Ableton-style) */}
             <div className="flex border-t border-line">
               <div className="w-60 shrink-0 border-r border-line bg-[color-mix(in_srgb,var(--accent)_7%,#0e0e12)]">
-                <MasterHeader fxOpen={fxTrackId === MASTER_ID} onFx={() => toggleFx(MASTER_ID)} />
+                <MasterHeader
+                  fxOpen={fxTrackId === MASTER_ID}
+                  onFx={() => toggleFx(MASTER_ID)}
+                />
               </div>
-              <div className="flex min-w-0 flex-1 items-center bg-[#0c0c10] px-3">
+              <div className="flex min-w-0 flex-1 items-center bg-[#0a0a0e] px-3">
                 <span className="font-mono text-[9px] tracking-[0.08em] text-faint">
                   sum bus · all tracks → master fx → out
                 </span>
@@ -710,17 +740,18 @@ export function ArrangementPage() {
             </div>
           </div>
 
-          {/* ── EDITOR pane (instrument · clip editor · fx) ── */}
           {editorOpen && (
             <div
               className={
-                "flex flex-col gap-2.5 rounded-sm border border-line2 bg-[#0c0c10] p-2.5 " +
+                "mx-2 mb-2 flex flex-col gap-2.5 rounded-sm border border-line2 bg-[#0a0a0e] p-2.5 " +
                 (paneShown === "editor" ? focusRing : "")
               }
               onPointerDownCapture={() => focusPane("editor")}
             >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="font-mono text-[9px] tracking-widest text-faint">EDITOR</span>
+                <span className="font-mono text-[9px] tracking-widest text-faint">
+                  EDITOR
+                </span>
                 <span className="min-w-0 truncate font-mono text-[9.5px] text-dim">
                   {[
                     sel &&
@@ -744,17 +775,7 @@ export function ArrangementPage() {
             </div>
           )}
         </div>
-
-        <div className="mt-3.5 flex flex-wrap items-center gap-2 font-mono text-[10.5px] tracking-[0.03em] text-faint">
-          <Link
-            to="/"
-            className="flex h-7 shrink-0 items-center rounded-sm border border-line2 px-2.5 text-dim transition-colors hover:border-accent hover:text-accent"
-          >
-            ← back to the lab
-          </Link>
-          <ShortcutsHelp />
-        </div>
-      </TrackSection>
+      </div>
 
       {acceptOpen && (
         <div data-audio-accept>
