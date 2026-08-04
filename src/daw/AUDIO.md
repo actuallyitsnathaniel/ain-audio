@@ -448,8 +448,12 @@ works with no helper. Open accepts either extension (trailer sniff).
 
 Working copy stays `localStorage` (`ain-arrangement`) + IndexedDB; Save/Open live
 in the **File** menu ([FileMenu](components/arrangement/FileMenu.tsx) +
-[SaveAinPanel](components/arrangement/SaveAinPanel.tsx)). **Bounce Mix…** caches
-the bounce used as the WAV head; Save without a bounce records one first.
+[SaveAinPanel](components/arrangement/SaveAinPanel.tsx)). **Bounce Mix…**
+([BounceMixPanel](components/arrangement/BounceMixPanel.tsx)) is a realtime
+`MediaRecorder` capture of the master bus: pick **Loop** (one pass of the loop
+brace) or **Full**, and **WAV** (PCM16, default — opens everywhere) or **WebM**
+(Opus). Metronome / count-in are muted for the bounce. The capture also caches
+the bounce used as the `.ain` WAV head; Save without a bounce records one first.
 
 | Zip path | Contents |
 |----------|----------|

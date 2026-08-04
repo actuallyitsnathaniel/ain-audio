@@ -26,6 +26,7 @@ dist-ssr
 .env
 db.json
 TODO.md
+*.tmp*
 
 # showcase capture artifacts
 showcase/

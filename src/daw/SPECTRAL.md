@@ -433,7 +433,11 @@ shift path on the same analyze/synthesize spine.
 Live **centinel** is YIN + **stays_locked / hold** note commit + **ratio** control
 into Fairbanks OLA (or period **PSOLA** when `formant ≥ 0.5`). Soft **speed** under
 Fairbanks is *within-note* only; under PSOLA it chases `R*` across note changes (D6).
-Soft MIDI springs were removed — they diphthonged by lagging `out` while `in`
+Phrase onset (formant on): hold **R=1** with level up until PSOLA mix is ready, then
+chase — never Fairbanks-shift first (that was the low-formant / gate / click trap).
+Unvoiced DROP must clear `_everLocked` + phases — otherwise the prior phrase’s period
+keeps synthesizing across the gap and the next onset reads an octave low (~15–25ms)
+before snapping (see `ab_12.1_octave.wav`). Soft MIDI springs were removed — they diphthonged by lagging `out` while `in`
 tracked live det. Neural F0 (PESTO / SwiftF0) is a later detector option if YIN
 still limits quality; do not swap the shifter for that. The YIN + phase-vocoder path was the wrong latency class for
 Auto-Tune–style hard lock, but it is a solid starting point for a **spectral-time /

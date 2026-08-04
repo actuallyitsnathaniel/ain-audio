@@ -8,6 +8,7 @@ import { useEngine } from "../../hooks/useEngine";
 import { AudioPrefsPanel } from "./AudioPrefsPanel";
 import { AudioAcceptSheet } from "./AudioAcceptSheet";
 import { AudioSessionNudges } from "./AudioSessionNudges";
+import { BounceMixPanel } from "./BounceMixPanel";
 import { SaveAinPanel } from "./SaveAinPanel";
 
 function AinMark({ className = "" }: { className?: string }) {
@@ -56,17 +57,21 @@ export function FileMenu({
   const eng = useEngine(["transport"]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [bounceOpen, setBounceOpen] = useState(false);
   const [rereadAccept, setRereadAccept] = useState(false);
   const [busy, setBusy] = useState<"save" | "open" | "bounce" | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!menuOpen && !saveOpen) return;
+    if (!menuOpen && !saveOpen && !bounceOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setMenuOpen(false);
-        if (!busy) setSaveOpen(false);
+        if (!busy) {
+          setSaveOpen(false);
+          setBounceOpen(false);
+        }
       }
     };
     const onPtr = (e: PointerEvent) => {
@@ -77,8 +82,12 @@ export function FileMenu({
       if ((t as HTMLElement).closest?.("[data-audio-prefs-open]")) return;
       if ((t as HTMLElement).closest?.("[data-audio-accept]")) return;
       if ((t as HTMLElement).closest?.("[data-ain-save]")) return;
+      if ((t as HTMLElement).closest?.("[data-ain-bounce]")) return;
       setMenuOpen(false);
-      if (!busy) setSaveOpen(false);
+      if (!busy) {
+        setSaveOpen(false);
+        setBounceOpen(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerdown", onPtr, true);
@@ -86,11 +95,12 @@ export function FileMenu({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onPtr, true);
     };
-  }, [menuOpen, saveOpen, busy]);
+  }, [menuOpen, saveOpen, bounceOpen, busy]);
 
   const openPrefs = () => {
     setMenuOpen(false);
     setSaveOpen(false);
+    setBounceOpen(false);
     const go = () => onPrefsOpenChange(true);
     if (!engine.hasAudioAccepted() && onRequestAccept) {
       onRequestAccept(go);
@@ -106,7 +116,14 @@ export function FileMenu({
 
   const openSave = () => {
     setMenuOpen(false);
+    setBounceOpen(false);
     setSaveOpen(true);
+  };
+
+  const openBounce = () => {
+    setMenuOpen(false);
+    setSaveOpen(false);
+    setBounceOpen(true);
   };
 
   const openAin = async (file: File) => {
@@ -132,30 +149,10 @@ export function FileMenu({
     }
   };
 
-  const bounceMix = async () => {
-    if (busy) return;
-    setMenuOpen(false);
-    setSaveOpen(false);
-    const name = window.prompt("Export mix as…", "mix")?.trim() || "mix";
-    if (
-      !window.confirm(
-        "Bounce will play the arrangement in real time and download the mix (you’ll hear it). Continue?",
-      )
-    )
-      return;
-    setBusy("bounce");
-    try {
-      await engine.bounceMix(name);
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : "Couldn't bounce mix");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const newProject = () => {
     setMenuOpen(false);
     setSaveOpen(false);
+    setBounceOpen(false);
     onNewProject();
   };
 
@@ -179,16 +176,22 @@ export function FileMenu({
           type="button"
           data-file-menu
           className={
-            ctl + px + onOff(menuOpen || saveOpen || ioLive || busy !== null)
+            ctl +
+            px +
+            onOff(menuOpen || saveOpen || bounceOpen || ioLive || busy !== null)
           }
           onClick={() => {
             if (saveOpen) {
               setSaveOpen(false);
               return;
             }
+            if (bounceOpen) {
+              setBounceOpen(false);
+              return;
+            }
             setMenuOpen((o) => !o);
           }}
-          aria-expanded={menuOpen || saveOpen}
+          aria-expanded={menuOpen || saveOpen || bounceOpen}
           title="File — new, open, save, bounce, I/O"
         >
           {fileLabel}
@@ -247,7 +250,7 @@ export function FileMenu({
               role="menuitem"
               className={item}
               disabled={busy !== null}
-              onClick={() => void bounceMix()}
+              onClick={openBounce}
             >
               <span>
                 {busy === "bounce" || eng.bouncing
@@ -287,6 +290,16 @@ export function FileMenu({
               setBusy(null);
             }}
             onBusy={(on) => setBusy(on ? "save" : null)}
+          />
+        )}
+
+        {bounceOpen && (
+          <BounceMixPanel
+            onClose={() => {
+              setBounceOpen(false);
+              setBusy(null);
+            }}
+            onBusy={(on) => setBusy(on ? "bounce" : null)}
           />
         )}
 

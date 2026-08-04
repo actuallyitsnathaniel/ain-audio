@@ -1001,7 +1001,12 @@ function buildCentinel(ctx: AudioContext): FxDeviceNodes {
       });
       node.port.onmessage = (ev) => {
         const d = ev.data;
-        if (!d || d.type !== "viz") return;
+        if (!d) return;
+        if (d.type === "build") {
+          console.info(`[centinel] worklet build ${d.build}`);
+          return;
+        }
+        if (d.type !== "viz") return;
         ingestFxVizMessage(viz, d);
       };
       if (passthrough) {

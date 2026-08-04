@@ -2877,6 +2877,8 @@ class AudioEngine {
     this._spectralWorkletsReady = (async () => {
       try {
         const c = this.ensureCtx();
+        // AudioWorklet modules stick to the AudioContext — HMR never replaces them.
+        // Full page reload is required after editing worklets (see hot.accept below).
         await Promise.all([
           c.audioWorklet.addModule(
             new URL("./worklets/impartialer-processor.js", import.meta.url),
@@ -4695,9 +4697,14 @@ class AudioEngine {
    * Realtime mix bounce: record the master bus while playing the arrangement
    * (full FX / MIDI / drums — whatever you hear). Returns the recorded blob and
    * caches it for `.ain` preview embedding.
+   *
+   * `range: "loop"` plays one pass of the loop brace (no wrap). `range: "full"`
+   * (default when the brace is off) plays from 0 through the arrangement end.
    */
   bouncing = false;
-  async recordMixBounce(): Promise<Blob> {
+  async recordMixBounce(
+    opts: { range?: "loop" | "full" } = {},
+  ): Promise<Blob> {
     if (this.bouncing) throw new Error("Bounce already in progress");
     const c = this.ensureCtx();
     const n = this.nodes;
@@ -4713,6 +4720,25 @@ class AudioEngine {
           ? "audio/mp4"
           : "";
     if (!mime) throw new Error("No supported MediaRecorder audio type");
+
+    const loop = this.arrangement.loop;
+    const useLoop =
+      opts.range === "loop" &&
+      !!loop &&
+      loop.end > loop.start + 1e-6;
+    if (opts.range === "loop" && !useLoop)
+      throw new Error("Turn on the loop brace (or set a range) before bouncing the loop");
+
+    const startBeat = useLoop ? loop!.start : 0;
+    const endBeat = useLoop
+      ? loop!.end
+      : Math.max(
+          arrangementBeats(this.arrangement),
+          this.arrangement.beatsPerBar,
+        );
+    // +1.5s tail for master FX / reverb
+    const durationMs =
+      (((endBeat - startBeat) * 60) / this.arrangement.bpm + 1.5) * 1000;
 
     if (this.sequencePlaying) this.stopArrangement();
     this.bouncing = true;
@@ -4731,17 +4757,19 @@ class AudioEngine {
       rec.onerror = () => reject(new Error("Mix recording failed"));
     });
 
-    const endBeat = Math.max(
-      arrangementBeats(this.arrangement),
-      this.arrangement.beatsPerBar,
-    );
-    // +1.5s tail for master FX / reverb
-    const durationMs =
-      ((endBeat * 60) / this.arrangement.bpm + 1.5) * 1000;
+    // Don't bake count-in / metronome / loop-wrap into the download.
+    const savedCountIn = this.countInBars;
+    const savedMetro = this.metronome;
+    this.countInBars = 0;
+    this.metronome = false;
 
     try {
       rec.start(100);
-      this.playArrangement(0);
+      this.arrangeMode = true;
+      this.bpm = this.arrangement.bpm;
+      this.loopOn = false; // one pass — no brace wrap mid-bounce
+      this.warmArrangement();
+      this.playSequence(startBeat);
       await new Promise<void>((r) => setTimeout(r, durationMs));
       if (this.sequencePlaying) this.stopArrangement();
       await new Promise<void>((r) => setTimeout(r, 250)); // flush into recorder
@@ -4753,6 +4781,8 @@ class AudioEngine {
       };
       return blob;
     } finally {
+      this.countInBars = savedCountIn;
+      this.metronome = savedMetro;
       try {
         n.master.disconnect(dest);
       } catch {
@@ -4781,20 +4811,41 @@ class AudioEngine {
   }
 
   /**
-   * Realtime mix bounce → download .webm (Opus) or .m4a. Also refreshes the
-   * cached bounce used when saving `.ain`.
+   * Realtime mix bounce → download. Default format is PCM WAV (opens in every
+   * DAW). `webm` keeps the raw MediaRecorder Opus/WebM (or m4a on Safari).
+   * Also refreshes the cached bounce used when saving `.ain`.
    */
-  async bounceMix(name = "mix"): Promise<void> {
-    const blob = await this.recordMixBounce();
-    const mime = blob.type;
-    const ext = mime.includes("mp4") ? "m4a" : "webm";
+  async bounceMix(
+    name = "mix",
+    opts: { range?: "loop" | "full"; format?: "wav" | "webm" } = {},
+  ): Promise<void> {
+    const format = opts.format ?? "wav";
+    const blob = await this.recordMixBounce({ range: opts.range ?? "full" });
     const base = name
       .trim()
       .replace(/[^\w-]+/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "")
-      .slice(0, 64);
-    downloadBlob(blob, `${base || "mix"}.${ext}`);
+      .slice(0, 64) || "mix";
+
+    if (format === "wav") {
+      const c = this.ensureCtx();
+      // Prefer the cached copy — decodeAudioData detaches its input buffer.
+      const src = this._lastMixBounce?.bytes.slice(0) ?? (await blob.arrayBuffer());
+      let buf: AudioBuffer;
+      try {
+        buf = await c.decodeAudioData(src);
+      } catch {
+        throw new Error("Couldn't decode mix bounce to WAV");
+      }
+      const wav = encodeWavPcm16(buf);
+      downloadBlob(new Blob([wav], { type: "audio/wav" }), `${base}.wav`);
+      return;
+    }
+
+    const mime = blob.type;
+    const ext = mime.includes("mp4") ? "m4a" : "webm";
+    downloadBlob(blob, `${base}.${ext}`);
   }
 
   /**
@@ -7253,3 +7304,24 @@ export const engine = new AudioEngine();
 // production builds, so it tree-shakes out. ponytail: drop if it ever ships.
 if (import.meta.env.DEV)
   (globalThis as { engine?: AudioEngine }).engine = engine;
+
+// AudioWorklet processors register once per AudioContext and never hot-swap.
+// Editing a worklet without a full reload silently keeps the old DSP running.
+if (import.meta.hot) {
+  const reload = (file: string) => {
+    console.warn(`[ain] ${file} changed — full reload (AudioWorklet cannot HMR)`);
+    location.reload();
+  };
+  import.meta.hot.accept("./worklets/centinel-processor.js", () =>
+    reload("centinel-processor.js"),
+  );
+  import.meta.hot.accept("./worklets/impartialer-processor.js", () =>
+    reload("impartialer-processor.js"),
+  );
+  import.meta.hot.accept("./worklets/speccomp-processor.js", () =>
+    reload("speccomp-processor.js"),
+  );
+  import.meta.hot.accept("./worklets/cliplim-processor.js", () =>
+    reload("cliplim-processor.js"),
+  );
+}

@@ -3,6 +3,9 @@
 // Soft speed: Fairbanks = within-note only; formant≥0.5 PSOLA = full ratio chase (D6).
 // formant ≥ 0.5 → period PSOLA on clear vowels (hysteresis + crossfade to Fairbanks).
 // humanize inert. Circular buffers N=2048; latency = N/2.
+//
+// Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
+const CENTINEL_BUILD = "2026-08-04c-octave-drypass";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -44,16 +47,27 @@ const PSOLA_CLARITY_OFF = 0.32;
 /** Extra clarity required below this f0 (Hz) — low notes octave-chatter on onset. */
 const PSOLA_LOW_HZ = 140;
 const PSOLA_LOW_CLARITY_BONUS = 0.14;
-/** Stay on Fairbanks this long after arm/re-voice before PSOLA may engage. */
-const PSOLA_ONSET_MS = 120;
-/** Consecutive analysis hops with stable PE before trusting a PSOLA grain. */
+/**
+ * After arm/re-voice, wait this long before PSOLA may engage (PE settle).
+ * Pitch correction under formant mode stays at R=1 until PSOLA owns the path —
+ * Fairbanks-shifting first is the classic phrase-start “low formant” glitch.
+ */
+const PSOLA_ONSET_MS = 80;
+/** Consecutive analysis hops with stable PE before *entering* PSOLA. */
 const PSOLA_PE_STABLE_NEED = 3;
-/** Pure delayed-dry until pitch/PE settle — stops onset formant trash in the wet path. */
-const OLA_ONSET_HOLDOFF_MS = 100;
-/** Failsafe: never stay dry-only longer than this after arm. */
-const OLA_ONSET_HOLDOFF_MAX_MS = 180;
-/** Fairbanks↔PSOLA crossfade (ms) — kills consonant-edge clicks. */
-const PSOLA_GATE_MS = 18;
+/**
+ * Mid-stream PE may jump this much (relative) without discarding the grain.
+ * A major 3rd ≈ 26% period change — must NOT dump to Fairbanks (formant smear).
+ */
+const PSOLA_PE_KEEP_REL = 0.35;
+/** Fairbanks-only: min unity settle before allowing R* (ms). */
+const ONSET_UNITY_MS = 40;
+/** Failsafe: never hold R=1 longer than this after arm (ms). */
+const ONSET_UNITY_MAX_MS = 260;
+/** Fairbanks↔PSOLA crossfade (ms) — longer = less click at handoff. */
+const PSOLA_GATE_MS = 22;
+/** Release formant-mode unity once PSOLA mix is at least this high. */
+const ONSET_PSOLA_READY = 0.88;
 
 const SCALE_PCS = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -178,7 +192,9 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
     let t2 = tau2;
     if (t2 > 1 && cmnd[t2 - 1] < cmnd[t2]) t2--;
     if (t2 + 1 <= tauMax && cmnd[t2 + 1] < cmnd[t2]) t2++;
-    if (cmnd[t2] <= cmnd[tau] * 1.08) tau = t2;
+    // Prefer longer period only when it is *clearly* as good — 1.08 was
+    // octave-downing clean high notes (half-period trough is always deep).
+    if (cmnd[t2] <= cmnd[tau] * 1.02 && cmnd[t2] < 0.1) tau = t2;
   }
 
   const x0 = tau > 1 ? cmnd[tau - 1] : cmnd[tau];
@@ -280,8 +296,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     /** Previous analysis PE for stability check. */
     this._psolaPePrev = 0;
     this._psolaPeStable = 0;
-    /** True while onset holdoff: output = delayed dry only (no wet OLA). */
-    this._olaHoldoff = false;
+    /**
+     * Hold R=1 after arm (no gain duck). Formant mode stays here until PSOLA
+     * is carrying; Fairbanks-only releases after a short PE settle.
+     */
+    this._onsetUnity = false;
+    this._onsetUnityMs = 0;
 
     this._detMidi = 60;
     this._tgtMidi = 60;
@@ -318,6 +338,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._fMin = F_MIN_DEFAULT;
     this._fMax = F_MAX_DEFAULT;
     this._inputType = "altoTenor";
+    this._buildAnnounced = false;
 
     this._vizDet = new Float32Array(VIZ_BINS);
     this._vizTgt = new Float32Array(VIZ_BINS);
@@ -585,7 +606,21 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
 
     if (justCommitted) {
       if (!this._softPsola()) this._seedPhases(this._rStar);
-      this._psolaHalf = 0;
+      // Interval jumps used to `psolaHalf = 0` here → Fairbanks fallback while
+      // |R*| is large (M3+) = low-formant smear. Keep grain; refresh below.
+      if (this._formant >= 0.5) {
+        this._psolaPeStable = 0;
+        this._psolaPePrev = 0;
+        if (this._voiced) {
+          const peIn = this._clampPe(
+            sampleRate / Math.max(this._fMin, Math.min(this._fMax, inHz)),
+          );
+          this._pitchMark = ((this.cbiwr - N2) % N + N) % N;
+          this._capturePsolaGrain(peIn);
+        }
+      } else {
+        this._psolaHalf = 0;
+      }
     }
 
     this.inphinc = inHz / sampleRate;
@@ -655,17 +690,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._holdCand = midi;
           this._holdAccumMs = 0;
           this._pendingHold = false;
-          // Proper scale commit (not raw midi) + clean onset
+          // Clean onset: unity ratio until PE settles — never duck olaGain (that gated)
           this._commitWant(midi, amount, flexCents, transpose);
+          this._setUnityPhases(midi); // lock inphinc/outphinc to *this* note before OLA runs
           this._seedPhases(1);
-          this._rStar = 1;
           this.phasein = 0;
           this.phaseout = 0;
           this.fragsize = 0;
-          this.cboL.fill(0);
-          this.cboR.fill(0);
-          this._olaGain = 0;
-          this._olaHoldoff = true;
+          this._onsetUnity = true;
+          this._onsetUnityMs = 0;
           this._psolaOnsetMs = 0;
           this._psolaWant = false;
           this._psolaGate = 0;
@@ -714,7 +747,22 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._psolaGate = 0;
         this._psolaOnsetMs = 0;
         this._psolaPeStable = 0;
-        this._olaHoldoff = false;
+        this._psolaPePrev = 0;
+        this._onsetUnity = false;
+        this._onsetUnityMs = 0;
+        // Stop synthesizing at the *previous* phrase's period across the gap.
+        // Leaving everLocked/phases live was the ab_12.1 octave-down onset:
+        // wet HPS ~208Hz for ~15ms while dry was ~418Hz, then snap up.
+        this._everLocked = false;
+        this._olaGain = 0; // snap — slow fade still leaks old-period wet
+        this.fragsize = 0;
+        this.phasein = 0;
+        this.phaseout = 0;
+        this.phincfact = 1;
+        this._phincSlew = 1;
+        this._rStar = 1;
+        this.cboL.fill(0);
+        this.cboR.fill(0);
       }
       tgt = nearestScaleMidi(det, this._key, scalePcsOf(this._scale, this._customPcs)) + transpose;
       this._tgtMidi = tgt;
@@ -786,8 +834,11 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Analysis period: always refresh Fairbanks frag. When PSOLA wanted, also
-   * snapshot a period grain so place can crossfade (D5b).
+   * Analysis period: always refresh Fairbanks frag. PSOLA grains:
+   *  - trusted refresh when PE is stable
+   *  - provisional refresh on interval jumps while already in PSOLA (keep formants)
+   * Never clear half on a mere PE step — that dumped large leaps to Fairbanks.
+   * Reject grains whose PE disagrees with live inphinc (octave / period errors).
    */
   _onAnalysisPeriod() {
     const nominal = ((this.cbiwr - N2) % N + N) % N;
@@ -799,23 +850,39 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._pitchMark = nominal;
     this._captureFrag();
 
-    // PE stability — reject octave/period jumps before committing a grain
+    let peRel = 0;
     if (this._psolaPePrev > 0) {
-      const rel = Math.abs(peIn - this._psolaPePrev) / this._psolaPePrev;
-      if (rel < 0.08) this._psolaPeStable++;
+      peRel = Math.abs(peIn - this._psolaPePrev) / this._psolaPePrev;
+      if (peRel < 0.08) this._psolaPeStable++;
       else this._psolaPeStable = 0;
     } else {
       this._psolaPeStable = 0;
     }
     this._psolaPePrev = peIn;
 
-    if (
+    // Live period from phase — must agree with PE or PSOLA opens an octave off
+    // (second dip in ab_12.1 @ ~+100ms after arm, when PSOLA_ONSET_MS expires).
+    const livePe =
+      this.inphinc > 1e-6 ? this._clampPe(1 / this.inphinc) : peIn;
+    const peVsLive = Math.abs(peIn - livePe) / Math.max(livePe, 1);
+    const peMatchesLive = peVsLive < 0.18;
+
+    const voicedOk =
       this._formant >= 0.5 &&
+      this._voiced &&
+      this._clarity >= PSOLA_CLARITY_OFF &&
+      peMatchesLive;
+
+    if (voicedOk && this._psolaPeStable >= PSOLA_PE_STABLE_NEED) {
+      this._capturePsolaGrain(peIn);
+    } else if (
+      voicedOk &&
       this._psolaWant &&
-      this._psolaPeStable >= PSOLA_PE_STABLE_NEED
+      this._psolaHalf >= 8 &&
+      peRel <= PSOLA_PE_KEEP_REL
     ) {
       this._capturePsolaGrain(peIn);
-    } else {
+    } else if (!this._voiced || this._clarity < PSOLA_CLARITY_OFF || !peMatchesLive) {
       this._psolaHalf = 0;
     }
   }
@@ -897,6 +964,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const output = outputs[0];
     if (!output || !output[0]) return true;
 
+    if (!this._buildAnnounced) {
+      this._buildAnnounced = true;
+      try {
+        this.port.postMessage({ type: "build", build: CENTINEL_BUILD });
+      } catch {
+        /* port closed */
+      }
+    }
+
     const outL = output[0];
     const outR = output[1] || output[0];
     const n = outL.length;
@@ -942,41 +1018,83 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       const dryR = this.cbiR[dryIdx];
 
       if (this._on) {
-        const cur = Math.max(1e-6, this.phincfact);
-        const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
-        if (spd < 0.5) {
-          this.phincfact = this._rStar;
-        } else if (softPsola) {
-          // D6: chase R* (incl. note changes). R* always = want/liveDet — no freeze.
-          this.phincfact += (this._rStar - this.phincfact) * ratioAlpha;
-        } else if (Math.abs(ratioCents) > WITHIN_NOTE_SOFT_CENTS) {
-          this.phincfact = this._rStar;
+        // Update PSOLA mix first so onset can release on a ready gate this sample.
+        const gateT =
+          this._formant >= 0.5 && this._psolaWant && this._psolaHalf >= 8 ? 1 : 0;
+        this._psolaGate += (gateT - this._psolaGate) * gateAlpha;
+
+        // Onset: R=1 only (level stays up). Formant mode must not Fairbanks-shift
+        // before PSOLA owns wet — that was the phrase-start low-formant glitch.
+        if (this._onsetUnity) {
+          this.phincfact = 1;
+          this._phincSlew = 1;
+          this.outphinc = this.inphinc;
+          this._onsetUnityMs += 1000 / sampleRate;
+
+          const formantOn = this._formant >= 0.5;
+          const psolaReady =
+            formantOn &&
+            this._psolaGate >= ONSET_PSOLA_READY &&
+            this._psolaHalf >= 8;
+          const fairbanksReady =
+            !formantOn &&
+            this._onsetUnityMs >= ONSET_UNITY_MS &&
+            (this._psolaPeStable >= PSOLA_PE_STABLE_NEED ||
+              this._onsetUnityMs >= ONSET_UNITY_MS * 2);
+          const timedOut = this._onsetUnityMs >= ONSET_UNITY_MAX_MS;
+
+          if (psolaReady || fairbanksReady || timedOut) {
+            this._onsetUnity = false;
+            const inHz = midiToHz(this._lockedDet);
+            let r = midiToHz(this._committedWant) / Math.max(1e-12, inHz);
+            if (r < FACT_MIN) r = FACT_MIN;
+            if (r > FACT_MAX) r = FACT_MAX;
+            this._rStar = r;
+            // Soft-start ratio even for robot — a hard R snap at PSOLA open clicks.
+            if (formantOn && Math.abs(Math.log2(Math.max(1e-6, r))) > 0.01) {
+              this.phincfact = 1;
+              this._phincSlew = 1;
+            }
+          }
         } else {
-          this.phincfact += (this._rStar - this.phincfact) * ratioAlpha;
+          const cur = Math.max(1e-6, this.phincfact);
+          const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
+          // Under formant/PSOLA, always ease R* (even speed≈0) for a few ms after
+          // open — full snap is fine once already near target.
+          const easeOpen =
+            softPsola ||
+            (this._formant >= 0.5 && Math.abs(ratioCents) > 8);
+          if (spd < 0.5 && !easeOpen) {
+            this.phincfact = this._rStar;
+          } else if (softPsola || easeOpen) {
+            const a = softPsola ? ratioAlpha : Math.max(ratioAlpha, 0.08);
+            this.phincfact += (this._rStar - this.phincfact) * a;
+          } else if (Math.abs(ratioCents) > WITHIN_NOTE_SOFT_CENTS) {
+            this.phincfact = this._rStar;
+          } else {
+            this.phincfact += (this._rStar - this.phincfact) * ratioAlpha;
+          }
+          if ((this.phincfact - this._rStar) * (cur - this._rStar) < 0) {
+            this.phincfact = this._rStar;
+          }
+          const inHzG = this.inphinc * sampleRate;
+          this.phincfact = this._guardRatio(
+            inHzG,
+            this.phincfact,
+            this._lockedDet,
+            this._committedWant,
+            this._naturalTgt,
+          );
+          this._phincSlew += (this.phincfact - this._phincSlew) * slewAlpha;
+          this._phincSlew = this._guardRatio(
+            inHzG,
+            this._phincSlew,
+            this._lockedDet,
+            this._committedWant,
+            this._naturalTgt,
+          );
+          this.outphinc = this.inphinc * this._phincSlew;
         }
-        // Guardrail: never cross R*
-        if ((this.phincfact - this._rStar) * (cur - this._rStar) < 0) {
-          this.phincfact = this._rStar;
-        }
-        // Do-no-harm: never more off-key than dry vs natural scale note;
-        // never pull past want. Soft lag + stale sticky want used to yank off-key.
-        const inHz = this.inphinc * sampleRate;
-        this.phincfact = this._guardRatio(
-          inHz,
-          this.phincfact,
-          this._lockedDet,
-          this._committedWant,
-          this._naturalTgt,
-        );
-        this._phincSlew += (this.phincfact - this._phincSlew) * slewAlpha;
-        this._phincSlew = this._guardRatio(
-          inHz,
-          this._phincSlew,
-          this._lockedDet,
-          this._committedWant,
-          this._naturalTgt,
-        );
-        this.outphinc = this.inphinc * this._phincSlew;
 
         if (!(this.inphinc > 1e-6) || !(this.inphinc < 0.5)) {
           this.inphinc = AREF / sampleRate;
@@ -985,24 +1103,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this.outphinc = this.inphinc;
         }
 
-        // D5b: slew Fairbanks↔PSOLA mix (want from clarity hysteresis)
-        const gateT = this._formant >= 0.5 && this._psolaWant && this._psolaHalf >= 8 ? 1 : 0;
-        this._psolaGate += (gateT - this._psolaGate) * gateAlpha;
-
-        // Onset: hear delayed dry while we prime the wet OLA ring (place into it,
-        // gain=0). Fading gain up on an empty ring ducked dry → dropout.
-        if (this._olaHoldoff) {
-          this._olaGain = 0;
-          const ready =
-            this._psolaOnsetMs >= OLA_ONSET_HOLDOFF_MS &&
-            this._psolaPeStable >= PSOLA_PE_STABLE_NEED;
-          const timedOut = this._psolaOnsetMs >= OLA_ONSET_HOLDOFF_MAX_MS;
-          if (ready || timedOut) {
-            this._olaHoldoff = false;
-            // Keep primed cbo + phases — only open the wet fade
-          }
-        } else if (this._everLocked) {
-          this._olaGain += (1 - this._olaGain) * 0.03;
+        if (this._everLocked) {
+          this._olaGain += (1 - this._olaGain) * 0.04;
           if (this._olaGain > 0.999) this._olaGain = 1;
         } else {
           this._olaGain += (0 - this._olaGain) * 0.01;
@@ -1020,7 +1122,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         if (this.phaseout >= 1) {
           this.phaseout -= Math.floor(this.phaseout);
           if (this.phaseout < 0 || this.phaseout >= 1) this.phaseout = 0;
-          // Always place during holdoff so the ring is full when gain opens
           this._placeFrag();
         }
         this.fragsize++;
@@ -1035,7 +1136,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._psolaGate = 0;
         this._psolaOnsetMs = 0;
         this._psolaPeStable = 0;
-        this._olaHoldoff = false;
+        this._onsetUnity = false;
+        this._onsetUnityMs = 0;
         this._armed = false;
         this._stable = 0;
         this._everLocked = false;
@@ -1062,7 +1164,16 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       const g = this._olaGain;
       let shiftedL;
       let shiftedR;
-      if (g > 0.995) {
+      // Onset / not-yet-correcting: emit latency-aligned dry. OLA at "unity" is
+      // NOT pitch-safe after a gap (stale period → octave glitch in ab_12.1).
+      const passDry =
+        !this._armed ||
+        this._onsetUnity ||
+        g < 0.001;
+      if (passDry) {
+        shiftedL = dryL;
+        shiftedR = dryR;
+      } else if (g > 0.995) {
         shiftedL = wetL;
         shiftedR = wetR;
       } else {
@@ -1071,7 +1182,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       }
 
       const mix = this._on ? mix0 : 0;
-      if (mix < 0.0001 || g < 0.0001) {
+      if (mix < 0.0001 || passDry) {
         outL[i] = dryL;
         if (stereo) outR[i] = dryR;
       } else if (mix > 0.995) {
