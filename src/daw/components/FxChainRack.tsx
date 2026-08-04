@@ -981,6 +981,8 @@ function DevicePanel({
                 on={
                   Math.abs(p.speed - 25) < 1 &&
                   Math.abs((p.tracking ?? 0) - 1) < 0.05 &&
+                  (p.humanize ?? 0) < 0.05 &&
+                  Math.abs(p.vibrato ?? 0) < 0.05 &&
                   (p.formant ?? 0) >= 0.5
                 }
                 enabled={p.on}
@@ -990,6 +992,7 @@ function DevicePanel({
                     speed: 25,
                     flex: 0,
                     humanize: 0,
+                    vibrato: 0,
                     amount: 1,
                     formant: 1,
                     tracking: 1,
@@ -1000,16 +1003,18 @@ function DevicePanel({
                 label="soft"
                 on={
                   Math.abs(p.speed - 120) < 1 &&
-                  p.humanize < 0.05 &&
+                  Math.abs((p.humanize ?? 0) - 0.35) < 0.05 &&
+                  Math.abs((p.vibrato ?? 0) - 0.15) < 0.05 &&
                   (p.formant ?? 0) >= 0.5
                 }
                 enabled={p.on}
-                title="Soft — ~120ms ratio chase under PSOLA"
+                title="Soft — ~120ms + light Humanize / Natural Vibrato under PSOLA"
                 onClick={() =>
                   set({
                     speed: 120,
                     flex: 0,
-                    humanize: 0,
+                    humanize: 0.35,
+                    vibrato: 0.15,
                     amount: 1,
                     formant: 1,
                     tracking: 1,
@@ -1021,7 +1026,8 @@ function DevicePanel({
                 on={
                   p.speed < 0.5 &&
                   p.flex < 0.5 &&
-                  p.humanize < 0.05 &&
+                  (p.humanize ?? 0) < 0.05 &&
+                  Math.abs(p.vibrato ?? 0) < 0.05 &&
                   Math.abs((p.amount ?? 1) - 1) < 0.05
                 }
                 enabled={p.on}
@@ -1031,6 +1037,7 @@ function DevicePanel({
                     speed: 0,
                     flex: 0,
                     humanize: 0,
+                    vibrato: 0,
                     amount: 1,
                     formant: 0,
                     tracking: 1,
@@ -1150,7 +1157,22 @@ function DevicePanel({
             label="human"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="Not wired yet — leave at 0"
+            tip="Humanize — keep Retune Speed on short notes; stretch it on sustains so long notes don’t sound statically locked (Auto-Tune–style)"
+          />
+          <Knob
+            value={p.vibrato ?? 0}
+            min={-1}
+            max={1}
+            defaultValue={0}
+            bipolar
+            onChange={(v) => set({ vibrato: v })}
+            label="nat vib"
+            disabled={!p.on}
+            fmt={(v) => {
+              const n = Math.round(v * 100);
+              return (n > 0 ? "+" : "") + n + "%";
+            }}
+            tip="Natural Vibrato — scale vibrato already in the performance. 0 = leave · left = flatten · right = amplify"
           />
           <Knob
             value={formant}

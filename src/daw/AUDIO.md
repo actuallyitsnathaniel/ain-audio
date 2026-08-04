@@ -60,9 +60,17 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 speed); sticky scale **target** until raw is clearly closer to another note
 (+0.35 st hysteresis — no midpoint flip-flops). `R*` always tracks sticky
 want / live det; **Retune Speed** is the only ratio-chase tau (no stacked
-commit easings). Note-commit under PSOLA crossfades grains (~22 ms) for
-waveform continuity. Fairbanks: within-note soft only + seed-snap on commit.
-PSOLA (`formant ≥ 50%`): full soft across notes. Detector stays YIN.
+commit easings). **Humanize** stretches that speed on sustains (~90 ms in);
+**Natural Vibrato** (−1…+1) scales the AC residual around a slow det center
+onto the want (0 = leave · − = flatten · + = amplify). Note-commit under
+PSOLA refreshes a single grain in-place (no dual-grain OLA — that slapped).
+**Cold start** (re-arm after silence): soft+PSOLA floors Retune Speed (~150 ms,
+tapered over ~400 ms) and stays on latency-dry until the audible want is close —
+bare riffs/runs don’t audition a detect-rate staircase. Soft+PSOLA **slews the
+target want** at Retune Speed (per-sample); ratio tracks it tightly — no
+R*-jump + double-chase. Brief post-commit speed floor helps rapid runs.
+Fairbanks: within-note soft only + seed-snap on commit. PSOLA (`formant ≥ 50%`):
+full soft across notes. Detector stays YIN.
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
 `input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/

@@ -259,8 +259,16 @@ export interface FxParams {
     amount: number;
     /** Cents dead-zone — leave human detune alone inside this window. */
     flex: number;
-    /** Not wired yet. */
+    /**
+     * Auto-Tune–style Humanize (0..1): keep Retune Speed on short notes;
+     * stretch it on sustains so long notes don’t sound statically locked.
+     */
     humanize: number;
+    /**
+     * Natural Vibrato (−1..1): scale vibrato already in the performance.
+     * 0 = leave · negative = flatten · positive = amplify.
+     */
+    vibrato: number;
     /** 0..1 pitch tracking (1 = grabby / commercial “100%”; 0 = picky gate). */
     tracking: number;
     /** 0 = Fairbanks OLA · ≥0.5 = period PSOLA (experimental). */
@@ -1053,6 +1061,7 @@ function buildCentinel(ctx: AudioContext): FxDeviceNodes {
       node.parameters.get("speed")?.setValueAtTime(fx.speed, t);
       node.parameters.get("flex")?.setTargetAtTime(fx.flex, t, 0.03);
       node.parameters.get("humanize")?.setTargetAtTime(fx.humanize, t, 0.03);
+      node.parameters.get("vibrato")?.setTargetAtTime(fx.vibrato ?? 0, t, 0.03);
       node.parameters.get("tracking")?.setTargetAtTime(fx.tracking, t, 0.03);
       node.parameters.get("formant")?.setTargetAtTime(fx.formant ?? 0, t, 0.03);
       node.parameters.get("transpose")?.setTargetAtTime(fx.transpose, t, 0.03);
@@ -1645,6 +1654,7 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         amount: 1,
         flex: 0,
         humanize: 0,
+        vibrato: 0,
         tracking: 1,
         formant: 1,
         mix: 1,
@@ -1860,6 +1870,7 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
             amount: typeof prev.amount === "number" ? prev.amount : defs.amount,
             flex: typeof prev.flex === "number" ? prev.flex : defs.flex,
             humanize: typeof prev.humanize === "number" ? prev.humanize : defs.humanize,
+            vibrato: typeof prev.vibrato === "number" ? prev.vibrato : defs.vibrato,
             tracking: typeof prev.tracking === "number" ? prev.tracking : defs.tracking,
             formant: typeof prev.formant === "number" ? prev.formant : defs.formant,
             mix: typeof prev.mix === "number" ? prev.mix : defs.mix,

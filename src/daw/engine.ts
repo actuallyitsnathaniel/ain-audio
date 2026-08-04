@@ -5201,6 +5201,8 @@ class AudioEngine {
 
   // current beat position from the ctx clock. In arrange mode the playhead wraps at
   // the loop BRACE (not [0,total)); otherwise it wraps the active loop cycle.
+  // Lead-in (abs beat still before brace.start) stays unwrapped — Ableton-style play
+  // into the loop — so we must NOT modulo negative (beat-start) before the brace.
   private currentBeat(): number {
     if (!this.ctx) return 0;
     const elapsed = this.ctx.currentTime - this._seqAnchorTime;
@@ -5210,7 +5212,9 @@ class AudioEngine {
         this.loopOn && this.arrangement.loop?.on ? this.arrangement.loop : null;
       if (br) {
         const len = br.end - br.start;
-        beat = br.start + ((((beat - br.start) % len) + len) % len);
+        if (len > 1e-9 && beat >= br.start) {
+          beat = br.start + ((((beat - br.start) % len) + len) % len);
+        }
       }
       return Math.max(0, beat);
     }
@@ -6797,7 +6801,8 @@ class AudioEngine {
   // events (many short voices), an audio clip is ONE long source, so we fire it once
   // per playback pass (deduped in _startedAudio) when its start beat enters the window
   // — or immediately with an offset if the playhead began mid-clip. Honors a/b trim,
-  // per-clip gain, the track strip, and the loop brace (one instance per brace pass).
+  // per-clip gain, the track strip, and the loop brace (one instance per brace pass,
+  // hard-cut at brace.end so sources don't keep rolling after the wrap).
   private scheduleAudioClip(
     t: ArrTrack,
     clip: ArrClip,
@@ -6818,9 +6823,13 @@ class AudioEngine {
     const s = this.audioClipSource(clip, bd, this.bpm, { noWarpSwap: useLive });
     if (!s) return; // not imported yet
     const braceLen = brace ? brace.end - brace.start : 0;
-    // fire one instance at absolute start beat `sb`, optionally offset into the clip
-    const fire = (sb: number, clipOffsetBeats: number) => {
-      const key = clip.id + "@" + sb.toFixed(3);
+    // fire one instance: `sb` = absolute clip-start this pass, `clipOffsetBeats` =
+    // catch-up into the clip, `stopBeat` = hard end (clip end and/or brace pass end).
+    // Key on (sb, stopBeat) — the pass identity — so sliding the lookahead window
+    // doesn't re-fire, but a lead-in cut at brace.start and the first loop pass
+    // (same sb, later stop) stay distinct.
+    const fire = (sb: number, clipOffsetBeats: number, stopBeat: number) => {
+      const key = clip.id + "@" + sb.toFixed(3) + ".." + stopBeat.toFixed(3);
       if (useLive && st && st.node) {
         // ── live stretch path: drive the persistent node instead of a buffer source.
         // s came with noWarpSwap, so rate/positions are in ORIGINAL-buffer terms. ──
@@ -6828,7 +6837,7 @@ class AudioEngine {
         const c = this.ctx!;
         const catchUp = Math.max(0, clipOffsetBeats) * bd;
         const when = Math.max(c.currentTime, whenOf(sb + clipOffsetBeats));
-        const stopAt = whenOf(sb + clip.lengthBeats);
+        const stopAt = whenOf(stopBeat);
         const slipSec = (clip.slip ?? 0) * bd;
         const input = s.startSec + (catchUp + slipSec) * s.rate;
         // one-shot content may run out before the clip's edge (silence after)
@@ -6885,8 +6894,8 @@ class AudioEngine {
       // content under fixed clip bounds (same concept as MIDI slippedLocals)
       const slipSec = (clip.slip ?? 0) * bd;
       let offSec = s.startSec + (catchUp + slipSec) * s.rate;
-      // both paths are hard-cut at the clip's end on the timeline
-      const stopAt = whenOf(sb + clip.lengthBeats);
+      // hard-cut at stopBeat (clip end ∩ brace pass end)
+      const stopAt = whenOf(stopBeat);
       if (s.looping) {
         src.loop = true;
         src.loopStart = s.loopStartSec;
@@ -6921,31 +6930,64 @@ class AudioEngine {
         baseBpm: this.bpm,
       };
     };
-    // brace loop: an instance per pass whose start lands in the window. Without a brace,
-    // fire once when startBeat enters the window (or immediately if we began mid-clip).
-    const passStarts = brace
-      ? (() => {
-          const out: number[] = [];
-          for (
-            let k = Math.floor((fromBeatAbs - clip.startBeat) / braceLen);
-            ;
-            k++
-          ) {
-            const sb = clip.startBeat + k * braceLen;
-            if (sb >= toBeatAbs) break;
-            if (sb + clip.lengthBeats <= fromBeatAbs) continue;
-            out.push(sb);
-          }
-          return out;
-        })()
-      : [clip.startBeat];
-    for (const sb of passStarts) {
-      const clipEnd = sb + clip.lengthBeats;
-      // in the window? either the start is imminent, or we're already inside the clip
-      if (clipEnd <= fromBeatAbs || sb >= toBeatAbs) continue;
-      const offsetBeats = fromBeatAbs > sb ? fromBeatAbs - sb : 0; // mid-clip catch-up
-      fire(sb, offsetBeats);
+
+    // Collect [absClipStart, offsetBeats, stopBeat] passes that overlap the window.
+    type Pass = { sb: number; offset: number; stop: number };
+    const passes: Pass[] = [];
+    const pushOverlap = (
+      absClipStart: number,
+      playStart: number,
+      playEnd: number,
+    ) => {
+      if (playEnd <= fromBeatAbs || playStart >= toBeatAbs) return;
+      if (playEnd <= playStart + 1e-9) return;
+      const startAt = Math.max(fromBeatAbs, playStart);
+      passes.push({
+        sb: absClipStart,
+        offset: startAt - absClipStart,
+        stop: playEnd,
+      });
+    };
+
+    if (!brace) {
+      pushOverlap(
+        clip.startBeat,
+        clip.startBeat,
+        clip.startBeat + clip.lengthBeats,
+      );
+    } else {
+      // Lead-in once (abs still before brace): play the portion before brace.start.
+      if (fromBeatAbs < brace.start) {
+        const leadEnd = Math.min(
+          clip.startBeat + clip.lengthBeats,
+          brace.start,
+        );
+        pushOverlap(clip.startBeat, clip.startBeat, leadEnd);
+      }
+      // Looping region: only the clip ∩ brace, repeated every braceLen in abs time.
+      // Hard-stop at each pass's brace.end so nothing keeps rolling after the wrap
+      // (that was the "some tracks keep moving" bug — loud through Centinel).
+      const overlapStart = Math.max(clip.startBeat, brace.start);
+      const overlapEnd = Math.min(
+        clip.startBeat + clip.lengthBeats,
+        brace.end,
+      );
+      if (overlapEnd > overlapStart + 1e-9 && braceLen > 1e-9) {
+        // start at the pass that might still be ringing into this window (k-1),
+        // never walk a huge negative range when the playhead is far before the clip
+        let k = Math.floor((fromBeatAbs - overlapStart) / braceLen) - 1;
+        if (k < 0) k = 0;
+        for (; ; k++) {
+          const absPlayStart = overlapStart + k * braceLen;
+          const absPlayEnd = overlapEnd + k * braceLen;
+          const absClipStart = clip.startBeat + k * braceLen;
+          if (absPlayStart >= toBeatAbs) break;
+          pushOverlap(absClipStart, absPlayStart, absPlayEnd);
+        }
+      }
     }
+    for (const p of passes) fire(p.sb, p.offset, p.stop);
+
     // ── deferred pass-end stops for the live stretch node. The worklet keeps ONE
     // queued future change (proven in the repro), so each pass's deactivate is sent
     // only once its start has taken effect and the end is near. (Brace edge: a stop
@@ -7028,7 +7070,13 @@ class AudioEngine {
             continue;
           }
           const when = whenOf(absBeat);
-          const off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
+          let off = when + Math.max(0.04, (run.endBeat - run.startBeat) * bd);
+          // cut sustains at the brace wrap so voices don't keep ringing into the
+          // next pass (same hard-cut audio clips get at brace.end)
+          if (brace) {
+            const passEnd = whenOf(brace.end + k * braceLen);
+            if (off > passEnd) off = Math.max(when + 0.04, passEnd);
+          }
           const bends = run.bends.length
             ? run.bends.map((b) => ({
                 toMidi: b.toMidi,
