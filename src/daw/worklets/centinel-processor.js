@@ -5,7 +5,7 @@
 // humanize inert. Circular buffers N=2048; latency = N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-04f-cola-wobble";
+const CENTINEL_BUILD = "2026-08-04g-commit-xfade";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -70,10 +70,11 @@ const PSOLA_GATE_MS = 22;
 const ONSET_PSOLA_READY = 0.88;
 /** Dry↔corrected wet crossfade (ms). Hard cuts here were the post-fixant pops. */
 const WET_XFADE_MS = 12;
-/** After a note commit, force ratio ease at least this long (ms). */
-const COMMIT_EASE_MS = 12;
-/** Slew analysis period toward locked det (ms) — hard inphinc jumps click on leaps. */
-const INPHINC_SLEW_MS = 8;
+/**
+ * Note-commit PSOLA grain crossfade (ms). Waveform continuity only — Retune
+ * Speed owns the R* chase; do not stack extra ratio easings on commit.
+ */
+const COMMIT_GRAIN_MS = 22;
 
 const SCALE_PCS = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -257,6 +258,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     /** PSOLA grain snapshot (separate from Fairbanks frag — D5b crossfade). */
     this.psolaL = new Float32Array(N);
     this.psolaR = new Float32Array(N);
+    /** Previous grain during note-commit crossfade. */
+    this.psolaOldL = new Float32Array(N);
+    this.psolaOldR = new Float32Array(N);
     this.cbiwr = 0;
     this.cbord = 0;
 
@@ -287,8 +291,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._phincSlew = 1;
     /** Target pitch ratio R* = hz(committedWant)/hz(lockedDet); chased in process. */
     this._rStar = 1;
-    /** ms remaining of forced soft chase after a note commit. */
-    this._commitEaseMs = 0;
+    /** 0 = old grain · 1 = new grain (note-commit PSOLA crossfade). */
+    this._grainXfade = 1;
+    /** Waiting for first stable grain after commit before raising xfade. */
+    this._commitGrainPending = false;
+    this._psolaOldHalf = 0;
+    this._psolaOldPeIn = 64;
     this.fragsize = 0;
     /** Input ring index of last analysis pitch mark (PSOLA grain center). */
     this._pitchMark = 0;
@@ -468,6 +476,28 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     return this._formant >= 0.5 && this._speedMs >= 0.5;
   }
 
+  /**
+   * Note-commit transition: keep placing the old PSOLA grain while a new one
+   * builds, then crossfade. Pitch chase stays on Retune Speed alone.
+   */
+  _beginCommitGrainXfade() {
+    const half = this._psolaHalf;
+    if (half < 8) return;
+    this.psolaOldL.set(this.psolaL);
+    this.psolaOldR.set(this.psolaR);
+    this._psolaOldHalf = half;
+    this._psolaOldPeIn = this._psolaPeIn;
+    this._grainXfade = 0;
+    this._commitGrainPending = true;
+    this._psolaPeStable = 0;
+  }
+
+  _clearCommitGrain() {
+    this._psolaOldHalf = 0;
+    this._grainXfade = 1;
+    this._commitGrainPending = false;
+  }
+
   /** Snap locked det → scale/MIDI want (amount + flex). */
   _wantFromDet(det, amount, flexCents, transpose) {
     const scalePcs = scalePcsOf(this._scale, this._customPcs);
@@ -621,17 +651,19 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._rStar = rStar;
 
     if (justCommitted) {
-      // Never snap R* or swap the PSOLA grain on commit — both clicked on leaps.
-      // Soft chase for COMMIT_EASE_MS even in robot; keep last grain until PE rebuilds.
-      this._commitEaseMs = COMMIT_EASE_MS;
-      if (this._formant < 0.5) {
-        this._psolaHalf = 0;
+      if (this._formant >= 0.5 && this._psolaHalf >= 8) {
+        this._beginCommitGrainXfade();
+      } else {
+        this._clearCommitGrain();
+        if (this._formant < 0.5) this._psolaHalf = 0;
       }
-      // formant on: leave psolaHalf / peStable alone — analysis refreshes grain smoothly
+      // Retune Speed owns R*: robot / Fairbanks snap; soft-PSOLA keeps chasing.
+      if (!this._softPsola()) this._seedPhases(this._rStar);
     }
 
     this._inphincTgt = inHz / sampleRate;
-    // outphinc updated in process after inphinc slew
+    this.inphinc = this._inphincTgt;
+    // outphinc updated in process from live inphinc * phincSlew
     const outMidi = hzToMidi(inHz * this.phincfact);
     this._outMidi = outMidi;
     return { det, tgt, out: outMidi };
@@ -756,6 +788,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._psolaOnsetMs = 0;
         this._psolaPeStable = 0;
         this._psolaPePrev = 0;
+        this._clearCommitGrain();
         this._onsetUnity = false;
         this._onsetUnityMs = 0;
         // Stop synthesizing at the *previous* phrase's period across the gap.
@@ -788,6 +821,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   _updatePsolaWant() {
     if (this._formant < 0.5 || !this._armed) {
       this._psolaWant = false;
+      return;
+    }
+    // Keep PSOLA open across note-commit grain crossfade (don't drop to Fairbanks).
+    if (
+      this._psolaOldHalf >= 8 &&
+      (this._commitGrainPending || this._grainXfade < 0.999)
+    ) {
+      this._psolaWant = true;
       return;
     }
     // Onset grace — low octaves glitch if PSOLA grabs before PE settles
@@ -837,6 +878,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     }
     this._psolaHalf = half;
     this._psolaPeIn = peIn;
+    if (this._commitGrainPending) this._commitGrainPending = false;
   }
 
   /**
@@ -925,30 +967,50 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
    * Period PSOLA: place last snapped ~2·PE grain with no resample.
    * Synthesis hop from phaseout; COLA ≈ peOut/peIn; `scale` for D5b crossfade.
    */
-  _placeFragPsola(scale) {
-    const half = this._psolaHalf;
-    if (half < 8 || scale < 0.001) return;
-
-    // Grain snapshot keeps formants; hop from *live* period so stale peIn
-    // after a note leap does not fight phaseout.
-    const peInGrain = this._clampPe(this._psolaPeIn);
+  _placeOnePsolaGrain(srcL, srcR, half, peInGrain, scale, mix) {
+    if (half < 8 || scale < 0.001 || mix < 0.001) return;
     const livePe =
-      this.inphinc > 1e-6 ? this._clampPe(1 / this.inphinc) : peInGrain;
+      this.inphinc > 1e-6 ? this._clampPe(1 / this.inphinc) : this._clampPe(peInGrain);
     const fact = Math.max(FACT_MIN, Math.min(FACT_MAX, this._phincSlew));
     const peOut = this._clampPe(livePe / fact);
     const dstCenter = this.cbord + N2;
-    // Instant peOut/peIn tracks 1/fact and amplitude-pumps during soft chase
-    // (the "wobbly" feel in tuned_with_bugs vs dry). Slew COLA instead.
     const olaT = Math.max(0.45, Math.min(1.05, peOut / Math.max(livePe, 1)));
     this._psolaOla += (olaT - this._psolaOla) * 0.04;
-    const ola = this._psolaOla * scale;
+    const ola = this._psolaOla * scale * mix;
 
     for (let i = -half; i < half; i++) {
       const w = (0.5 - 0.5 * Math.cos((Math.PI * (i + half)) / half)) * ola;
       const dst = ((dstCenter + i) % N + N) % N;
       const src = ((i % N) + N) % N;
-      this.cboL[dst] += this.psolaL[src] * w;
-      this.cboR[dst] += this.psolaR[src] * w;
+      this.cboL[dst] += srcL[src] * w;
+      this.cboR[dst] += srcR[src] * w;
+    }
+  }
+
+  _placeFragPsola(scale) {
+    const g = this._grainXfade;
+    const oldH = this._psolaOldHalf;
+    const newH = this._psolaHalf;
+    if (newH < 8 && oldH < 8) return;
+    if (oldH >= 8 && g < 0.999) {
+      this._placeOnePsolaGrain(
+        this.psolaOldL,
+        this.psolaOldR,
+        oldH,
+        this._psolaOldPeIn,
+        scale,
+        1 - g,
+      );
+    }
+    if (newH >= 8) {
+      this._placeOnePsolaGrain(
+        this.psolaL,
+        this.psolaR,
+        newH,
+        this._psolaPeIn,
+        scale,
+        oldH >= 8 ? g : 1,
+      );
     }
   }
 
@@ -1002,8 +1064,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._formant = parameters.formant[0];
     if (this._formant < 0.5) this._psolaWant = false;
 
-    // Ratio chase: robot always snaps. Fairbanks = within-note only (<~40¢).
-    // D6 soft+PSOLA = full Silvertune-style chase (formants don't ride R*).
+    // Ratio chase: Retune Speed is the only tau. Robot snaps. Fairbanks =
+    // within-note only. Soft+PSOLA = full chase. No stacked commit easings.
     const spd = this._speedMs;
     let ratioAlpha = 1;
     if (spd >= 0.5) {
@@ -1014,9 +1076,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const slewAlpha = 1 - Math.exp(-1 / Math.max(1, 0.0005 * sampleRate));
     const gateAlpha = 1 - Math.exp(-1 / Math.max(1, (PSOLA_GATE_MS / 1000) * sampleRate));
     const wetXfadeAlpha = 1 - Math.exp(-1 / Math.max(1, (WET_XFADE_MS / 1000) * sampleRate));
-    const inSlewAlpha = 1 - Math.exp(-1 / Math.max(1, (INPHINC_SLEW_MS / 1000) * sampleRate));
+    const grainAlpha = 1 - Math.exp(-1 / Math.max(1, (COMMIT_GRAIN_MS / 1000) * sampleRate));
     const softPsola = this._formant >= 0.5 && spd >= 0.5;
-    const commitAlpha = 1 - Math.exp(-1 / Math.max(1, (COMMIT_EASE_MS / 1000) * sampleRate));
 
     for (let i = 0; i < n; i++) {
       const xl = inL[i] || 0;
@@ -1034,17 +1095,23 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       const dryR = this.cbiR[dryIdx];
 
       if (this._on) {
-        // Slew analysis period — note commits used to step inphinc and click
-        this.inphinc += (this._inphincTgt - this.inphinc) * inSlewAlpha;
+        this.inphinc = this._inphincTgt;
 
         const gateT =
-          this._formant >= 0.5 && this._psolaWant && this._psolaHalf >= 8 ? 1 : 0;
+          this._formant >= 0.5 &&
+          this._psolaWant &&
+          (this._psolaHalf >= 8 || this._psolaOldHalf >= 8)
+            ? 1
+            : 0;
         this._psolaGate += (gateT - this._psolaGate) * gateAlpha;
 
-        const commitEasing = this._commitEaseMs > 0;
-        if (commitEasing) {
-          this._commitEaseMs -= 1000 / sampleRate;
-          if (this._commitEaseMs < 0) this._commitEaseMs = 0;
+        // Commit grain xfade: wait for new grain, then rise 0→1
+        if (this._psolaOldHalf >= 8 && !this._commitGrainPending) {
+          this._grainXfade += (1 - this._grainXfade) * grainAlpha;
+          if (this._grainXfade > 0.999) {
+            this._grainXfade = 1;
+            this._psolaOldHalf = 0;
+          }
         }
 
         if (this._onsetUnity) {
@@ -1073,27 +1140,25 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
             if (r > FACT_MAX) r = FACT_MAX;
             this._rStar = r;
             if (formantOn && Math.abs(Math.log2(Math.max(1e-6, r))) > 0.01) {
-              this.phincfact = 1;
-              this._phincSlew = 1;
+              if (!softPsola) {
+                this.phincfact = r;
+                this._phincSlew = r;
+              } else {
+                this.phincfact = 1;
+                this._phincSlew = 1;
+              }
+            } else if (!softPsola) {
+              this.phincfact = r;
+              this._phincSlew = r;
             }
-            this._commitEaseMs = Math.max(this._commitEaseMs, COMMIT_EASE_MS * 0.5);
           }
         } else {
           const cur = Math.max(1e-6, this.phincfact);
           const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
-          const easeOpen =
-            softPsola ||
-            commitEasing ||
-            (this._formant >= 0.5 && Math.abs(ratioCents) > 8);
-          if (spd < 0.5 && !easeOpen) {
+          if (spd < 0.5) {
             this.phincfact = this._rStar;
-          } else if (softPsola || easeOpen) {
-            const a = softPsola
-              ? ratioAlpha
-              : commitEasing
-                ? Math.max(ratioAlpha, commitAlpha)
-                : Math.max(ratioAlpha, 0.08);
-            this.phincfact += (this._rStar - this.phincfact) * a;
+          } else if (softPsola) {
+            this.phincfact += (this._rStar - this.phincfact) * ratioAlpha;
           } else if (Math.abs(ratioCents) > WITHIN_NOTE_SOFT_CENTS) {
             this.phincfact = this._rStar;
           } else {
@@ -1175,6 +1240,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._psolaGate = 0;
         this._psolaOnsetMs = 0;
         this._psolaPeStable = 0;
+        this._clearCommitGrain();
         this._onsetUnity = false;
         this._onsetUnityMs = 0;
         this._armed = false;

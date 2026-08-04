@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "showcase": "node scripts/showcase.mjs",
+    "centinel:ab": "node scripts/centinel-ab.mjs",
     "lint": "eslint ."
   },
   "dependencies": {

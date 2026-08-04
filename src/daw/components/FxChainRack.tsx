@@ -1117,7 +1117,7 @@ function DevicePanel({
             label="speed"
             disabled={!p.on}
             fmt={(v) => (v < 0.5 ? "lock" : Math.round(v) + "ms")}
-            tip="Retune speed (ms). 0 = robot. Soft/pop under PSOLA chase the sticky note — but output is clamped so it can never be more off-key than the dry signal vs the natural scale note."
+            tip="Retune speed (ms) — the only R* chase tau. 0 = robot snap. Soft/pop + formant≥50% glide to the sticky note; Fairbanks (formant off) softs within-note only. Do-no-harm clamp still applies."
           />
           <Knob
             value={p.amount}

@@ -59,9 +59,10 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 `stays_locked` (±0.4 st) + hysteretic hold (base ~18 ms, stretches with soft
 speed); sticky scale **target** until raw is clearly closer to another note
 (+0.35 st hysteresis — no midpoint flip-flops). `R*` always tracks sticky
-want / live det (output stays on the intended note while deciding); soft chases
-`R*` without crossing it. Fairbanks: within-note soft only + seed-snap on
-commit. PSOLA (`formant ≥ 50%`): full soft across notes. Detector stays YIN.
+want / live det; **Retune Speed** is the only ratio-chase tau (no stacked
+commit easings). Note-commit under PSOLA crossfades grains (~22 ms) for
+waveform continuity. Fairbanks: within-note soft only + seed-snap on commit.
+PSOLA (`formant ≥ 50%`): full soft across notes. Detector stays YIN.
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
 `input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/
