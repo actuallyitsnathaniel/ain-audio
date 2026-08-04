@@ -5,7 +5,7 @@
 // humanize inert. Circular buffers N=2048; latency = N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-04d-click-xfade";
+const CENTINEL_BUILD = "2026-08-04f-cola-wobble";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -70,6 +70,10 @@ const PSOLA_GATE_MS = 22;
 const ONSET_PSOLA_READY = 0.88;
 /** Dry↔corrected wet crossfade (ms). Hard cuts here were the post-fixant pops. */
 const WET_XFADE_MS = 12;
+/** After a note commit, force ratio ease at least this long (ms). */
+const COMMIT_EASE_MS = 12;
+/** Slew analysis period toward locked det (ms) — hard inphinc jumps click on leaps. */
+const INPHINC_SLEW_MS = 8;
 
 const SCALE_PCS = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -277,11 +281,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this.phasein = 0;
     this.phaseout = 0;
     this.inphinc = AREF / sampleRate;
+    this._inphincTgt = this.inphinc;
     this.outphinc = this.inphinc;
     this.phincfact = 1;
     this._phincSlew = 1;
     /** Target pitch ratio R* = hz(committedWant)/hz(lockedDet); chased in process. */
     this._rStar = 1;
+    /** ms remaining of forced soft chase after a note commit. */
+    this._commitEaseMs = 0;
     this.fragsize = 0;
     /** Input ring index of last analysis pitch mark (PSOLA grain center). */
     this._pitchMark = 0;
@@ -289,6 +296,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._psolaHalf = 0;
     /** Analysis period used for that grain. */
     this._psolaPeIn = 64;
+    /** Smoothed PSOLA COLA scale — unsmoothed peOut/peIn pumped on soft R* chase. */
+    this._psolaOla = 0.7;
     /** Sticky want (clarity hysteresis) — gate slews toward this. */
     this._psolaWant = false;
     /** 0..1 Fairbanks→PSOLA crossfade (sample-rate smoothed). */
@@ -435,20 +444,23 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._analysisRms = Math.sqrt(sumSq / n);
   }
 
-  _setUnityPhases(midi) {
-    const hz = midiToHz(midi);
-    this.inphinc = hz / sampleRate;
-    this.outphinc = this.inphinc;
-    this.phincfact = 1;
-    this._phincSlew = 1;
-  }
-
   /** Snap R* (Fairbanks / robot). Soft-PSOLA leaves phincfact to chase. */
   _seedPhases(rStar) {
     const r = Math.max(FACT_MIN, Math.min(FACT_MAX, rStar));
     this._rStar = r;
     this.phincfact = r;
     this._phincSlew = r;
+  }
+
+  /** Arm / re-voice: set period targets without clicking mid-buffer. */
+  _setUnityPhases(midi) {
+    const hz = midiToHz(midi);
+    const inc = hz / sampleRate;
+    this._inphincTgt = inc;
+    this.inphinc = inc;
+    this.outphinc = inc;
+    this.phincfact = 1;
+    this._phincSlew = 1;
   }
 
   /** True when formant mode + soft speed — ratio may glide across note changes. */
@@ -609,26 +621,17 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._rStar = rStar;
 
     if (justCommitted) {
-      if (!this._softPsola()) this._seedPhases(this._rStar);
-      // Interval jumps used to `psolaHalf = 0` here → Fairbanks fallback while
-      // |R*| is large (M3+) = low-formant smear. Keep grain; refresh below.
-      if (this._formant >= 0.5) {
-        this._psolaPeStable = 0;
-        this._psolaPePrev = 0;
-        if (this._voiced) {
-          const peIn = this._clampPe(
-            sampleRate / Math.max(this._fMin, Math.min(this._fMax, inHz)),
-          );
-          this._pitchMark = ((this.cbiwr - N2) % N + N) % N;
-          this._capturePsolaGrain(peIn);
-        }
-      } else {
+      // Never snap R* or swap the PSOLA grain on commit — both clicked on leaps.
+      // Soft chase for COMMIT_EASE_MS even in robot; keep last grain until PE rebuilds.
+      this._commitEaseMs = COMMIT_EASE_MS;
+      if (this._formant < 0.5) {
         this._psolaHalf = 0;
       }
+      // formant on: leave psolaHalf / peStable alone — analysis refreshes grain smoothly
     }
 
-    this.inphinc = inHz / sampleRate;
-    this.outphinc = this.inphinc * this.phincfact;
+    this._inphincTgt = inHz / sampleRate;
+    // outphinc updated in process after inphinc slew
     const outMidi = hzToMidi(inHz * this.phincfact);
     this._outMidi = outMidi;
     return { det, tgt, out: outMidi };
@@ -709,6 +712,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._psolaHalf = 0;
           this._psolaPeStable = 0;
           this._psolaPePrev = 0;
+          this._psolaOla = 0.7;
         }
       }
 
@@ -875,17 +879,16 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._clarity >= PSOLA_CLARITY_OFF &&
       peMatchesLive;
 
+    // Only refresh grain once PE is stable. Mid-leap provisional recapture
+    // swapped the waveform under the read head and clicked on note changes.
+    // Old grain + new R* still preserves formants (pitch from placement rate).
     if (voicedOk && this._psolaPeStable >= PSOLA_PE_STABLE_NEED) {
       this._capturePsolaGrain(peIn);
-    } else if (
-      voicedOk &&
-      this._psolaWant &&
-      this._psolaHalf >= 8 &&
-      peRel <= PSOLA_PE_KEEP_REL
-    ) {
-      this._capturePsolaGrain(peIn);
     } else if (!this._voiced || this._clarity < PSOLA_CLARITY_OFF || !peMatchesLive) {
-      this._psolaHalf = 0;
+      if (!(this._psolaWant && this._psolaHalf >= 8 && peRel <= PSOLA_PE_KEEP_REL)) {
+        this._psolaHalf = 0;
+      }
+      // else: keep last grain across the leap
     }
   }
 
@@ -926,11 +929,19 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const half = this._psolaHalf;
     if (half < 8 || scale < 0.001) return;
 
-    const peIn = this._clampPe(this._psolaPeIn);
+    // Grain snapshot keeps formants; hop from *live* period so stale peIn
+    // after a note leap does not fight phaseout.
+    const peInGrain = this._clampPe(this._psolaPeIn);
+    const livePe =
+      this.inphinc > 1e-6 ? this._clampPe(1 / this.inphinc) : peInGrain;
     const fact = Math.max(FACT_MIN, Math.min(FACT_MAX, this._phincSlew));
-    const peOut = this._clampPe(peIn / fact);
+    const peOut = this._clampPe(livePe / fact);
     const dstCenter = this.cbord + N2;
-    const ola = Math.max(0.35, Math.min(1.15, peOut / peIn)) * scale;
+    // Instant peOut/peIn tracks 1/fact and amplitude-pumps during soft chase
+    // (the "wobbly" feel in tuned_with_bugs vs dry). Slew COLA instead.
+    const olaT = Math.max(0.45, Math.min(1.05, peOut / Math.max(livePe, 1)));
+    this._psolaOla += (olaT - this._psolaOla) * 0.04;
+    const ola = this._psolaOla * scale;
 
     for (let i = -half; i < half; i++) {
       const w = (0.5 - 0.5 * Math.cos((Math.PI * (i + half)) / half)) * ola;
@@ -1003,7 +1014,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const slewAlpha = 1 - Math.exp(-1 / Math.max(1, 0.0005 * sampleRate));
     const gateAlpha = 1 - Math.exp(-1 / Math.max(1, (PSOLA_GATE_MS / 1000) * sampleRate));
     const wetXfadeAlpha = 1 - Math.exp(-1 / Math.max(1, (WET_XFADE_MS / 1000) * sampleRate));
+    const inSlewAlpha = 1 - Math.exp(-1 / Math.max(1, (INPHINC_SLEW_MS / 1000) * sampleRate));
     const softPsola = this._formant >= 0.5 && spd >= 0.5;
+    const commitAlpha = 1 - Math.exp(-1 / Math.max(1, (COMMIT_EASE_MS / 1000) * sampleRate));
 
     for (let i = 0; i < n; i++) {
       const xl = inL[i] || 0;
@@ -1021,13 +1034,19 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       const dryR = this.cbiR[dryIdx];
 
       if (this._on) {
-        // Update PSOLA mix first so onset can release on a ready gate this sample.
+        // Slew analysis period — note commits used to step inphinc and click
+        this.inphinc += (this._inphincTgt - this.inphinc) * inSlewAlpha;
+
         const gateT =
           this._formant >= 0.5 && this._psolaWant && this._psolaHalf >= 8 ? 1 : 0;
         this._psolaGate += (gateT - this._psolaGate) * gateAlpha;
 
-        // Onset: R=1 only (level stays up). Formant mode must not Fairbanks-shift
-        // before PSOLA owns wet — that was the phrase-start low-formant glitch.
+        const commitEasing = this._commitEaseMs > 0;
+        if (commitEasing) {
+          this._commitEaseMs -= 1000 / sampleRate;
+          if (this._commitEaseMs < 0) this._commitEaseMs = 0;
+        }
+
         if (this._onsetUnity) {
           this.phincfact = 1;
           this._phincSlew = 1;
@@ -1053,22 +1072,27 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
             if (r < FACT_MIN) r = FACT_MIN;
             if (r > FACT_MAX) r = FACT_MAX;
             this._rStar = r;
-            // Soft-start ratio even for robot — a hard R snap at PSOLA open clicks.
             if (formantOn && Math.abs(Math.log2(Math.max(1e-6, r))) > 0.01) {
               this.phincfact = 1;
               this._phincSlew = 1;
             }
+            this._commitEaseMs = Math.max(this._commitEaseMs, COMMIT_EASE_MS * 0.5);
           }
         } else {
           const cur = Math.max(1e-6, this.phincfact);
           const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
           const easeOpen =
             softPsola ||
+            commitEasing ||
             (this._formant >= 0.5 && Math.abs(ratioCents) > 8);
           if (spd < 0.5 && !easeOpen) {
             this.phincfact = this._rStar;
           } else if (softPsola || easeOpen) {
-            const a = softPsola ? ratioAlpha : Math.max(ratioAlpha, 0.08);
+            const a = softPsola
+              ? ratioAlpha
+              : commitEasing
+                ? Math.max(ratioAlpha, commitAlpha)
+                : Math.max(ratioAlpha, 0.08);
             this.phincfact += (this._rStar - this.phincfact) * a;
           } else if (Math.abs(ratioCents) > WITHIN_NOTE_SOFT_CENTS) {
             this.phincfact = this._rStar;
