@@ -5,7 +5,7 @@
 // humanize inert. Circular buffers N=2048; latency = N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-04c-octave-drypass";
+const CENTINEL_BUILD = "2026-08-04d-click-xfade";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -68,6 +68,8 @@ const ONSET_UNITY_MAX_MS = 260;
 const PSOLA_GATE_MS = 22;
 /** Release formant-mode unity once PSOLA mix is at least this high. */
 const ONSET_PSOLA_READY = 0.88;
+/** Dry↔corrected wet crossfade (ms). Hard cuts here were the post-fixant pops. */
+const WET_XFADE_MS = 12;
 
 const SCALE_PCS = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -327,6 +329,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._armed = false;
     this._everLocked = false;
     this._olaGain = 0;
+    /** 0 = latency dry · 1 = corrected wet — always slewed (never hard-cut). */
+    this._wetMix = 0;
     this._unvoicedN = 0;
     this._analysisRms = 0;
     this._speedMs = 0;
@@ -751,18 +755,16 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._onsetUnity = false;
         this._onsetUnityMs = 0;
         // Stop synthesizing at the *previous* phrase's period across the gap.
-        // Leaving everLocked/phases live was the ab_12.1 octave-down onset:
-        // wet HPS ~208Hz for ~15ms while dry was ~418Hz, then snap up.
+        // Leaving everLocked/phases live was the ab_12.1 octave-down onset.
         this._everLocked = false;
-        this._olaGain = 0; // snap — slow fade still leaks old-period wet
         this.fragsize = 0;
         this.phasein = 0;
         this.phaseout = 0;
         this.phincfact = 1;
         this._phincSlew = 1;
         this._rStar = 1;
-        this.cboL.fill(0);
-        this.cboR.fill(0);
+        // Don't cbo.fill(0) here — hard silence under a live read clicks.
+        // _wetMix slews to 0; priming resumes on next arm.
       }
       tgt = nearestScaleMidi(det, this._key, scalePcsOf(this._scale, this._customPcs)) + transpose;
       this._tgtMidi = tgt;
@@ -1000,6 +1002,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     // Tiny ease after snaps so placeFrag doesn't zipper (~0.5 ms)
     const slewAlpha = 1 - Math.exp(-1 / Math.max(1, 0.0005 * sampleRate));
     const gateAlpha = 1 - Math.exp(-1 / Math.max(1, (PSOLA_GATE_MS / 1000) * sampleRate));
+    const wetXfadeAlpha = 1 - Math.exp(-1 / Math.max(1, (WET_XFADE_MS / 1000) * sampleRate));
     const softPsola = this._formant >= 0.5 && spd >= 0.5;
 
     for (let i = 0; i < n; i++) {
@@ -1059,8 +1062,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         } else {
           const cur = Math.max(1e-6, this.phincfact);
           const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
-          // Under formant/PSOLA, always ease R* (even speed≈0) for a few ms after
-          // open — full snap is fine once already near target.
           const easeOpen =
             softPsola ||
             (this._formant >= 0.5 && Math.abs(ratioCents) > 8);
@@ -1103,29 +1104,43 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this.outphinc = this.inphinc;
         }
 
-        if (this._everLocked) {
+        // Corrected wet only after onset unity ends — slew, never hard-cut.
+        // During onsetUnity we still run OLA at R=1 so the buffer is primed
+        // and the crossfade lands on nearly-matched audio.
+        const wantWet =
+          this._armed && this._everLocked && !this._onsetUnity ? 1 : 0;
+        this._wetMix += (wantWet - this._wetMix) * wetXfadeAlpha;
+        if (this._wetMix < 0.001) this._wetMix = 0;
+        if (this._wetMix > 0.999) this._wetMix = 1;
+
+        if (this._everLocked || this._onsetUnity) {
           this._olaGain += (1 - this._olaGain) * 0.04;
           if (this._olaGain > 0.999) this._olaGain = 1;
         } else {
-          this._olaGain += (0 - this._olaGain) * 0.01;
+          this._olaGain += (0 - this._olaGain) * 0.05;
         }
 
-        this.phasein += this.inphinc;
-        this.phaseout += this.outphinc;
+        // Prime / run OLA whenever we might need wet soon (armed or fading)
+        const runOla =
+          this._armed || this._onsetUnity || this._wetMix > 0.001 || this._olaGain > 0.001;
+        if (runOla) {
+          this.phasein += this.inphinc;
+          this.phaseout += this.outphinc;
 
-        if (this.phasein >= 1) {
-          this.phasein -= Math.floor(this.phasein);
-          if (this.phasein < 0 || this.phasein >= 1) this.phasein = 0;
-          this._onAnalysisPeriod();
-        }
+          if (this.phasein >= 1) {
+            this.phasein -= Math.floor(this.phasein);
+            if (this.phasein < 0 || this.phasein >= 1) this.phasein = 0;
+            this._onAnalysisPeriod();
+          }
 
-        if (this.phaseout >= 1) {
-          this.phaseout -= Math.floor(this.phaseout);
-          if (this.phaseout < 0 || this.phaseout >= 1) this.phaseout = 0;
-          this._placeFrag();
+          if (this.phaseout >= 1) {
+            this.phaseout -= Math.floor(this.phaseout);
+            if (this.phaseout < 0 || this.phaseout >= 1) this.phaseout = 0;
+            this._placeFrag();
+          }
+          this.fragsize++;
+          if (this.fragsize > N) this.fragsize = N;
         }
-        this.fragsize++;
-        if (this.fragsize > N) this.fragsize = N;
       } else {
         this._phincSlew = 1;
         this.phincfact = 1;
@@ -1144,7 +1159,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._noteLocked = false;
         this._pendingHold = false;
         this._holdAccumMs = 0;
-        this._olaGain += (0 - this._olaGain) * 0.01;
+        this._olaGain += (0 - this._olaGain) * 0.05;
+        this._wetMix += (0 - this._wetMix) * wetXfadeAlpha;
         this.phasein = 0;
         this.phaseout = 0;
       }
@@ -1154,35 +1170,29 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this.cboL[this.cbord] = 0;
       this.cboR[this.cbord] = 0;
 
-      // Soft peak limit only — never swap wet→dry (that stuttered at grain/hop rate)
       const lim = 1.5;
       if (wetL > lim) wetL = lim;
       else if (wetL < -lim) wetL = -lim;
       if (wetR > lim) wetR = lim;
       else if (wetR < -lim) wetR = -lim;
 
-      const g = this._olaGain;
+      // Soft dry↔wet: _wetMix is the anti-click layer; olaGain covers first-lock fade.
+      const wm = this._wetMix * this._olaGain;
       let shiftedL;
       let shiftedR;
-      // Onset / not-yet-correcting: emit latency-aligned dry. OLA at "unity" is
-      // NOT pitch-safe after a gap (stale period → octave glitch in ab_12.1).
-      const passDry =
-        !this._armed ||
-        this._onsetUnity ||
-        g < 0.001;
-      if (passDry) {
+      if (wm < 0.001) {
         shiftedL = dryL;
         shiftedR = dryR;
-      } else if (g > 0.995) {
+      } else if (wm > 0.999) {
         shiftedL = wetL;
         shiftedR = wetR;
       } else {
-        shiftedL = dryL * (1 - g) + wetL * g;
-        shiftedR = dryR * (1 - g) + wetR * g;
+        shiftedL = dryL * (1 - wm) + wetL * wm;
+        shiftedR = dryR * (1 - wm) + wetR * wm;
       }
 
       const mix = this._on ? mix0 : 0;
-      if (mix < 0.0001 || passDry) {
+      if (mix < 0.0001) {
         outL[i] = dryL;
         if (stereo) outR[i] = dryR;
       } else if (mix > 0.995) {
