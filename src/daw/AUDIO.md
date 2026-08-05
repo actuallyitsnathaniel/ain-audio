@@ -56,11 +56,12 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
 
 **Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Note commit:
-`stays_locked` (±0.4 st) + hysteretic hold (base ~18 ms, stretches with soft
-speed); sticky scale **target** until raw is clearly closer to another note
-(+0.35 st hysteresis — no midpoint flip-flops). `R*` always tracks sticky
-want / live det; **Retune Speed** is the only ratio-chase tau (no stacked
-commit easings). **Humanize** stretches that speed on sustains (~90 ms in);
+`stays_locked` (±0.4 st) + hysteretic hold (base ~15 ms, soft stretch capped
+~60 ms — eased from AT-strict after robotics); sticky scale **target** until
+raw is clearly closer (+0.32 st hysteresis). `R*` always tracks sticky
+want / live det; **Retune Speed** is the only ratio-chase tau. Post-commit soft
+floor ~62 ms (between AT-strict 48 and old 85). **Humanize** stretches
+Retune Speed on sustains (~90 ms in);
 **Natural Vibrato** (−1…+1) scales the AC residual around a slow det center
 onto the want (0 = leave · − = flatten · + = amplify). Note-commit under
 PSOLA refreshes a single grain in-place (no dual-grain OLA — that slapped).
@@ -467,6 +468,17 @@ in the **File** menu ([FileMenu](components/arrangement/FileMenu.tsx) +
 brace) or **Full**, and **WAV** (PCM16, default — opens everywhere) or **WebM**
 (Opus). Metronome / count-in are muted for the bounce. The capture also caches
 the bounce used as the `.ain` WAV head; Save without a bounce records one first.
+
+It runs in real time, so it costs as long as the music (the panel says how long up
+front) — and it's **cancellable**: `engine.cancelBounce()` breaks the wait instead of
+letting it run out, stops the transport, and writes nothing (no file, no cached
+bounce). `recordMixBounce` resolves `null` and `bounceMix` resolves `false` when that
+happens. Hitting **Space** mid-bounce raises
+[BounceCancelConfirm](components/arrangement/BounceCancelConfirm.tsx) rather than
+stopping the transport — a real dialog, not `window.confirm`, which would block the
+main thread and glitch the very audio being recorded. Esc keeps it rolling. While a
+bounce runs it owns the transport: `toggleArrangement` / `seekArrangement` /
+`toggleRecord` and friends no-op so nothing gets baked into the file.
 
 | Zip path | Contents |
 |----------|----------|

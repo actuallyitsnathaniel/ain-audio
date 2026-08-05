@@ -22,6 +22,7 @@ import { StudioStatusStrip } from "./StudioStatusStrip";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TrackFader } from "./TrackFader";
 import { AudioAcceptSheet } from "./AudioAcceptSheet";
+import { BounceCancelConfirm } from "./BounceCancelConfirm";
 import { openContextMenu } from "../context-menu-bus";
 import { requestMidiEnable } from "../midi-gate-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
@@ -300,6 +301,11 @@ export function ArrangementPage() {
   const [fxTrackId, setFxTrackId] = useState<string | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [acceptOpen, setAcceptOpen] = useState(false);
+  // Space during a realtime bounce asks before binning it (see BounceCancelConfirm).
+  // Keyed by bounce id rather than a boolean, so the question dies with its bounce
+  // and a stale "yes" can't greet the next one.
+  const [confirmBounceId, setConfirmBounceId] = useState<number | null>(null);
+  const askCancelBounce = eng.bouncing && confirmBounceId === eng.bounceId;
   const acceptContinue = useRef<(() => void) | null>(null);
   const requestAccept = (after: () => void) => {
     acceptContinue.current = after;
@@ -456,6 +462,17 @@ export function ArrangementPage() {
       // handler above — don't steal them for L-loop / etc.
       if (engine.midiKeys && !meta) {
         if (PL_KEYMAP[key] !== undefined || key === "z" || key === "x" || key === "c" || key === "v") return;
+      }
+      // ── a realtime bounce owns the transport ──
+      // Space asks to cancel (the reflex when you want the noise to stop); the other
+      // transport keys are swallowed, since moving the playhead mid-capture would
+      // record the jump into the file.
+      if (engine.bouncing) {
+        if (e.code === "Space" || e.code === "Home" || e.code === "End" || key === "l") {
+          e.preventDefault();
+          if (e.code === "Space") setConfirmBounceId(engine.bounceId);
+          return;
+        }
       }
       // ── GLOBAL: transport + undo, whatever pane is focused ──
       if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
@@ -781,6 +798,16 @@ export function ArrangementPage() {
         <div data-audio-accept>
           <AudioAcceptSheet onDone={finishAccept} />
         </div>
+      )}
+
+      {askCancelBounce && (
+        <BounceCancelConfirm
+          onKeep={() => setConfirmBounceId(null)}
+          onCancelBounce={() => {
+            engine.cancelBounce();
+            setConfirmBounceId(null);
+          }}
+        />
       )}
     </main>
   );

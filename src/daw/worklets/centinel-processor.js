@@ -8,7 +8,7 @@
 // Circular buffers N=2048; latency = N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-05e-edge-ring";
+const CENTINEL_BUILD = "2026-08-05g-ease-e12";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -35,12 +35,13 @@ const EDGE_WET_XFADE_MS = 12;
 /** Silvertune-style: ignore YIN wander within this while locked (semitones). */
 const STAYS_LOCKED_SEMI = 0.4;
 /** Base hold before committing a new note (ms). Soft speed stretches this. */
-const HOLD_MS_BASE = 18;
+const HOLD_MS_BASE = 15;
 /**
  * Raw must beat the sticky scale target by this much (semitones) before we
  * even start a retarget hold — stops boundary flip-flops Autotune doesn't do.
+ * Eased from 0.28 (f-strict-at too sticky/robotic) toward 0.35 pre-strict.
  */
-const RETUNE_HYST_SEMI = 0.35;
+const RETUNE_HYST_SEMI = 0.32;
 /**
  * Soft speed may chase R* only when |ratio error| is under this (cents).
  * Larger jumps and every note-commit snap — Fairbanks cannot soft-glide
@@ -71,17 +72,17 @@ const PSOLA_PE_KEEP_REL = 0.35;
 const ONSET_UNITY_MS = 40;
 /** Failsafe: never hold R=1 longer than this after arm (ms). */
 const ONSET_UNITY_MAX_MS = 260;
-/** Fairbanks↔PSOLA crossfade (ms) — longer = less click at handoff. */
-const PSOLA_GATE_MS = 22;
+/** Fairbanks↔PSOLA crossfade (ms) — shorter = less muffled path handoff. */
+const PSOLA_GATE_MS = 16;
 /** Release formant-mode unity once PSOLA mix is at least this high. */
 const ONSET_PSOLA_READY = 0.88;
 /** Dry↔corrected wet crossfade (ms). Hard cuts here were the post-fixant pops. */
-const WET_XFADE_MS = 18;
+const WET_XFADE_MS = 16;
 /**
  * After a note commit, prefer a fresh PSOLA grain for this long (ms).
  * No dual-grain OLA — overlapping old+new grains read as a slap/delay.
  */
-const COMMIT_RECAPTURE_MS = 40;
+const COMMIT_RECAPTURE_MS = 28; // was 40 — long unity muffled note edges vs AT
 /**
  * Cold start (re-arm after silence): tapered Retune Speed floor + dry gate so
  * bare riffs/runs don't audition a staircase into the first notes.
@@ -90,9 +91,10 @@ const COLD_START_MS = 400;
 const COLD_START_SPEED_FLOOR_MS = 150;
 /** Stay on latency-dry until |want−audible| is under this (cents), while cold. */
 const COLD_WET_CENTS = 28;
-/** Soft+PSOLA: briefly floor speed after a note commit (rapid runs). */
-const COMMIT_SOFT_MS = 90;
-const COMMIT_SOFT_FLOOR_MS = 85;
+/** Soft+PSOLA: briefly floor speed after a note commit (rapid runs).
+ * Eased from 50/48 — still below old 90/85 that lagged AT on short notes. */
+const COMMIT_SOFT_MS = 70;
+const COMMIT_SOFT_FLOOR_MS = 62;
 /** Cold wet fade — slower than normal so the dry→tuned handoff isn't a step. */
 const COLD_WET_XFADE_MS = 28;
 // Detector confidence (reverb / multipitch).
@@ -196,15 +198,16 @@ function nearestScaleMidi(midi, key, scalePcs) {
   return midi + best;
 }
 
-/** Hold time: longer when soft so we don't commit to a wrong neighbor mid-glide. */
+/** Hold time: longer when soft so we don't commit to a wrong neighbor mid-glide.
+ * Midway: AT-ish settle without f-strict-at robotics (cap was 48 → 60). */
 function holdMsForSpeed(speedMs, coldStart, pitchConf) {
   if (!(speedMs >= 0.5)) return HOLD_MS_BASE;
-  let ms = Math.max(HOLD_MS_BASE, Math.min(90, speedMs * 0.45));
-  // Cold re-arm: slightly longer hold so the first note of a run isn't a wrong snap.
-  if (coldStart) ms = Math.max(ms, Math.min(110, ms + 35));
+  let ms = Math.max(HOLD_MS_BASE, Math.min(60, speedMs * 0.32));
+  // Cold re-arm: slight extra hold — first note of a run still needs a beat of trust.
+  if (coldStart) ms = Math.max(ms, Math.min(72, ms + 18));
   // Reverb / low confidence: commit slower — fewer false neighbor snaps.
   if (pitchConf < CONF_RETARGET) {
-    ms = Math.max(ms, Math.min(140, ms + 45));
+    ms = Math.max(ms, Math.min(95, ms + 26));
   }
   return ms;
 }
@@ -741,7 +744,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const dSticky = Math.abs(rawMidi - sticky);
     const dFresh = Math.abs(rawMidi - fresh.tgt);
     // Stronger hysteresis when confidence is merely OK (verby).
-    const hyst = RETUNE_HYST_SEMI + (1 - Math.min(1, this._pitchConf)) * 0.35;
+    const hyst = RETUNE_HYST_SEMI + (1 - Math.min(1, this._pitchConf)) * 0.28;
     return dFresh + hyst < dSticky;
   }
 

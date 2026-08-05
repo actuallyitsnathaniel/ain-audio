@@ -29,7 +29,10 @@ export function BounceMixPanel({
   const [format, setFormat] = useState<BounceFormat>("wav");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  // realtime capture: the bounce costs exactly as long as the music (+ FX tail)
+  const lengthSec = engine.bounceLengthSec(range);
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -46,12 +49,17 @@ export function BounceMixPanel({
 
   const bounce = async () => {
     if (busy) return;
+    // hand focus back to the page: while it's in the name field, Space types instead
+    // of raising the cancel prompt
+    nameRef.current?.blur();
     setErr(null);
+    setNote(null);
     setBusy(true);
     onBusy?.(true);
     try {
-      await engine.bounceMix(name.trim() || "mix", { range, format });
-      onClose();
+      if (await engine.bounceMix(name.trim() || "mix", { range, format }))
+        onClose();
+      else setNote("Bounce cancelled — no file written.");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Couldn't bounce mix");
     } finally {
@@ -73,6 +81,14 @@ export function BounceMixPanel({
       <p className="mb-3 font-mono text-[9.5px] leading-snug text-faint">
         Plays the arrangement in real time and downloads the mix (you’ll hear
         it). Metronome and count-in are muted for the bounce.
+        {lengthSec > 0 && (
+          <>
+            {" "}
+            This one takes about{" "}
+            <span className="text-dim">{Math.ceil(lengthSec)}s</span>. Space
+            asks to cancel.
+          </>
+        )}
       </p>
 
       <label
@@ -150,15 +166,24 @@ export function BounceMixPanel({
           {err}
         </p>
       )}
+      {note && (
+        <p className="mb-2 font-mono text-[10px] text-dim" role="status">
+          {note}
+        </p>
+      )}
 
       <div className="flex justify-end gap-2">
         <button
           type="button"
-          className={ctl + "border-line2 text-faint hover:text-dim"}
-          disabled={busy}
-          onClick={onClose}
+          className={
+            ctl +
+            (busy
+              ? "border-[#e0654f] text-[#e98c79] hover:bg-[color-mix(in_srgb,#e0654f_14%,transparent)]"
+              : "border-line2 text-faint hover:text-dim")
+          }
+          onClick={busy ? () => engine.cancelBounce() : onClose}
         >
-          Cancel
+          {busy ? "Cancel bounce" : "Cancel"}
         </button>
         <button
           type="button"

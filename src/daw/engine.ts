@@ -3060,6 +3060,7 @@ class AudioEngine {
   // ● record: start a take (and play from the cursor if stopped), or finish the
   // current take without stopping playback.
   toggleRecord() {
+    if (this.bouncing) return; // a bounce owns the transport — see `cancelBounce`
     if (this.recording) {
       this.finishRecording();
       return;
@@ -4736,18 +4737,70 @@ class AudioEngine {
     return !!this._lastMixBounce;
   }
 
+  /** Beat span a bounce will play, or null when the range isn't available. */
+  private bounceSpan(
+    range: "loop" | "full",
+  ): { start: number; end: number } | null {
+    const loop = this.arrangement.loop;
+    if (range === "loop") {
+      if (!loop || loop.end <= loop.start + 1e-6) return null;
+      return { start: loop.start, end: loop.end };
+    }
+    return {
+      start: 0,
+      end: Math.max(
+        arrangementBeats(this.arrangement),
+        this.arrangement.beatsPerBar,
+      ),
+    };
+  }
+
+  /** Seconds of master FX / reverb tail recorded after the last beat. */
+  private static BOUNCE_TAIL_SEC = 1.5;
+
+  /**
+   * How long a bounce will take in wall-clock seconds — it's a realtime capture, so
+   * this is exactly as long as the music (plus the FX tail). Shown before you start
+   * so the wait is expected rather than mistaken for a hang.
+   */
+  bounceLengthSec(range: "loop" | "full" = "full"): number {
+    const span = this.bounceSpan(range);
+    if (!span) return 0;
+    return (
+      ((span.end - span.start) * 60) / this.arrangement.bpm +
+      AudioEngine.BOUNCE_TAIL_SEC
+    );
+  }
+
+  /**
+   * Abort an in-flight bounce: the transport stops now, no file is written, and no
+   * bounce is cached (so a later `.ain` save won't embed a half-recorded mix).
+   */
+  cancelBounce(): void {
+    if (!this.bouncing || this._bounceCancelled) return;
+    this._bounceCancelled = true;
+    if (this.sequencePlaying) this.stopArrangement();
+    this._bounceWake?.(); // break the realtime wait instead of running it out
+    this.emit("transport");
+  }
+
   /**
    * Realtime mix bounce: record the master bus while playing the arrangement
    * (full FX / MIDI / drums — whatever you hear). Returns the recorded blob and
-   * caches it for `.ain` preview embedding.
+   * caches it for `.ain` preview embedding, or null if it was cancelled.
    *
    * `range: "loop"` plays one pass of the loop brace (no wrap). `range: "full"`
    * (default when the brace is off) plays from 0 through the arrangement end.
    */
   bouncing = false;
+  /** Bumped per bounce, so UI asking about "this bounce" can't leak into the next. */
+  bounceId = 0;
+  private _bounceCancelled = false;
+  /** Set while the bounce is waiting out its realtime length; see `cancelBounce`. */
+  private _bounceWake: (() => void) | null = null;
   async recordMixBounce(
     opts: { range?: "loop" | "full" } = {},
-  ): Promise<Blob> {
+  ): Promise<Blob | null> {
     if (this.bouncing) throw new Error("Bounce already in progress");
     const c = this.ensureCtx();
     const n = this.nodes;
@@ -4764,27 +4817,18 @@ class AudioEngine {
           : "";
     if (!mime) throw new Error("No supported MediaRecorder audio type");
 
-    const loop = this.arrangement.loop;
-    const useLoop =
-      opts.range === "loop" &&
-      !!loop &&
-      loop.end > loop.start + 1e-6;
-    if (opts.range === "loop" && !useLoop)
-      throw new Error("Turn on the loop brace (or set a range) before bouncing the loop");
-
-    const startBeat = useLoop ? loop!.start : 0;
-    const endBeat = useLoop
-      ? loop!.end
-      : Math.max(
-          arrangementBeats(this.arrangement),
-          this.arrangement.beatsPerBar,
-        );
-    // +1.5s tail for master FX / reverb
-    const durationMs =
-      (((endBeat - startBeat) * 60) / this.arrangement.bpm + 1.5) * 1000;
+    const range = opts.range ?? "full";
+    const span = this.bounceSpan(range);
+    if (!span)
+      throw new Error(
+        "Turn on the loop brace (or set a range) before bouncing the loop",
+      );
+    const durationMs = this.bounceLengthSec(range) * 1000;
 
     if (this.sequencePlaying) this.stopArrangement();
     this.bouncing = true;
+    this.bounceId++;
+    this._bounceCancelled = false;
     this.emit("transport");
 
     const dest = c.createMediaStreamDestination();
@@ -4812,18 +4856,31 @@ class AudioEngine {
       this.bpm = this.arrangement.bpm;
       this.loopOn = false; // one pass — no brace wrap mid-bounce
       this.warmArrangement();
-      this.playSequence(startBeat);
-      await new Promise<void>((r) => setTimeout(r, durationMs));
+      this.playSequence(span.start);
+      // wait out the music in real time, but stay interruptible — an uninterruptible
+      // timer here is what made a cancel look like a freeze (the UI sat on "Bouncing…"
+      // until the full length elapsed, recording silence once the transport stopped).
+      await new Promise<void>((resolve) => {
+        if (this._bounceCancelled) return resolve();
+        const t = window.setTimeout(resolve, durationMs);
+        this._bounceWake = () => {
+          clearTimeout(t);
+          resolve();
+        };
+      });
       if (this.sequencePlaying) this.stopArrangement();
-      await new Promise<void>((r) => setTimeout(r, 250)); // flush into recorder
-      if (rec.state === "recording") rec.stop();
+      if (!this._bounceCancelled)
+        await new Promise<void>((r) => setTimeout(r, 250)); // flush into recorder
+      if (rec.state !== "inactive") rec.stop();
       const blob = await finished;
+      if (this._bounceCancelled) return null; // discard — nothing written, nothing cached
       this._lastMixBounce = {
         bytes: await blob.arrayBuffer(),
         mime: blob.type || mime,
       };
       return blob;
     } finally {
+      this._bounceWake = null;
       this.countInBars = savedCountIn;
       this.metronome = savedMetro;
       try {
@@ -4838,7 +4895,8 @@ class AudioEngine {
 
   /** Decode last bounce (or record one) → PCM16 WAV for the .ain playable head. */
   private async ensureAinPreviewWav(): Promise<ArrayBuffer> {
-    if (!this._lastMixBounce) await this.recordMixBounce();
+    if (!this._lastMixBounce && !(await this.recordMixBounce()))
+      throw new Error("Bounce cancelled — nothing was saved");
     const bounce = this._lastMixBounce;
     if (!bounce) throw new Error("Couldn't capture mix bounce for .ain preview");
     const c = this.ensureCtx();
@@ -4857,13 +4915,16 @@ class AudioEngine {
    * Realtime mix bounce → download. Default format is PCM WAV (opens in every
    * DAW). `webm` keeps the raw MediaRecorder Opus/WebM (or m4a on Safari).
    * Also refreshes the cached bounce used when saving `.ain`.
+   *
+   * @returns true when a file was written, false when the bounce was cancelled.
    */
   async bounceMix(
     name = "mix",
     opts: { range?: "loop" | "full"; format?: "wav" | "webm" } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     const format = opts.format ?? "wav";
     const blob = await this.recordMixBounce({ range: opts.range ?? "full" });
+    if (!blob) return false; // cancelled
     const base = name
       .trim()
       .replace(/[^\w-]+/g, "-")
@@ -4883,12 +4944,13 @@ class AudioEngine {
       }
       const wav = encodeWavPcm16(buf);
       downloadBlob(new Blob([wav], { type: "audio/wav" }), `${base}.wav`);
-      return;
+      return true;
     }
 
     const mime = blob.type;
     const ext = mime.includes("mp4") ? "m4a" : "webm";
     downloadBlob(blob, `${base}.${ext}`);
+    return true;
   }
 
   /**
@@ -5439,18 +5501,26 @@ class AudioEngine {
   // Play starts from `insertBeat`; pause/stop write the position back to it. While
   // playing, the live playhead is `currentBeat()`; when stopped, it's `insertBeat`.
   // bare Space: if playing → stop; if stopped → play FROM the cursor.
+  //
+  // A running bounce OWNS the transport (it's recording what it plays), so the
+  // user-facing verbs below no-op until it finishes or is cancelled — otherwise a
+  // stray stop/seek gets baked into the file. The bounce drives `playSequence` /
+  // `stopArrangement` directly, so its own transport moves still work.
   toggleArrangement() {
+    if (this.bouncing) return;
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
     else this.playArrangement(this.insertBeat);
   }
   // ── transport verbs (playback pane) ──
   // play from the cursor (same as bare Space now that marker + playhead are merged)
   playArrangementFromCursor() {
+    if (this.bouncing) return;
     if (this.sequencePlaying && this.arrangeMode) return;
     this.playArrangement(this.insertBeat);
   }
   // pause: stop the clock and leave the cursor where playback stopped (resume from here)
   pauseArrangement() {
+    if (this.bouncing) return;
     if (!(this.sequencePlaying && this.arrangeMode)) return;
     const at = this.currentBeat();
     this.stopArrangement();
@@ -5459,6 +5529,7 @@ class AudioEngine {
   }
   // stop: halt and return the cursor to the start (loop-brace start if looping, else 0)
   stopArrangementToStart() {
+    if (this.bouncing) return;
     const home =
       this.loopOn && this.arrangement.loop?.on
         ? this.arrangement.loop.start
@@ -5469,6 +5540,7 @@ class AudioEngine {
   }
   // return-to-start without stopping playback (⏮): seek to home
   returnToStart() {
+    if (this.bouncing) return;
     const home =
       this.loopOn && this.arrangement.loop?.on
         ? this.arrangement.loop.start
@@ -6276,6 +6348,7 @@ class AudioEngine {
   }
 
   seekArrangement(beat: number) {
+    if (this.bouncing) return; // the bounce owns the playhead while it records
     beat = Math.max(0, beat);
     // QUANTIZED LAUNCH: while playing, defer the jump to the next quantum boundary so
     // the phase never breaks. Re-aiming before the boundary replaces the target but
