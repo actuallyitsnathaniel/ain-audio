@@ -71,6 +71,10 @@ export default defineConfig(({ mode }) => {
     server: {
       open: true,
       port: 3000,
+      // AudioWorklet addModule caches aggressively; never store processor sources in dev.
+      headers: {
+        "Cache-Control": "no-store",
+      },
     },
   } satisfies UserConfig;
 });

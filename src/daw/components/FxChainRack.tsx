@@ -979,19 +979,19 @@ function DevicePanel({
               <FxChip
                 label="pop"
                 on={
-                  Math.abs(p.speed - 25) < 1 &&
+                  Math.abs(p.speed - 45) < 1 &&
                   Math.abs((p.tracking ?? 0) - 1) < 0.05 &&
-                  (p.humanize ?? 0) < 0.05 &&
+                  Math.abs((p.humanize ?? 0) - 0.12) < 0.05 &&
                   Math.abs(p.vibrato ?? 0) < 0.05 &&
                   (p.formant ?? 0) >= 0.5
                 }
                 enabled={p.on}
-                title="Pop — ~25ms soft ratio under PSOLA (formant on), track 100%"
+                title="Pop — ~45ms soft ratio under PSOLA (formant on), a hair of Humanize, track 100%"
                 onClick={() =>
                   set({
-                    speed: 25,
+                    speed: 45,
                     flex: 0,
-                    humanize: 0,
+                    humanize: 0.12,
                     vibrato: 0,
                     amount: 1,
                     formant: 1,

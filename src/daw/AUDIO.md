@@ -71,11 +71,9 @@ target want** at Retune Speed (per-sample); ratio tracks it tightly — no
 R*-jump + double-chase. Brief post-commit speed floor helps rapid runs.
 Fairbanks: within-note soft only + seed-snap on commit. PSOLA (`formant ≥ 50%`):
 full soft across notes. **Detector confidence**: competing YIN troughs (reverb /
-multipitch) lower confidence → hold retarget, blend want toward dry, brief soft
-speed floor. Detector stays YIN.
-Fairbanks: within-note soft only + seed-snap on commit. PSOLA (`formant ≥ 50%`):
-full soft across notes. **Detector confidence**: competing YIN troughs (reverb /
-multipitch) lower confidence → hold retarget, blend want toward dry, brief soft
+multipitch / near-octave rivals from room reflections) lower confidence → hold
+retarget, hysteretic wet open/close with ~100 ms close debounce, phrase-end wet
+close on sustained low RMS (~45 ms) so OLA doesn’t ring past dry, brief soft
 speed floor. Detector stays YIN.
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired

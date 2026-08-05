@@ -1011,7 +1011,7 @@ function buildCentinel(ctx: AudioContext): FxDeviceNodes {
         const d = ev.data;
         if (!d) return;
         if (d.type === "build") {
-          console.info(`[centinel] worklet build ${d.build}`);
+          console.info(`[centinel] worklet build ${d.build}`, d);
           return;
         }
         if (d.type !== "viz") return;

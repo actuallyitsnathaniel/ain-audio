@@ -285,6 +285,31 @@ const LS_MASTER_FX = "ain-master-fx"; // master-bus device chain: FxDeviceState[
 const LS_MASTER_VOL = "ain-master-vol"; // master track fader
 const LS_MASTER_METER = "ain-master-meter"; // master meter tap: "pre" | "post"
 const LS_LAUNCH_QUANT = "ain-launch-quant"; // launch quantize in beats (0 = off)
+
+/**
+ * Fresh on every document load. AudioWorklet addModule in Vite dev hits an
+ * unhashed `/src/.../foo-processor.js` URL; without a unique query the browser
+ * keeps serving a stale processor across hard reloads.
+ * TODO: maybe remove once Vite/dev caching is solid — see .vscode/TODO.md.
+ */
+const WORKLET_PAGE_BUST = import.meta.env.DEV ? String(Date.now()) : "";
+
+/**
+ * AudioWorklet addModule URL. Dev: query-bust every page load. Prod: Vite
+ * already content-hashes the asset via `new URL(..., import.meta.url)`.
+ */
+function workletModuleUrl(relFromEngine: string): string {
+  const u = new URL(relFromEngine, import.meta.url);
+  if (WORKLET_PAGE_BUST) u.searchParams.set("v", WORKLET_PAGE_BUST);
+  return u.href;
+}
+
+/** Dev: full page reload so WORKLET_PAGE_BUST refreshes (AudioWorklet cannot HMR). */
+export function reloadAudioWorklets(reason = "manual"): void {
+  if (!import.meta.env.DEV) return;
+  console.warn(`[ain] reloading for AudioWorklet (${reason})`);
+  location.reload();
+}
 const posKey = (id: string) => "ain-pos:" + id;
 const db2lin = (db: number) => Math.pow(10, db / 20);
 // mixer gain ceiling: +6 dB of headroom above unity (linear ~1.995) for the
@@ -2858,9 +2883,7 @@ class AudioEngine {
     this._captureWorkletReady = (async () => {
       try {
         const c = this.ensureCtx();
-        await c.audioWorklet.addModule(
-          new URL("./worklets/input-capture-processor.js", import.meta.url),
-        );
+        await c.audioWorklet.addModule(workletModuleUrl("./worklets/input-capture-processor.js"));
         return true;
       } catch {
         this._captureWorkletReady = null; // allow retry
@@ -2878,20 +2901,12 @@ class AudioEngine {
       try {
         const c = this.ensureCtx();
         // AudioWorklet modules stick to the AudioContext — HMR never replaces them.
-        // Full page reload is required after editing worklets (see hot.accept below).
+        // Dev URLs are cache-busted (see workletModuleUrl); prod Vite hashes the asset.
         await Promise.all([
-          c.audioWorklet.addModule(
-            new URL("./worklets/impartialer-processor.js", import.meta.url),
-          ),
-          c.audioWorklet.addModule(
-            new URL("./worklets/speccomp-processor.js", import.meta.url),
-          ),
-          c.audioWorklet.addModule(
-            new URL("./worklets/centinel-processor.js", import.meta.url),
-          ),
-          c.audioWorklet.addModule(
-            new URL("./worklets/cliplim-processor.js", import.meta.url),
-          ),
+          c.audioWorklet.addModule(workletModuleUrl("./worklets/impartialer-processor.js")),
+          c.audioWorklet.addModule(workletModuleUrl("./worklets/speccomp-processor.js")),
+          c.audioWorklet.addModule(workletModuleUrl("./worklets/centinel-processor.js")),
+          c.audioWorklet.addModule(workletModuleUrl("./worklets/cliplim-processor.js")),
         ]);
         return true;
       } catch {
@@ -4065,9 +4080,14 @@ class AudioEngine {
   setArrangementLoop(start: number, end: number, on: boolean) {
     const a = Math.max(0, Math.min(start, end));
     const b = Math.max(a + 0.25, Math.max(start, end));
+    const wasBrace = !!this.activeBrace();
+    const shown = this.currentBeat(); // read under the OLD brace mapping
     this.arrangement.loop = { start: a, end: b, on };
     this.loopOn = on;
     this.saveArr();
+    // engaging / disengaging mid-playback re-maps the clock (dragging the brace
+    // bounds while it stays on doesn't) — carry the playhead across the switch
+    if (!!this.activeBrace() !== wasBrace) this.reseatTransport(shown);
   }
 
   /** Turn the loop brace on spanning the time selection, or the selected clips. */
@@ -5207,7 +5227,10 @@ class AudioEngine {
   }
 
   setLoop(on: boolean) {
+    const wasBrace = !!this.activeBrace();
+    const shown = this.currentBeat(); // read under the OLD brace mapping
     this.loopOn = on;
+    if (!!this.activeBrace() !== wasBrace) this.reseatTransport(shown);
     this.emit("transport");
   }
 
@@ -6268,6 +6291,61 @@ class AudioEngine {
     }
     this._doSeek(beat);
   }
+
+  /** The loop brace while it's actually folding the transport, else null. */
+  private activeBrace(): { start: number; end: number } | null {
+    const l = this.arrangement.loop;
+    return this.loopOn && l?.on && l.end > l.start ? l : null;
+  }
+
+  // Re-seat the running transport onto `shownBeat` WITHOUT flushing what's already
+  // scheduled. The clock is absolute: with the brace on it runs past `loop.end` and
+  // `currentBeat()` folds it back inside, so switching the brace on/off changes what
+  // the same wall time means. Left alone, the playhead teleports to the raw clock
+  // position and the scheduler lays a second pass on top of the one still queued —
+  // the loop and the jumped-to spot playing at once. Re-anchoring keeps the beat that
+  // was showing, so playback just carries on from where it looks like it is.
+  //
+  // `_scheduledThrough` deliberately does NOT rewind: the queued lookahead was built
+  // for these very beats, and re-emitting it would double-trigger every note and hit
+  // in the window. Audio clips are the exception — their pass keys and hard stops
+  // were built for the old mapping (a clip cut at the brace edge would stop there) —
+  // so they hand over at the edge of the queued window: the old source stops exactly
+  // where the next tick starts the new one.
+  private reseatTransport(shownBeat: number) {
+    const c = this.ctx;
+    if (!c || !this.sequencePlaying || !this.arrangeMode) return;
+    const now = c.currentTime;
+    const handoff = Math.max(now, this._scheduledThrough);
+    this._seqAnchorBeat = Math.max(0, shownBeat);
+    this._seqAnchorTime = now;
+    this._scheduledThrough = handoff;
+    // clicks resume after the last one already queued — none repeated, none skipped
+    this._metroThrough = this._seqAnchorBeat + (handoff - now) / this.beatDur();
+    for (const key in this._startedAudio) {
+      try {
+        this._startedAudio[key].src.stop(handoff);
+      } catch {
+        /* already ended */
+      }
+      delete this._startedAudio[key];
+    }
+    // live-warp nodes are persistent, so hand them over the same way: queue the
+    // deactivate at the handoff point, then let the re-fire below replace it (a stop
+    // popped by the next pass's start at the same instant is the intended pattern —
+    // see the deferred sweep in scheduleAudioClip). Clips that don't continue under
+    // the new mapping simply stay stopped instead of ringing on.
+    for (const clipId of new Set(
+      Object.keys(this._stretchFired).map((k) => k.slice(0, k.indexOf("@"))),
+    )) {
+      const e = this._stretch[clipId];
+      if (e?.ready && e.node) e.node.schedule({ output: handoff, active: false });
+    }
+    this._stretchFired = {}; // live-warp passes re-fire under the new mapping
+    this.schedTick(); // queue the handover before the old sources stop
+    this.emit("transport");
+  }
+
   // the actual re-anchor jump (immediate). Shared by immediate seeks + the pending-
   // launch firing in schedTick.
   private _doSeek(beat: number) {
@@ -7365,7 +7443,13 @@ class AudioEngine {
         playingSources: this._srcs?.length ?? 0,
         activeNotes: Object.keys(this._liveVoices), // "<channelId|_>:<midi>"
       },
+      workletBust: WORKLET_PAGE_BUST || null,
     };
+  }
+
+  /** Dev: reload the page so worklets re-fetch with a new cache bust. */
+  reloadWorklets() {
+    reloadAudioWorklets("engine.reloadWorklets()");
   }
 }
 
@@ -7373,16 +7457,22 @@ export const engine = new AudioEngine();
 
 // Dev-only console handle: `engine.debug()` in the browser. Statically false in
 // production builds, so it tree-shakes out. ponytail: drop if it ever ships.
-if (import.meta.env.DEV)
-  (globalThis as { engine?: AudioEngine }).engine = engine;
+if (import.meta.env.DEV) {
+  const g = globalThis as {
+    engine?: AudioEngine;
+    reloadAudioWorklets?: typeof reloadAudioWorklets;
+  };
+  g.engine = engine;
+  // Always re-bind — HMR can leave a stale `engine` singleton without new methods.
+  g.engine.reloadWorklets = () => reloadAudioWorklets("engine.reloadWorklets()");
+  // Works even if `engine` is weird: just type reloadAudioWorklets() in the console.
+  g.reloadAudioWorklets = reloadAudioWorklets;
+}
 
 // AudioWorklet processors register once per AudioContext and never hot-swap.
 // Editing a worklet without a full reload silently keeps the old DSP running.
 if (import.meta.hot) {
-  const reload = (file: string) => {
-    console.warn(`[ain] ${file} changed — full reload (AudioWorklet cannot HMR)`);
-    location.reload();
-  };
+  const reload = (file: string) => reloadAudioWorklets(file);
   import.meta.hot.accept("./worklets/centinel-processor.js", () =>
     reload("centinel-processor.js"),
   );
@@ -7394,5 +7484,8 @@ if (import.meta.hot) {
   );
   import.meta.hot.accept("./worklets/cliplim-processor.js", () =>
     reload("cliplim-processor.js"),
+  );
+  import.meta.hot.accept("./worklets/input-capture-processor.js", () =>
+    reload("input-capture-processor.js"),
   );
 }
