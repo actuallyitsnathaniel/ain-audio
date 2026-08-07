@@ -173,7 +173,17 @@ export function recommendationsFor(
   }
   if (r.inputStatus === "denied") {
     out.push(
-      "Microphone permission is blocked. Allow mic for this site in the browser address bar, then re-arm the audio track.",
+      "Microphone permission is blocked. Allow mic for this site in the browser address bar (or I/O → allow mic to list devices), then re-arm the audio track.",
+    );
+  }
+  if (
+    r.inputStatus !== "denied" &&
+    r.inputStatus !== "unsupported" &&
+    !r.inputDeviceLabel &&
+    r.inputDeviceId
+  ) {
+    out.push(
+      "A saved input device id is set, but the browser hasn’t named devices yet — use I/O → allow mic to list devices.",
     );
   }
   if (r.inputStatus === "unsupported") {

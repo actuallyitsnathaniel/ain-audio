@@ -149,9 +149,15 @@ function loadAudioPrefs(): AudioPrefs {
       ? (p.inputChannels as InputChannelMode)
       : DEFAULT_AUDIO_PREFS.inputChannels;
     return {
-      inputDeviceId: typeof p.inputDeviceId === "string" ? p.inputDeviceId : null,
+      // empty string is not a real deviceId (pre-permission enumerateDevices)
+      inputDeviceId:
+        typeof p.inputDeviceId === "string" && p.inputDeviceId
+          ? p.inputDeviceId
+          : null,
       outputDeviceId:
-        typeof p.outputDeviceId === "string" ? p.outputDeviceId : null,
+        typeof p.outputDeviceId === "string" && p.outputDeviceId
+          ? p.outputDeviceId
+          : null,
       bufferSize: buf,
       inputChannels: ch,
       latencyMode: p.latencyMode === "manual" ? "manual" : "auto",
@@ -2202,6 +2208,12 @@ class AudioEngine {
   audioPrefs: AudioPrefs = loadAudioPrefs();
   inputDevices: { deviceId: string; label: string }[] = [];
   outputDevices: { deviceId: string; label: string }[] = [];
+  /**
+   * True once enumerateDevices returns at least one input/output with a real
+   * deviceId + label. Before mic permission browsers often hand back empty ids
+   * and blank labels — that list must NOT prune saved prefs.
+   */
+  audioDevicesLabeled = false;
   /** Latency calibrate UI: idle | running | done | needInput | unsupported | failed */
   calibrateStatus:
     | "idle"
@@ -2478,43 +2490,115 @@ class AudioEngine {
     return this.refreshAudioDevices();
   }
 
+  /**
+   * Soft getUserMedia to unlock deviceIds + product labels for the I/O panel.
+   * Keeps the stream only if an audio track is armed; otherwise stops tracks
+   * immediately (permission grant is what matters for enumeration).
+   */
+  async unlockAudioDevices(): Promise<boolean> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.inputStatus = "unsupported";
+      this.emit("transport");
+      return false;
+    }
+    if (this._inputStream) {
+      await this.refreshAudioDevices();
+      return true;
+    }
+    this.inputStatus = "pending";
+    this.emit("transport");
+    const gen = ++this._inputOpenGen;
+    try {
+      // unconstrained — just need the permission grant; prefs device applied on arm
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+      if (gen !== this._inputOpenGen) {
+        for (const t of stream.getTracks()) t.stop();
+        await this.refreshAudioDevices();
+        return !!this._inputStream;
+      }
+      if (this.armedAudioTrack()) {
+        this._inputStream = stream;
+        this.inputStatus = "live";
+        this.readInputTrackLatency(stream);
+        this.ensureInputSource();
+        this.syncInputMonitor();
+        // reopen against the preferred deviceId if one is set
+        if (this.audioPrefs.inputDeviceId) {
+          await this.refreshAudioDevices();
+          return this.reopenInput();
+        }
+      } else {
+        for (const t of stream.getTracks()) t.stop();
+        this.inputStatus = "idle";
+      }
+      await this.refreshAudioDevices();
+      this.emit("transport");
+      this.emit("clip");
+      return true;
+    } catch {
+      this.inputStatus = "denied";
+      this.maybeNudgeInputStatus();
+      await this.refreshAudioDevices();
+      this.emit("transport");
+      this.emit("clip");
+      return false;
+    }
+  }
+
   async refreshAudioDevices() {
     this.ensureDeviceListen();
     if (!navigator.mediaDevices?.enumerateDevices) {
       this.inputDevices = [];
       this.outputDevices = [];
+      this.audioDevicesLabeled = false;
       this.emit("transport");
       return;
     }
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
-      this.inputDevices = all
-        .filter((d) => d.kind === "audioinput")
-        .map((d, i) => ({
-          deviceId: d.deviceId,
-          label: d.label || "input " + (i + 1),
-        }));
-      this.outputDevices = all
-        .filter((d) => d.kind === "audiooutput")
-        .map((d, i) => ({
-          deviceId: d.deviceId,
-          label: d.label || "output " + (i + 1),
-        }));
-      const inId = this.audioPrefs.inputDeviceId;
-      if (inId && !this.inputDevices.some((d) => d.deviceId === inId)) {
-        this.audioPrefs.inputDeviceId = null;
-        this.persistAudioPrefs();
-        if (this._inputStream) void this.reopenInput();
-      }
-      const outId = this.audioPrefs.outputDeviceId;
-      if (outId && !this.outputDevices.some((d) => d.deviceId === outId)) {
-        this.audioPrefs.outputDeviceId = null;
-        this.persistAudioPrefs();
-        void this.applyOutputSink();
+      // Pre-permission Chrome/Firefox often return empty deviceId + blank label.
+      // Those rows are useless in the select and must not look like a real list.
+      const inputs = all.filter(
+        (d) => d.kind === "audioinput" && !!d.deviceId,
+      );
+      const outputs = all.filter(
+        (d) => d.kind === "audiooutput" && !!d.deviceId,
+      );
+      this.audioDevicesLabeled = [...inputs, ...outputs].some((d) => !!d.label);
+      this.inputDevices = inputs.map((d, i) => ({
+        deviceId: d.deviceId,
+        label: d.label || "input " + (i + 1),
+      }));
+      this.outputDevices = outputs.map((d, i) => ({
+        deviceId: d.deviceId,
+        label: d.label || "output " + (i + 1),
+      }));
+      // Only prune saved prefs against a trusted (post-permission) enumeration.
+      // Otherwise a stale/empty list would wipe a working interface selection.
+      if (this.audioDevicesLabeled) {
+        const inId = this.audioPrefs.inputDeviceId;
+        if (inId && !this.inputDevices.some((d) => d.deviceId === inId)) {
+          this.audioPrefs.inputDeviceId = null;
+          this.persistAudioPrefs();
+          if (this._inputStream) void this.reopenInput();
+        }
+        const outId = this.audioPrefs.outputDeviceId;
+        if (outId && !this.outputDevices.some((d) => d.deviceId === outId)) {
+          this.audioPrefs.outputDeviceId = null;
+          this.persistAudioPrefs();
+          void this.applyOutputSink();
+        }
       }
     } catch {
       this.inputDevices = [];
       this.outputDevices = [];
+      this.audioDevicesLabeled = false;
     }
     this.emit("transport");
   }
@@ -2600,7 +2684,7 @@ class AudioEngine {
       this.inputStatus = "live";
       this.ensureInputSource();
       this.syncInputMonitor();
-      void this.refreshInputDevices();
+      void this.refreshAudioDevices();
       this.emit("transport");
       return true;
     }
@@ -2624,17 +2708,30 @@ class AudioEngine {
       this.readInputTrackLatency(stream);
       this.ensureInputSource();
       this.syncInputMonitor();
-      void this.refreshInputDevices();
+      void this.refreshAudioDevices();
       this.emit("transport");
       this.emit("clip");
       return true;
-    } catch {
-      if (!retried && this.audioPrefs.inputDeviceId) {
+    } catch (err) {
+      // Only fall back to Default when the chosen device is gone / unusable —
+      // never wipe the saved interface id on a permission deny.
+      const name =
+        err && typeof err === "object" && "name" in err
+          ? String((err as { name: unknown }).name)
+          : "";
+      const deviceGone =
+        name === "OverconstrainedError" ||
+        name === "NotFoundError" ||
+        name === "DevicesNotFoundError";
+      if (!retried && this.audioPrefs.inputDeviceId && deviceGone) {
         this.audioPrefs.inputDeviceId = null;
         this.persistAudioPrefs();
         return this.openInput(true);
       }
-      this.inputStatus = "denied";
+      this.inputStatus =
+        name === "NotSupportedError" || name === "TypeError"
+          ? "unsupported"
+          : "denied";
       this.maybeNudgeInputStatus();
       this.emit("transport");
       this.emit("clip");
@@ -2719,6 +2816,9 @@ class AudioEngine {
   }
 
   private teardownInput() {
+    // Invalidate in-flight getUserMedia / unlock so a late resolve can't
+    // resurrect a stream after disarm or device change.
+    this._inputOpenGen++;
     this.stopAudioCaptureGraph(true);
     if (this._inputStream) {
       for (const t of this._inputStream.getTracks()) t.stop();

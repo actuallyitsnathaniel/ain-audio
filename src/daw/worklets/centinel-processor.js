@@ -8,7 +8,7 @@
 // Circular buffers N=2048; latency = N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-05g-ease-e12";
+const CENTINEL_BUILD = "2026-08-07o-center-tight";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -118,13 +118,51 @@ const REVERB_SOFT_FLOOR_MS = 100;
  * Humanize (Auto-Tune–style): after this note age, stretch Retune Speed on
  * sustains so short notes stay tight while long notes breathe.
  */
-const HUMANIZE_SUSTAIN_MS = 90;
+const HUMANIZE_SUSTAIN_MS = 100;
 /** Ramp from 0→full humanize stretch over this many ms past the sustain gate. */
 const HUMANIZE_RAMP_MS = 120;
 /** Extra Retune Speed (ms) at humanize=1 once fully sustained. */
-const HUMANIZE_EXTRA_MS = 220;
+const HUMANIZE_EXTRA_MS = 190;
+/**
+ * Post-commit center lock — stationary only (still_loose was ~10pp behind AT
+ * on ≤15¢). Boundary-follow stays scoop-gated so shake doesn't return.
+ */
+const CENTER_LOCK_AGE_MS = 40;
+/** |audibleWant − tgt| window (cents) once glide has settled. */
+const CENTER_LOCK_CENTS = 42;
+/** Center-chase tau floor (ms) while stationary. */
+const CENTER_LOCK_SPEED_MS = 18;
+/** Glide settled: |wantTgt − audibleWant| under this (cents) before speeding up. */
+const CENTER_LOCK_SETTLE_CENTS = 12;
+/** Pull strength of sticky want → scale center while stationary. */
+const CENTER_WANT_PULL = 0.42;
+/** Extra bias of wantBase onto tgt once parked near center (stationary). */
+const CENTER_WANT_BIAS = 0.38;
+/**
+ * Boundary soften (pop flex=0): only on *directed* scoops/gestures.
+ * Engaging whenever |raw−sticky| > ~30¢ let rough/pitchy sustains pull want
+ * with YIN jitter → "shaky" tuned vocal (m bounce: +shake reversals).
+ */
+const BOUNDARY_FOLLOW_SEMI = 0.38;
+/** Fraction of (det − stickyWant) to follow at full boundary. */
+const BOUNDARY_FOLLOW_AMT = 0.38;
+/** Semitone span over which boundary follow ramps 0→full. */
+const BOUNDARY_FOLLOW_SPAN = 0.35;
 /** Slow pitch center for Natural Vibrato extraction (ms). */
 const VIB_CENTER_MS = 110;
+/**
+ * Pitch-velocity: season hold lightly; gate boundary-follow to gestures.
+ */
+const STABLE_VEL_ST_S = 2.8;
+const GESTURE_VEL_ST_S = 8.0;
+/** Medium scoop — may boundary-follow without full gesture flag. */
+const SCOOP_VEL_ST_S = 4.5;
+const STABLE_PITCH_MS = 28;
+const HOLD_STABLE_SCALE = 0.88;
+const HOLD_GESTURE_SCALE = 1.18;
+/** Want-base slew — slower when stationary so roughness doesn't chatter. */
+const WANT_BASE_SLEW_STABLE = 0.18;
+const WANT_BASE_SLEW_GESTURE = 0.5;
 
 const SCALE_PCS = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -532,6 +570,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._noteAgeMs = 0;
     /** Slow det center for Natural Vibrato residual. */
     this._vibCenter = 60;
+    /** |d pitch / dt| (st/s), smoothed — portamento vs stationary. */
+    this._pitchVel = 0;
+    this._prevRawVel = 60;
+    this._haveRawVel = false;
+    /** ms with pitchVel under STABLE_VEL (DPW-style critical time). */
+    this._stablePitchMs = 0;
+    /** Slewed want base — prevents soft pops from hop-to-hop boundary jumps. */
+    this._wantBaseSlew = 60;
     /** Re-arm after silence — softer first correction under soft+PSOLA. */
     this._coldStart = false;
     this._coldStartMs = 0;
@@ -732,8 +778,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Autotune-style: keep sticky scale target until raw is *clearly* closer to
+   * Autotune-style: keep sticky scale target until raw is clearly closer to
    * another note (hysteresis). Nearest-neighbor alone flip-flops at midpoints.
+   * (l used vib-center here and lagged scoops — retarget stays on live pitch.)
    */
   _shouldRetarget(rawMidi, amount, flexCents, transpose) {
     // Reverb multipitch / octave rival: don't chase a new neighbor.
@@ -796,7 +843,30 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
    */
   _applyCorrection(rawMidi, amount, speedMs, flexCents, transpose, vibrato) {
     const dtMs = this._detectDt * 1000;
-    const needHold = holdMsForSpeed(speedMs, this._coldStart, this._pitchConf);
+    // Pitch velocity — mild seasoning only (see HOLD_* / boundary follow).
+    if (!this._haveRawVel) {
+      this._prevRawVel = rawMidi;
+      this._haveRawVel = true;
+      this._pitchVel = 0;
+      this._stablePitchMs = 0;
+    } else {
+      const dSt =
+        Math.abs(rawMidi - this._prevRawVel) /
+        Math.max(1e-4, this._detectDt);
+      this._pitchVel += (dSt - this._pitchVel) * 0.4;
+      this._prevRawVel = rawMidi;
+      if (this._pitchVel < STABLE_VEL_ST_S) this._stablePitchMs += dtMs;
+      else this._stablePitchMs = 0;
+    }
+    const isStable = this._stablePitchMs >= STABLE_PITCH_MS;
+    const isGesture = this._pitchVel >= GESTURE_VEL_ST_S;
+    // Vib-center for boundary soften / stays widen — not for retarget lag.
+    const pitchSoft =
+      this._noteAgeMs > VIB_CENTER_MS * 0.35 ? this._vibCenter : rawMidi;
+
+    let needHold = holdMsForSpeed(speedMs, this._coldStart, this._pitchConf);
+    if (isStable) needHold *= HOLD_STABLE_SCALE;
+    else if (isGesture) needHold *= HOLD_GESTURE_SCALE;
     let justCommitted = false;
 
     if (!this._noteLocked) {
@@ -834,9 +904,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._holdAccumMs = 0;
         this._lockedDet += (rawMidi - this._lockedDet) * 0.15;
       }
-    } else if (Math.abs(rawMidi - this._lockedDet) <= STAYS_LOCKED_SEMI) {
-      this._lockedDet += (rawMidi - this._lockedDet) * 0.15;
+    } else if (
+      Math.abs(pitchSoft - this._committedTgt) <= STAYS_LOCKED_SEMI ||
+      Math.abs(rawMidi - this._lockedDet) <= STAYS_LOCKED_SEMI
+    ) {
+      // Near sticky: slow det track — rough vocals were pumping R* via lockedDet.
+      const detA = isGesture ? 0.22 : 0.08;
+      this._lockedDet += (rawMidi - this._lockedDet) * detA;
       this._tgtMidi = this._committedTgt;
+      // Always allow retarget (l gated on stable||gesture → mid-zone starvation).
       if (this._shouldRetarget(rawMidi, amount, flexCents, transpose)) {
         this._holdCand = rawMidi;
         this._holdAccumMs = dtMs;
@@ -849,7 +925,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._lockedDet += (rawMidi - this._lockedDet) * 0.25;
     } else {
       // Outside stays window but sticky still preferred — ease det, keep want
-      this._lockedDet += (rawMidi - this._lockedDet) * 0.2;
+      const detA = isGesture ? 0.22 : 0.1;
+      this._lockedDet += (rawMidi - this._lockedDet) * detA;
       this._tgtMidi = this._committedTgt;
     }
 
@@ -865,16 +942,92 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     if (justCommitted) {
       this._noteAgeMs = 0;
       this._vibCenter = det;
+      this._wantBaseSlew = this._committedWant;
+      this._stablePitchMs = 0;
     } else {
       this._noteAgeMs += dtMs;
       const vibA = 1 - Math.exp(-this._detectDt / (VIB_CENTER_MS / 1000));
       this._vibCenter += (det - this._vibCenter) * vibA;
     }
 
+    // Post-commit: pull sticky want onto scale center while stationary.
+    // Gestures / pending holds skip — that's scoop territory (anti-shake).
+    if (
+      !justCommitted &&
+      !this._pendingHold &&
+      !isGesture &&
+      isStable &&
+      this._noteAgeMs >= CENTER_LOCK_AGE_MS
+    ) {
+      const residCents =
+        Math.abs(this._committedWant - this._committedTgt) * 100;
+      if (residCents > 0.25 && residCents <= 50) {
+        const u = Math.min(
+          1,
+          (this._noteAgeMs - CENTER_LOCK_AGE_MS) / 55,
+        );
+        this._committedWant +=
+          (this._committedTgt - this._committedWant) *
+          (CENTER_WANT_PULL * u);
+      }
+    }
+
+    // Want base: sticky + hold pre-glide. Boundary soften only on directed
+    // scoops — rough sustains near ±30–40¢ must stay hard on sticky (anti-shake).
+    let wantBase = this._committedWant;
+    if (this._pendingHold && this._holdAccumMs > 0 && !justCommitted) {
+      const cand = this._wantFromDet(
+        this._holdCand,
+        amount,
+        flexCents,
+        transpose,
+      );
+      const u = Math.min(1, this._holdAccumMs / Math.max(8, needHold));
+      const u2 = u * u;
+      wantBase =
+        this._committedWant + (cand.want - this._committedWant) * u2;
+    } else if (
+      !justCommitted &&
+      this._noteLocked &&
+      (isGesture || this._pitchVel >= SCOOP_VEL_ST_S)
+    ) {
+      const dSticky = Math.abs(rawMidi - this._committedTgt);
+      if (dSticky > BOUNDARY_FOLLOW_SEMI) {
+        const u = Math.min(
+          1,
+          (dSticky - BOUNDARY_FOLLOW_SEMI) / BOUNDARY_FOLLOW_SPAN,
+        );
+        const amt = isGesture
+          ? BOUNDARY_FOLLOW_AMT
+          : BOUNDARY_FOLLOW_AMT * 0.65;
+        wantBase =
+          this._committedWant + (det - this._committedWant) * u * amt;
+      }
+    } else if (
+      !justCommitted &&
+      isStable &&
+      !isGesture &&
+      this._noteAgeMs >= CENTER_LOCK_AGE_MS
+    ) {
+      // Stationary park: bias want onto integer center (closes the loose gap).
+      wantBase +=
+        (this._committedTgt - wantBase) * CENTER_WANT_BIAS;
+    }
+
+    // Slew wantBase (boundary hop jumps were soft-popping).
+    if (justCommitted) {
+      this._wantBaseSlew = wantBase;
+    } else {
+      let a = WANT_BASE_SLEW_STABLE;
+      if (isGesture) a = WANT_BASE_SLEW_GESTURE;
+      else if (isStable && this._noteAgeMs >= CENTER_LOCK_AGE_MS) a = 0.3;
+      this._wantBaseSlew += (wantBase - this._wantBaseSlew) * a;
+    }
+
     // Natural Vibrato: −1 flatten … 0 leave … +1 amplify AC residual onto want
     const vibAmt = Math.max(-1, Math.min(1, vibrato));
     const vibSemi = det - this._vibCenter;
-    const wantEff = this._committedWant + vibSemi * vibAmt;
+    const wantEff = this._wantBaseSlew + vibSemi * vibAmt;
     // Confidence ducks wet amount in process() — do not bend want/R* here.
     this._wantTgt = wantEff;
     // Soft+PSOLA slews _audibleWant in process(); robot snaps here.
@@ -1045,6 +1198,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._vibCenter = midi;
           this._audibleWant = midi;
           this._wantTgt = midi;
+          this._wantBaseSlew = midi;
+          this._haveRawVel = false;
+          this._pitchVel = 0;
+          this._stablePitchMs = 0;
         }
       }
 
@@ -1125,6 +1282,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._coldStartMs = 0;
         this._commitSoftMs = 0;
         this._reverbSoftMs = 0;
+        this._haveRawVel = false;
+        this._pitchVel = 0;
+        this._stablePitchMs = 0;
         this._pitchConf = 0;
         this._confWetOpen = true;
         this._confWetLowMs = 0;
@@ -1431,9 +1591,35 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const wetXfadeAlpha =
       1 - Math.exp(-1 / Math.max(1, (wetXfadeMs / 1000) * sampleRate));
     const softPsola = this._formant >= 0.5 && spd >= 0.5;
+    // Default: Retune Speed through note transitions. Stationary + near center
+    // → finish last cents faster (closes ≤15¢ gap vs AT without scoop shake).
+    let wantChaseMs = spd;
+    if (
+      softPsola &&
+      spd >= 0.5 &&
+      this._noteAgeMs >= CENTER_LOCK_AGE_MS &&
+      this._stablePitchMs >= STABLE_PITCH_MS &&
+      this._commitSoftMs <= 0 &&
+      this._pitchVel < SCOOP_VEL_ST_S &&
+      !this._commitRecapture &&
+      !this._coldStart &&
+      !this._onsetUnity &&
+      !this._pendingHold
+    ) {
+      const audErrCents =
+        Math.abs(this._audibleWant - this._committedTgt) * 100;
+      const glideErrCents =
+        Math.abs(this._wantTgt - this._audibleWant) * 100;
+      if (
+        audErrCents <= CENTER_LOCK_CENTS &&
+        glideErrCents <= CENTER_LOCK_SETTLE_CENTS
+      ) {
+        wantChaseMs = Math.min(wantChaseMs, CENTER_LOCK_SPEED_MS);
+      }
+    }
     const wantAlpha =
-      softPsola && spd >= 0.5
-        ? 1 - Math.exp(-1 / Math.max(1, (spd / 1000) * sampleRate))
+      softPsola && wantChaseMs >= 0.5
+        ? 1 - Math.exp(-1 / Math.max(1, (wantChaseMs / 1000) * sampleRate))
         : 1;
 
     for (let i = 0; i < n; i++) {
@@ -1671,6 +1857,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._coldStartMs = 0;
         this._commitSoftMs = 0;
         this._reverbSoftMs = 0;
+        this._haveRawVel = false;
+        this._pitchVel = 0;
+        this._stablePitchMs = 0;
         this._pitchConf = 0;
         this._confWetOpen = true;
         this._confWetLowMs = 0;

@@ -58,10 +58,12 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 **Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Note commit:
 `stays_locked` (±0.4 st) + hysteretic hold (base ~15 ms, soft stretch capped
 ~60 ms — eased from AT-strict after robotics); sticky scale **target** until
-raw is clearly closer (+0.32 st hysteresis). `R*` always tracks sticky
-want / live det; **Retune Speed** is the only ratio-chase tau. Post-commit soft
-floor ~62 ms (between AT-strict 48 and old 85). **Humanize** stretches
-Retune Speed on sustains (~90 ms in);
+raw is clearly closer (+0.32 st hysteresis). Boundary soften + hold pre-glide
+only on directed scoops (rough sustains stay hard on sticky — anti-shake).
+While **stationary**, sticky want + audible chase bias hard onto scale center
+(~18 ms last-cents) to close the ≤15¢ gap vs AT. Want-base slewed. `R*` tracks
+want / live det; **Retune Speed** owns transition glides. Post-commit soft
+floor ~62 ms. **Humanize** stretches Retune Speed on sustains (~100 ms in);
 **Natural Vibrato** (−1…+1) scales the AC residual around a slow det center
 onto the want (0 = leave · − = flatten · + = amplify). Note-commit under
 PSOLA refreshes a single grain in-place (no dual-grain OLA — that slapped).
@@ -498,11 +500,15 @@ or desktop shell) — see [docs/AIN-MACOS.md](../../docs/AIN-MACOS.md).
 
   **Audio prefs** (`ain-audio-prefs`, **File → I/O Preferences…** → small panel):
   - **Input** — `enumerateDevices` list; `deviceId: { exact }` on open (falls back to
-    Default if the device is gone). `devicechange` refreshes the list.
+    Default if the device is gone). `devicechange` refreshes the list. Before mic
+    permission, browsers return empty ids / blank labels — the panel’s **allow mic
+    to list devices…** (`unlockAudioDevices`) grants permission so interfaces show
+    up. Saved device ids are **not** pruned against that starved list (that used to
+    wipe a working interface selection).
   - **Output** — `audiooutput` list + `AudioContext.setSinkId(id)` when supported
     (Chrome/Edge; Safari often missing → control disabled, system default). Persist
     `outputDeviceId`; on failure clear id and soft-nudge. System tab shows the chosen
-    output label / “system default”.
+    output label / “system default”. Same permission gate as input for real labels.
   - **Channels** — `stereo | left | right | sum` (default **left**). USB interfaces often
     present as stereo; a mic on input 1 is L-only, so **left** folds that channel to both
     sides for monitor + baked takes. **stereo** keeps L/R; **right** for input 2;

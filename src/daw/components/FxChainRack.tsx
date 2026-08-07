@@ -979,19 +979,19 @@ function DevicePanel({
               <FxChip
                 label="pop"
                 on={
-                  Math.abs(p.speed - 45) < 1 &&
+                  Math.abs(p.speed - 50) < 1 &&
                   Math.abs((p.tracking ?? 0) - 1) < 0.05 &&
-                  Math.abs((p.humanize ?? 0) - 0.12) < 0.05 &&
+                  Math.abs((p.humanize ?? 0) - 0.18) < 0.05 &&
                   Math.abs(p.vibrato ?? 0) < 0.05 &&
                   (p.formant ?? 0) >= 0.5
                 }
                 enabled={p.on}
-                title="Pop — ~45ms soft ratio under PSOLA (formant on), a hair of Humanize, track 100%"
+                title="Pop — ~50ms soft ratio under PSOLA, light Humanize (steadier on rough takes)"
                 onClick={() =>
                   set({
-                    speed: 45,
+                    speed: 50,
                     flex: 0,
-                    humanize: 0.12,
+                    humanize: 0.18,
                     vibrato: 0,
                     amount: 1,
                     formant: 1,
@@ -1124,7 +1124,7 @@ function DevicePanel({
             label="speed"
             disabled={!p.on}
             fmt={(v) => (v < 0.5 ? "lock" : Math.round(v) + "ms")}
-            tip="Retune speed (ms) — the only R* chase tau. 0 = robot snap. Soft/pop + formant≥50% glide to the sticky note; Fairbanks (formant off) softs within-note only. Do-no-harm clamp still applies."
+            tip="Retune speed (ms) — main R* chase tau (near-center catch can go faster after commit). 0 = robot snap. Soft/pop + formant≥50% glide to the sticky note; Fairbanks (formant off) softs within-note only. Do-no-harm clamp still applies."
           />
           <Knob
             value={p.amount}

@@ -85,8 +85,12 @@ export function AudioPrefsPanel({
   const lastBump = useRef(0);
 
   useEffect(() => {
-    void engine.refreshAudioDevices();
-    void engine.probePersistCodec();
+    void (async () => {
+      await engine.refreshAudioDevices();
+      // If the browser already granted mic (labels present) we're done. If not,
+      // don't auto-prompt — the allow button below unlocks the real device list.
+      void engine.probePersistCodec();
+    })();
   }, []);
 
   useEffect(() => {
@@ -159,6 +163,32 @@ export function AudioPrefsPanel({
 
       {tab === "prefs" ? (
         <>
+          {!eng.audioDevicesLabeled && eng.inputStatus !== "unsupported" && (
+            <div className="mb-2.5 flex flex-col gap-1">
+              <button
+                type="button"
+                className={
+                  ctl +
+                  "px-2.5 " +
+                  onOff(eng.inputStatus === "live" || eng.inputStatus === "pending")
+                }
+                disabled={eng.inputStatus === "pending"}
+                onClick={() => void engine.unlockAudioDevices()}
+                title="Browser needs microphone permission before it will name USB interfaces / built-in mics"
+              >
+                {eng.inputStatus === "pending"
+                  ? "allowing mic…"
+                  : eng.inputStatus === "denied"
+                    ? "mic denied — retry allow"
+                    : "allow mic to list devices…"}
+              </button>
+              <span className={cap}>
+                without this, the browser hides interface names (and may look
+                like nothing is connected)
+              </span>
+            </div>
+          )}
+
           <label className="mb-2.5 flex flex-col gap-1">
             <span className={cap}>input</span>
             <select
@@ -172,12 +202,23 @@ export function AudioPrefsPanel({
               title="audio input device"
             >
               <option value="">Default</option>
+              {prefs.inputDeviceId &&
+                !eng.inputDevices.some(
+                  (d) => d.deviceId === prefs.inputDeviceId,
+                ) && (
+                  <option value={prefs.inputDeviceId}>
+                    saved device — allow mic to resolve
+                  </option>
+                )}
               {eng.inputDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
                   {d.label}
                 </option>
               ))}
             </select>
+            {eng.audioDevicesLabeled && eng.inputDevices.length === 0 && (
+              <span className={cap}>no audio inputs reported by the browser</span>
+            )}
           </label>
 
           <label className="mb-2.5 flex flex-col gap-1">
@@ -198,6 +239,14 @@ export function AudioPrefsPanel({
               }
             >
               <option value="">Default</option>
+              {prefs.outputDeviceId &&
+                !eng.outputDevices.some(
+                  (d) => d.deviceId === prefs.outputDeviceId,
+                ) && (
+                  <option value={prefs.outputDeviceId}>
+                    saved device — allow mic to resolve
+                  </option>
+                )}
               {eng.outputDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
                   {d.label}
@@ -404,6 +453,21 @@ export function AudioPrefsPanel({
         </>
       ) : (
         <div className="flex flex-col gap-2.5">
+          {!eng.audioDevicesLabeled && eng.inputStatus !== "unsupported" && (
+            <button
+              type="button"
+              className={ctl + "px-2.5 " + idle}
+              disabled={eng.inputStatus === "pending"}
+              onClick={() => void engine.unlockAudioDevices()}
+              title="Unlock enumerateDevices labels via getUserMedia"
+            >
+              {eng.inputStatus === "pending"
+                ? "allowing mic…"
+                : eng.inputStatus === "denied"
+                  ? "mic denied — retry allow"
+                  : "allow mic to list devices…"}
+            </button>
+          )}
           <div className="rounded-sm border border-line2 bg-panel2 px-2 py-1.5 font-mono text-[10px] text-dim">
             <div>
               {report.browser} · {report.os}

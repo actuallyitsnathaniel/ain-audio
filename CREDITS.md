@@ -56,6 +56,20 @@ Implemented from scratch, following these published techniques:
   — behavioral reference for Centinel: `stays_locked` hysteresis, hold-before-commit,
   and chase of **pitch ratio** (not MIDI springs). Under Fairbanks, Centinel limits
   soft chase to *within-note* errors so note boundaries stay robot-snap.
+- **Singing F0 / retune literature** (control-law inspiration, not code):
+  - [Sundberg / Prame](https://doi.org/10.1121/1.419735) — vibrato extent; perceived
+    pitch ≈ mean of F0 undulation → Centinel retargets from vib-center, not raw swing.
+  - [Ohishi et al., Interspeech 2012](https://www.isca-archive.org/interspeech_2012/ohishi12_interspeech.pdf)
+    — F0 = note + expression (vibrato/portamento) + fine fluctuation.
+  - [Yang, PhD QMUL](https://qmro.qmul.ac.uk/xmlui/bitstream/handle/123456789/24857/YANG_Luwei_Final_PhD_210417.pdf?sequence=1)
+    — vibrato + portamento as separate expressive devices; logistic portamento model.
+  - [Dynamic Pitch Warping, DAFx 2023](https://dafx.de/paper-archive/2023/DAFx23_paper_67.pdf)
+    — trigger correction only after stability (detection interval × critical time);
+    separate transition time; better vibrato/free-path preservation than ATA stairs.
+  - [SiPTH](https://doi.org/10.1109/taslp.2014.2331102) — hysteresis on the pitch-time
+    curve for unstable singers.
+  - [Onset/transition detection for singing](https://www.mdpi.com/2076-3417/12/15/7391)
+    — F0 trajectory slope marks portamento vs stable notes.
 - **[zita-at2](https://hal.science/hal-05096064)** — Fons Adriaensen (LAC 2025).
   Period-synchronous PSOLA for formant-preserving retune; Centinel’s formant
   dial (≥50%) places ~2·PE grains on analysis pitch marks (experimental).
