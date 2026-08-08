@@ -58,12 +58,11 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 **Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Note commit:
 `stays_locked` (±0.4 st) + hysteretic hold (base ~15 ms, soft stretch capped
 ~60 ms — eased from AT-strict after robotics); sticky scale **target** until
-raw is clearly closer (+0.32 st hysteresis). Boundary soften + hold pre-glide
-only on directed scoops (rough sustains stay hard on sticky — anti-shake).
-While **stationary**, sticky want + audible chase bias hard onto scale center
-(~18 ms last-cents) to close the ≤15¢ gap vs AT. Want-base slewed. `R*` tracks
-want / live det; **Retune Speed** owns transition glides. Post-commit soft
-floor ~62 ms. **Humanize** stretches Retune Speed on sustains (~100 ms in);
+raw is clearly closer (+0.32 st hysteresis). Directed midzone refine + stationary
+center-tight v2. **Humanize** does not stretch Retune Speed while audible want
+is still >~18¢ off sticky tgt (was fighting center finish). Post-commit soft
+floor drops to ~36 ms once pitch is stationary. Want-base slewed. `R*` tracks
+want / live det. **Humanize** otherwise stretches on sustains (~100 ms in);
 **Natural Vibrato** (−1…+1) scales the AC residual around a slow det center
 onto the want (0 = leave · − = flatten · + = amplify). Note-commit under
 PSOLA refreshes a single grain in-place (no dual-grain OLA — that slapped).
