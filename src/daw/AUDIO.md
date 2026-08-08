@@ -58,10 +58,13 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 **Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Note commit:
 `stays_locked` (±0.4 st) + hysteretic hold (base ~15 ms, soft stretch capped
 ~60 ms — eased from AT-strict after robotics); sticky scale **target** until
-raw is clearly closer (+0.32 st hysteresis). Directed midzone refine + stationary
-center-tight v2. **Humanize** does not stretch Retune Speed while audible want
-is still >~18¢ off sticky tgt (was fighting center finish). Post-commit soft
-floor drops to ~36 ms once pitch is stationary. Want-base slewed. `R*` tracks
+raw is clearly closer (~0.42 st hyst, +extra when stationary; vib-center
+judges parked retargets; commit re-validates; octave-lock sticky register).
+Directed midzone refine + stationary center-tight + loose-hold chase with
+soft-land (chase brake + center latch; no hard audibleWant snaps). **Humanize**
+does not stretch Retune Speed while audible want is still >~12¢ off sticky tgt.
+Post-commit soft floor when stationary never exceeds the Retune Speed knob.
+Want-base slewed. `R*` tracks
 want / live det. **Humanize** otherwise stretches on sustains (~100 ms in);
 **Natural Vibrato** (−1…+1) scales the AC residual around a slow det center
 onto the want (0 = leave · − = flatten · + = amplify). Note-commit under

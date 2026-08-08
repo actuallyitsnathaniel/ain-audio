@@ -27,6 +27,8 @@ dist-ssr
 db.json
 TODO.md
 *.tmp*
+.tmp_centinel/
+.tmp_formant/
 
 # showcase capture artifacts
 showcase/

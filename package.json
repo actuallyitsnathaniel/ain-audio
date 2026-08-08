@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "showcase": "node scripts/showcase.mjs",
     "centinel:ab": "node scripts/centinel-ab.mjs",
+    "centinel:score": "node scripts/centinel-score.mjs",
+    "centinel:render": "node scripts/centinel-render.mjs",
+    "centinel:loop": "node scripts/centinel-loop.mjs",
     "lint": "eslint ."
   },
   "dependencies": {
