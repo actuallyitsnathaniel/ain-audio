@@ -162,6 +162,8 @@ Real-time polyphonic **spectral pitch mapper**:
   `maxShift`
 - **Remap to scale** (PITCHMAP-lite): force tracks into scale / chord targets
 - Blend wet with dry via `strength`
+- **Detail pass:** map only peaks; unshifted bins keep input phase (`residual`);
+  lo/mid/hi amounts; onset duck (`hits`). Not a mag-only spectral gate.
 - Non-goals v1: AI demix, offline mastering, ML pitch models
 
 ### 4.2. Params (`FxParams["impartialer"]`)
@@ -174,22 +176,32 @@ impartialer: {
   key: number;       // 0–11, C = 0
   scale: "major" | "minor" | "dorian" | "chromatic";
   mode: MappingMode;
-  strength: number;  // 0–1
+  strength: number;  // 0–1 overall dry/wet
   transpose: number; // −12…+12 post-map
   maxShift: number;  // 1 | 2 | 12
   quality: "low" | "high";
-  residual: number;  // 0–1 unprocessed residual (Phase 2+)
+  residual: number;  // 0–1 wet gain on identity (unshifted) bins
+  floor: number;     // 0–1 of frame peak — peak gate
+  lo: number;        // 0–1 snap/remap below 250 Hz
+  mid: number;       // 0–1 snap/remap 250 Hz–2.5 kHz
+  hi: number;        // 0–1 snap/remap above 2.5 kHz
+  hits: number;      // 0–1 onset flux duck
 }
 ```
 
 Defaults: off, C major, `snap`, strength 0.7, transpose 0, maxShift 1, quality `low`,
-residual 0.5.
+residual 1, floor 0.08, lo/mid 1, hi 0.4, hits 0.75.
+
+PV runs **only when a bin actually moves**. In-key / below-floor / out-of-band
+energy stays at the analysis phase and is mixed by `residual`. Global transpose
+still forces the PV path (the bin has to move).
 
 ### 4.3. Worklet surface
 
 - Processor name: `ain-impartialer`
-- **AudioParams:** `strength`, `transpose`, `maxShift`, `residual` (continuous)
-- **port messages:** `{ type: "config", key, scale, mode }` and quality rebuild
+- **AudioParams:** `strength`, `transpose`, `maxShift`, `residual`, `floor`,
+  `bandLo`, `bandMid`, `bandHi`, `hits` (k-rate)
+- **port messages:** `{ type: "config", key, scale, mode, viz }` and quality rebuild
 - Quality change rebuilds the node (FFT size baked at construct); duck ~8 ms like FxChain
   rewire
 
@@ -199,7 +211,9 @@ residual 0.5.
 2. **Snap to key** — per-bin / per-peak pitch-class snap + strength + maxShift + UI.
 3. **Polyphonic remap** — harmonic grouping, per-track β, `remap` mode.
 4. Quality presets, residual split, viz messages.
-5. Optional: custom map, MIDI targets, sidechain key detect.
+5. **Detail pass** — residual wired, peak floor, lo/mid/hi, onset duck. (Living note:
+   impartialer-detail canvas.)
+6. Optional: custom map, MIDI targets, sidechain key detect, faster-hop quality.
 
 ***
 
@@ -394,6 +408,7 @@ Impartialer
 - [x] Phase 1 global shift
 - [x] Phase 2 snap-to-key
 - [x] Phase 3 remap (force nearest scale degree; polyphonic-lite / per-bin)
+- [x] Detail pass: residual + peak floor + lo/mid/hi + hits (onset duck)
 
 Speccomp
 

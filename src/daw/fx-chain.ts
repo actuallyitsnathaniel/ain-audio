@@ -164,6 +164,11 @@ export class FxChain {
     for (const d of this.live) d.nodes.setMidiTargets?.(notes);
   }
 
+  /** Seek / loop wrap: clear sticky pitch corrector state. */
+  resetCorrection() {
+    for (const d of this.live) d.nodes.resetCorrection?.();
+  }
+
   // tear down (track removed): disconnect everything from the graph
   dispose() {
     try { this.input.disconnect(); } catch { /* fine */ }

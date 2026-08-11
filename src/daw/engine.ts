@@ -722,6 +722,16 @@ class AudioEngine {
   }
   private _masterFx: FxChain | null = null;
   private _fxTickTimer = 0;
+  /** Arrangement loop-pass index — bump → reset centinel sticky state. */
+  private _pitchFxLoopPass = -1;
+
+  /** Clear sticky pitch correctors on every live chain (seek / loop / replay). */
+  private resetPitchFx() {
+    this._masterFx?.resetCorrection();
+    for (const id of Object.keys(this._arrStrips)) {
+      this._arrStrips[id]?.fx.resetCorrection();
+    }
+  }
 
   /** ~30 Hz tick for EQ dynamics + per-device analysers (independent of transport). */
   private ensureFxTick() {
@@ -732,6 +742,25 @@ class AudioEngine {
         this._arrStrips[id]?.fx.tick();
       }
       this.syncCentinelMidiTargets();
+      // Loop brace wrap: hard-cut audio re-fires but centinel kept the prior
+      // phrase's sticky note → "random" wrong notes on identical passes.
+      if (this.sequencePlaying && this.arrangeMode && this.ctx) {
+        const br = this.activeBrace();
+        if (br && br.end > br.start + 1e-9) {
+          const abs =
+            this._seqAnchorBeat +
+            (this.ctx.currentTime - this._seqAnchorTime) / this.beatDur();
+          const pass = Math.floor((abs - br.start) / (br.end - br.start));
+          if (pass !== this._pitchFxLoopPass) {
+            if (this._pitchFxLoopPass >= 0 && pass > this._pitchFxLoopPass) {
+              this.resetPitchFx();
+            }
+            this._pitchFxLoopPass = pass;
+          }
+        } else {
+          this._pitchFxLoopPass = -1;
+        }
+      }
     }, 16);
   }
 
@@ -1068,6 +1097,7 @@ class AudioEngine {
       if (!this.ready) return; // load failed
     }
     if (this.playing) return;
+    this.resetPitchFx();
     this.applyWet(true);
     this.startSources(this._offset);
     this.playing = true;
@@ -1093,6 +1123,7 @@ class AudioEngine {
     const was = this.playing;
     if (was) this.stopSources();
     this._offset = sec;
+    this.resetPitchFx();
     if (was && this.ready) this.startSources(sec);
     else this.playing = false;
     this.savePos();
@@ -5465,6 +5496,8 @@ class AudioEngine {
     if (this.playing) this.pause();
     this.transportMode = "sequence";
     this.sequencePlaying = true;
+    this._pitchFxLoopPass = -1;
+    this.resetPitchFx();
     let start = c.currentTime + 0.08; // small headroom before first note
     // count-in: schedule N bars of metronome click BEFORE the transport rolls, and push
     // the anchor forward by that duration so playback starts on the downbeat after it.
@@ -6532,6 +6565,8 @@ class AudioEngine {
       this._seqAnchorTime = now;
       this._scheduledThrough = now;
       this._metroThrough = Math.ceil(beat) - 1; // re-align clicks to the new position
+      this._pitchFxLoopPass = -1;
+      this.resetPitchFx();
       this.schedTick();
     } else {
       this.setInsertBeat(beat); // stopped → the cursor moves there (play resumes from it)

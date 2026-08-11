@@ -17,7 +17,7 @@ import { chromium } from "playwright";
 
 const PRESETS = {
   pop: {
-    speed: 50,
+    speed: 20,
     flex: 0,
     humanize: 0.18,
     vibrato: 0,

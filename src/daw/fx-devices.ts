@@ -200,7 +200,18 @@ export interface FxParams {
     transpose: number;
     maxShift: number;
     quality: SpectralQuality;
+    /** Wet gain on unmapped / identity bins (original phase). */
     residual: number;
+    /** Relative peak floor (0–1 of frame peak). Only local maxima above this may snap/remap. */
+    floor: number;
+    /** Snap/remap amount below 250 Hz. */
+    lo: number;
+    /** Snap/remap amount 250 Hz–2.5 kHz. */
+    mid: number;
+    /** Snap/remap amount above 2.5 kHz. */
+    hi: number;
+    /** Onset flux duck — attacks skip mapping. */
+    hits: number;
     /** Toggleable spectral assistant. */
     viz: boolean;
     /** `rta` = live line spectrum (default) · `trail` = ~1s scrolling heatmap. */
@@ -309,6 +320,8 @@ export interface FxDeviceNodes {
   tick?: (ctx: AudioContext) => void;
   /** Push held / sounding MIDI note numbers into devices that listen (centinel). */
   setMidiTargets?: (notes: number[]) => void;
+  /** Transport seek / loop wrap — clear sticky pitch state (centinel). */
+  resetCorrection?: () => void;
 }
 
 export type { FxVizSlot };
@@ -935,13 +948,18 @@ function buildImpartialer(ctx: AudioContext): FxDeviceNodes {
       node.parameters.get("strength")?.setTargetAtTime(fx.on ? fx.strength : 0, t, 0.03);
       node.parameters.get("transpose")?.setTargetAtTime(fx.transpose, t, 0.03);
       node.parameters.get("maxShift")?.setTargetAtTime(fx.maxShift, t, 0.03);
+      node.parameters.get("residual")?.setTargetAtTime(fx.residual ?? 1, t, 0.03);
+      node.parameters.get("floor")?.setTargetAtTime(fx.floor ?? 0.08, t, 0.03);
+      node.parameters.get("bandLo")?.setTargetAtTime(fx.lo ?? 1, t, 0.03);
+      node.parameters.get("bandMid")?.setTargetAtTime(fx.mid ?? 1, t, 0.03);
+      node.parameters.get("bandHi")?.setTargetAtTime(fx.hi ?? 0.4, t, 0.03);
+      node.parameters.get("hits")?.setTargetAtTime(fx.hits ?? 0.75, t, 0.03);
       node.port.postMessage({
         type: "config",
         on: fx.on,
         key: fx.key,
         scale: fx.scale,
         mode: fx.mode,
-        residual: fx.residual,
         viz: !!fx.viz,
       });
     },
@@ -1045,6 +1063,13 @@ function buildCentinel(ctx: AudioContext): FxDeviceNodes {
     setMidiTargets: (notes) => {
       try {
         node?.port.postMessage({ type: "midi", notes });
+      } catch {
+        /* node gone */
+      }
+    },
+    resetCorrection: () => {
+      try {
+        node?.port.postMessage({ type: "reset" });
       } catch {
         /* node gone */
       }
@@ -1594,7 +1619,12 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         transpose: 0,
         maxShift: 1,
         quality: "low",
-        residual: 0.5,
+        residual: 1,
+        floor: 0.08,
+        lo: 1,
+        mid: 1,
+        hi: 0.4,
+        hits: 0.75,
         viz: false,
         vizMode: "rta",
       }) as FxParams["impartialer"],
@@ -1730,10 +1760,19 @@ export function migrateFxDeviceStates(states: FxDeviceStateLike[]): FxDeviceStat
       }
 
       if (type === "impartialer") {
+        const defaults = FX_DEVICES.impartialer.defaults() as Record<string, unknown>;
         const vizMode = prev.vizMode === "trail" ? "trail" : "rta";
-        if (vizMode !== prev.vizMode) {
-          return { ...s, params: { ...prev, vizMode } };
-        }
+        const firstDetail = prev.floor === undefined && prev.lo === undefined;
+        return {
+          ...s,
+          params: {
+            ...defaults,
+            ...prev,
+            vizMode,
+            // residual was a dead default of 0.5 — first migrate opens it fully
+            residual: firstDetail ? 1 : typeof prev.residual === "number" ? prev.residual : 1,
+          },
+        };
       }
 
       if (type === "comp") {

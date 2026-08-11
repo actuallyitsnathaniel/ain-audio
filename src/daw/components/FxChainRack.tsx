@@ -783,7 +783,7 @@ function DevicePanel({
           name="IMPARTIALER"
           on={p.on}
           onToggle={(v) => set({ on: v })}
-          wide={vizOn}
+          wide
           headerExtra={
             <div className="flex items-center gap-1">
               <FxChip
@@ -864,6 +864,40 @@ function DevicePanel({
             label="strength"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Overall dry/wet vs latency-aligned dry"
+          />
+          <Knob
+            value={p.residual ?? 1}
+            min={0}
+            max={1}
+            defaultValue={1}
+            onChange={(v) => set({ residual: v })}
+            label="residual"
+            disabled={!p.on}
+            fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Unmapped bins stay at original phase — air, noise, in-key harmonics. 0 = peaks only."
+          />
+          <Knob
+            value={p.floor ?? 0.08}
+            min={0}
+            max={0.4}
+            defaultValue={0.08}
+            onChange={(v) => set({ floor: v })}
+            label="floor"
+            disabled={!p.on || !mapOn}
+            fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Relative peak gate. Only local maxima above this fraction of the frame peak may snap/remap."
+          />
+          <Knob
+            value={p.hits ?? 0.75}
+            min={0}
+            max={1}
+            defaultValue={0.75}
+            onChange={(v) => set({ hits: v })}
+            label="hits"
+            disabled={!p.on || !mapOn}
+            fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Onset duck — spectral flux briefly turns mapping down so attacks stay sharp."
           />
           <Knob
             value={p.maxShift}
@@ -874,6 +908,42 @@ function DevicePanel({
             label="max±"
             disabled={!p.on || p.mode !== "snap"}
             fmt={(v) => "±" + Math.round(v)}
+          />
+          <Knob
+            value={p.lo ?? 1}
+            min={0}
+            max={1}
+            defaultValue={1}
+            size={44}
+            onChange={(v) => set({ lo: v })}
+            label="lo"
+            disabled={!p.on || !mapOn}
+            fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Snap/remap amount below 250 Hz"
+          />
+          <Knob
+            value={p.mid ?? 1}
+            min={0}
+            max={1}
+            defaultValue={1}
+            size={44}
+            onChange={(v) => set({ mid: v })}
+            label="mid"
+            disabled={!p.on || !mapOn}
+            fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Snap/remap amount 250 Hz–2.5 kHz"
+          />
+          <Knob
+            value={p.hi ?? 0.4}
+            min={0}
+            max={1}
+            defaultValue={0.4}
+            size={44}
+            onChange={(v) => set({ hi: v })}
+            label="hi"
+            disabled={!p.on || !mapOn}
+            fmt={(v) => Math.round(v * 100) + "%"}
+            tip="Snap/remap amount above 2.5 kHz — keep low to preserve air"
           />
           <div className="flex flex-col gap-1 self-center">
             <FxChip
@@ -898,14 +968,14 @@ function DevicePanel({
               onClick={() => set({ mode: "off" })}
             />
             <FxChip
-              label="lo"
+              label="low"
               on={p.quality === "low"}
               enabled={p.on}
               title="low latency (2048 FFT)"
               onClick={() => set({ quality: "low" })}
             />
             <FxChip
-              label="hi"
+              label="high"
               on={p.quality === "high"}
               enabled={p.on}
               title="high quality (4096 FFT, more latency)"
@@ -979,17 +1049,17 @@ function DevicePanel({
               <FxChip
                 label="pop"
                 on={
-                  Math.abs(p.speed - 50) < 1 &&
+                  Math.abs(p.speed - 20) < 1 &&
                   Math.abs((p.tracking ?? 0) - 1) < 0.05 &&
                   Math.abs((p.humanize ?? 0) - 0.18) < 0.05 &&
                   Math.abs(p.vibrato ?? 0) < 0.05 &&
                   (p.formant ?? 0) >= 0.5
                 }
                 enabled={p.on}
-                title="Pop — ~50ms soft ratio under PSOLA, light Humanize (steadier on rough takes)"
+                title="Pop — ~20ms soft ratio under PSOLA, light Humanize (tighter centers vs AT goal)"
                 onClick={() =>
                   set({
-                    speed: 50,
+                    speed: 20,
                     flex: 0,
                     humanize: 0.18,
                     vibrato: 0,
@@ -1146,7 +1216,7 @@ function DevicePanel({
             label="flex"
             disabled={!p.on}
             fmt={(v) => Math.round(v) + "¢"}
-            tip="Dead-zone in cents — leave intentional detune alone inside this window"
+            tip="Flex-Tune — correction only near the target note. 0 = always pull (hard). Higher = smaller correction island, more scoop/gesture pass-through"
           />
           <Knob
             value={p.humanize}

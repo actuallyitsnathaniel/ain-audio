@@ -27,6 +27,8 @@ function parseArgs(argv) {
     preset: "pop",
     latencySamp: 1024,
     scoreOnly: null,
+    /** Extra flags forwarded to centinel-render.mjs (--formant=0, --speed=…, …). */
+    renderExtra: [],
   };
   for (const a of argv) {
     if (a.startsWith("--dry=")) out.dry = resolve(a.slice(6).replace(/^~/, home));
@@ -39,6 +41,15 @@ function parseArgs(argv) {
       out.latencySamp = Number(a.slice(15));
     else if (a.startsWith("--score-only="))
       out.scoreOnly = resolve(a.slice(13).replace(/^~/, home));
+    else if (
+      a.startsWith("--formant=") ||
+      a.startsWith("--speed=") ||
+      a.startsWith("--humanize=") ||
+      a.startsWith("--tracking=") ||
+      a.startsWith("--key=")
+    ) {
+      out.renderExtra.push(a);
+    }
   }
   return out;
 }
@@ -59,6 +70,7 @@ function main() {
         `--out=${args.out}`,
         `--base=${args.base}`,
         `--preset=${args.preset}`,
+        ...args.renderExtra,
       ],
       { encoding: "utf8", cwd: root },
     );

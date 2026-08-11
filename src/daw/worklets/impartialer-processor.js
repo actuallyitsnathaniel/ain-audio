@@ -1,10 +1,15 @@
 // Impartialer — spectral partial remapper
 // Phase 1: global transpose · Phase 2: in-key snap · Phase 3: force remap to scale.
+// Detail pass: peak-only mapping, original-phase residual, lo/mid/hi amounts, onset duck.
 // STFT/OLA helpers stay inlined for now; extract to spectral-core.js when speccomp needs them.
 //
 // Dry/wet mixes INSIDE the worklet against a latency-aligned dry delay so strength
 // blends don't comb. Bypass still runs the delay so latency stays constant when
 // toggled (neutralize-in-place).
+//
+// Unshifted bins keep input phase (not PV). PV runs only when a bin actually moves.
+// residual = wet gain on those identity bins. floor = relative peak gate.
+// lo/mid/hi scale snap/remap (splits 250 Hz / 2.5 kHz). hits ducks mapping on flux.
 
 const PRESETS = {
   low: { fftSize: 2048, hop: 512 },
@@ -72,6 +77,8 @@ function fft(re, im, inverse) {
 }
 
 const VIZ_BINS = 96;
+const SPLIT_LO_HZ = 250;
+const SPLIT_HI_HZ = 2500;
 
 function createChannel(fftSize, hop) {
   const half = fftSize / 2;
@@ -92,6 +99,10 @@ function createChannel(fftSize, hop) {
     freq: new Float32Array(half + 1),
     synMag: new Float32Array(half + 1),
     synFreq: new Float32Array(half + 1),
+    inputPhase: new Float32Array(half + 1),
+    residualMag: new Float32Array(half + 1),
+    lastMag: new Float32Array(half + 1),
+    onsetEnv: 0,
   };
 }
 
@@ -163,12 +174,38 @@ function mapSemitones(midi, key, scalePcs, maxShift, force) {
 
 /**
  * Analyze frame → optional per-bin snap/remap + global transpose → synthesize OLA.
+ * Unshifted bins keep input phase (residual). PV only when a bin actually moves.
  * `mapMode`: "off" | "snap" | "remap"
  */
 function processFrame(ch, window, fftSize, hop, opts) {
   const half = fftSize / 2;
-  const { re, im, lastPhase, sumPhase, mag, freq, synMag, synFreq } = ch;
-  const { pitchRatio, mapMode, key, scalePcs, maxShift, sampleRate } = opts;
+  const {
+    re,
+    im,
+    lastPhase,
+    sumPhase,
+    mag,
+    freq,
+    synMag,
+    synFreq,
+    inputPhase,
+    residualMag,
+    lastMag,
+  } = ch;
+  const {
+    pitchRatio,
+    mapMode,
+    key,
+    scalePcs,
+    maxShift,
+    sampleRate,
+    residual,
+    floor,
+    bandLo,
+    bandMid,
+    bandHi,
+    hits,
+  } = opts;
 
   for (let i = 0; i < fftSize; i++) {
     re[i] = ch.inFifo[i] * window[i];
@@ -177,6 +214,9 @@ function processFrame(ch, window, fftSize, hop, opts) {
   fft(re, im, false);
 
   const expect = (2 * Math.PI * hop) / fftSize;
+  let peakMag = 1e-12;
+  let energy = 0;
+  let flux = 0;
   for (let k = 0; k <= half; k++) {
     const mr = re[k];
     const mi = im[k];
@@ -184,44 +224,93 @@ function processFrame(ch, window, fftSize, hop, opts) {
     const p = Math.atan2(mi, mr);
     let delta = p - lastPhase[k];
     lastPhase[k] = p;
+    inputPhase[k] = p;
     delta -= k * expect;
     const qpd = Math.round(delta / Math.PI);
     if (qpd >= 0) delta -= Math.PI * (qpd + (qpd & 1));
     else delta -= Math.PI * (qpd - (qpd & 1));
     mag[k] = m;
     freq[k] = ((k * expect + delta) * fftSize) / (2 * Math.PI * hop);
+    if (m > peakMag) peakMag = m;
+    energy += m;
+    const prev = lastMag[k];
+    if (m > prev) flux += m - prev;
+    lastMag[k] = m;
   }
+
+  const onset = flux / (energy + 1e-12);
+  ch.onsetEnv = onset > ch.onsetEnv ? onset : ch.onsetEnv * 0.82;
+  const duck =
+    Math.min(1, Math.max(0, hits)) * Math.min(1, ch.onsetEnv * 2.2);
 
   synMag.fill(0);
   synFreq.fill(0);
+  residualMag.fill(0);
 
   const mapOn = mapMode === "snap" || mapMode === "remap";
   const force = mapMode === "remap";
   const binHz = sampleRate / fftSize;
+  const floorAbs = peakMag * Math.min(1, Math.max(0, floor));
+  const resAmt = Math.min(1, Math.max(0, residual));
+  const doGlobal = Math.abs(pitchRatio - 1) > 0.001;
+  const loAmt = Math.min(1, Math.max(0, bandLo));
+  const midAmt = Math.min(1, Math.max(0, bandMid));
+  const hiAmt = Math.min(1, Math.max(0, bandHi));
 
   for (let k = 0; k <= half; k++) {
-    if (mag[k] < 1e-12) continue;
+    const m = mag[k];
+    if (m < 1e-12) continue;
+
+    const hz = k * binHz;
+    let bandAmt = hz < SPLIT_LO_HZ ? loAmt : hz < SPLIT_HI_HZ ? midAmt : hiAmt;
+    bandAmt *= 1 - duck;
+
+    const isPeak =
+      k > 0 &&
+      k < half &&
+      m >= mag[k - 1] &&
+      m >= mag[k + 1] &&
+      m >= floorAbs;
 
     let ratio = pitchRatio;
-    if (mapOn && k > 0) {
+    if (mapOn && isPeak && bandAmt > 0.001) {
       let fHz = (freq[k] * sampleRate) / fftSize;
-      if (!(fHz > 20 && fHz < sampleRate * 0.45)) fHz = k * binHz;
+      if (!(fHz > 20 && fHz < sampleRate * 0.45)) fHz = hz;
       const midi = 69 + (12 * Math.log(fHz / 440)) / Math.LN2;
       const shift = mapSemitones(midi, key, scalePcs, maxShift, force);
-      if (shift !== 0) ratio *= Math.pow(2, shift / 12);
+      if (shift !== 0) ratio *= Math.pow(2, (shift * bandAmt) / 12);
     }
 
-    const dest = (k * ratio + 0.5) | 0;
-    if (dest < 0 || dest > half) continue;
-    synMag[dest] += mag[k];
-    synFreq[dest] = freq[k] * ratio;
+    const moved = Math.abs(ratio - 1) > 0.001;
+    if (moved || doGlobal) {
+      const dest = (k * ratio + 0.5) | 0;
+      if (dest < 0 || dest > half) continue;
+      synMag[dest] += m;
+      synFreq[dest] = freq[k] * ratio;
+    } else {
+      residualMag[k] = m;
+    }
   }
 
   for (let k = 0; k <= half; k++) {
-    const p = sumPhase[k];
-    re[k] = synMag[k] * Math.cos(p);
-    im[k] = synMag[k] * Math.sin(p);
-    sumPhase[k] += (2 * Math.PI * synFreq[k] * hop) / fftSize;
+    let rr = 0;
+    let ii = 0;
+    if (synMag[k] > 0) {
+      const p = sumPhase[k];
+      rr += synMag[k] * Math.cos(p);
+      ii += synMag[k] * Math.sin(p);
+      sumPhase[k] += (2 * Math.PI * synFreq[k] * hop) / fftSize;
+    } else {
+      sumPhase[k] += k * expect;
+    }
+    if (residualMag[k] > 0 && resAmt > 0) {
+      const p = inputPhase[k];
+      rr += residualMag[k] * resAmt * Math.cos(p);
+      ii += residualMag[k] * resAmt * Math.sin(p);
+      synMag[k] += residualMag[k] * resAmt;
+    }
+    re[k] = rr;
+    im[k] = ii;
   }
   for (let k = 1; k < half; k++) {
     re[fftSize - k] = re[k];
@@ -267,6 +356,48 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
         defaultValue: 1,
         minValue: 1,
         maxValue: 12,
+        automationRate: "k-rate",
+      },
+      {
+        name: "residual",
+        defaultValue: 1,
+        minValue: 0,
+        maxValue: 1,
+        automationRate: "k-rate",
+      },
+      {
+        name: "floor",
+        defaultValue: 0.08,
+        minValue: 0,
+        maxValue: 1,
+        automationRate: "k-rate",
+      },
+      {
+        name: "bandLo",
+        defaultValue: 1,
+        minValue: 0,
+        maxValue: 1,
+        automationRate: "k-rate",
+      },
+      {
+        name: "bandMid",
+        defaultValue: 1,
+        minValue: 0,
+        maxValue: 1,
+        automationRate: "k-rate",
+      },
+      {
+        name: "bandHi",
+        defaultValue: 0.4,
+        minValue: 0,
+        maxValue: 1,
+        automationRate: "k-rate",
+      },
+      {
+        name: "hits",
+        defaultValue: 0.75,
+        minValue: 0,
+        maxValue: 1,
         automationRate: "k-rate",
       },
     ];
@@ -317,6 +448,7 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
         this._mode = d.mode;
       }
       if (typeof d.viz === "boolean") this._viz = d.viz;
+      // residual / floor / bands / hits are AudioParams (apply from main thread)
       // Drop accumulated PV / OLA state so mode changes don't "stick"
       if (reset) this._resetSynthState();
     };
@@ -353,6 +485,8 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
       ch.outQueue.fill(0);
       ch.outAvail = 0;
       ch.outRead = 0;
+      ch.lastMag.fill(0);
+      ch.onsetEnv = 0;
       // keep inFifo / dryDelay so we don't click the input stream
     }
   }
@@ -362,8 +496,9 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     return this._empty;
   }
 
-  _step(ch, x, pitchRatio, strength, doShift, maxShift, emitViz) {
+  _step(ch, x, frameOpts, emitViz) {
     const { fftSize, hop, olaGain } = this;
+    const { pitchRatio, strength, doShift, maxShift } = frameOpts;
 
     const dry = ch.dryDelay[ch.dryIdx];
     ch.dryDelay[ch.dryIdx] = x;
@@ -383,6 +518,8 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     if (ch.fill >= fftSize) {
       const mapMode = this._mode === "off" ? "off" : this._mode;
       const snapOn = mapMode === "snap" || mapMode === "remap";
+      // Residual / peak split still needs processFrame when mapping is on,
+      // even at unity transpose — identity OLA would skip the residual path.
       const needPv = doShift || snapOn;
 
       if (needPv) {
@@ -393,6 +530,12 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
           scalePcs: SCALE_PCS[this._scale] || SCALE_PCS.major,
           maxShift: Math.max(1, Math.min(12, maxShift | 0)),
           sampleRate: sampleRate,
+          residual: frameOpts.residual,
+          floor: frameOpts.floor,
+          bandLo: frameOpts.bandLo,
+          bandMid: frameOpts.bandMid,
+          bandHi: frameOpts.bandHi,
+          hits: frameOpts.hits,
         });
         if (emitViz && this._viz) {
           this._vizCountdown--;
@@ -453,9 +596,21 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     const sArr = parameters.strength;
     const tArr = parameters.transpose;
     const mArr = parameters.maxShift;
+    const rArr = parameters.residual || [1];
+    const fArr = parameters.floor || [0.08];
+    const loArr = parameters.bandLo || [1];
+    const midArr = parameters.bandMid || [1];
+    const hiArr = parameters.bandHi || [0.4];
+    const hArr = parameters.hits || [0.75];
     const s0 = sArr[0];
     const t0 = tArr[0];
     const m0 = mArr[0];
+    const r0 = rArr[0];
+    const f0 = fArr[0];
+    const lo0 = loArr[0];
+    const mid0 = midArr[0];
+    const hi0 = hiArr[0];
+    const h0 = hArr[0];
     const stereo = outR !== outL;
 
     for (let i = 0; i < n; i++) {
@@ -464,10 +619,22 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
       const maxShift = mArr.length > 1 ? mArr[i] : m0;
       const pitchRatio = Math.pow(2, transpose / 12);
       const doShift = Math.abs(transpose) > 0.02;
+      const frameOpts = {
+        pitchRatio,
+        strength,
+        doShift,
+        maxShift,
+        residual: rArr.length > 1 ? rArr[i] : r0,
+        floor: fArr.length > 1 ? fArr[i] : f0,
+        bandLo: loArr.length > 1 ? loArr[i] : lo0,
+        bandMid: midArr.length > 1 ? midArr[i] : mid0,
+        bandHi: hiArr.length > 1 ? hiArr[i] : hi0,
+        hits: hArr.length > 1 ? hArr[i] : h0,
+      };
 
-      outL[i] = this._step(this.L, inL[i] || 0, pitchRatio, strength, doShift, maxShift, true);
+      outL[i] = this._step(this.L, inL[i] || 0, frameOpts, true);
       if (stereo) {
-        outR[i] = this._step(this.R, inR[i] || 0, pitchRatio, strength, doShift, maxShift, false);
+        outR[i] = this._step(this.R, inR[i] || 0, frameOpts, false);
       }
     }
     return true;
