@@ -22,7 +22,8 @@ const PRESETS = {
     humanize: 0.18,
     vibrato: 0,
     amount: 1,
-    formant: 1,
+    // Patent cycle-splice path (US5973252A). formant≥0.5 = optional PSOLA.
+    formant: 0,
     tracking: 1,
     mix: 1,
     transpose: 0,

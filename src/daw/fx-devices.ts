@@ -1686,7 +1686,7 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         humanize: 0,
         vibrato: 0,
         tracking: 1,
-        formant: 1,
+        formant: 0,
         mix: 1,
         transpose: 0,
         viz: true,

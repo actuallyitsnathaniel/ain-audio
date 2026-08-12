@@ -1,38 +1,44 @@
-// Centinel — monophonic pitch corrector (cycle-splice / Fairbanks / PSOLA).
-// YIN acquires f0 → sticky want → R* = hz(want)/hz(det) → shift.
-// formant < 0.5 + CYCLE_SPLICE: US5973252A rate-convert + ±1 cycle insert/delete.
-// formant < 0.5 + !CYCLE_SPLICE: Fairbanks OLA (Autotalent-style fallback).
-// formant ≥ 0.5: period PSOLA (optional formant path; Lent-adjacent).
-// Soft speed: Fairbanks/splice = within-note; formant≥0.5 PSOLA = full ratio chase.
-// Humanize / Nat Vib / detector confidence as before. Latency = N/2.
+// Centinel — patent-core pitch corrector (US5973252A, expired) + product layer.
+// Detect: 8:1 DS + recursive E/H search. Correct: narrow-band E/H track →
+// Cycle_period → rate convert + ±1 cycle insert/delete (formant-off).
+// formant ≥ 0.5: optional period PSOLA (Lent-adjacent). Fairbanks = splice off.
+// Product on top: Retune Speed / Humanize / Flex / Nat Vib / sticky. Latency N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-11g2a-cycle-splice";
+const CENTINEL_BUILD = "2026-08-11p2b-soft-land";
 
 const N = 2048;
 const N2 = N >> 1;
-/** Was 4 (hop 512). 8 → hop 256 so f0 tracks closer to continuous AT pitch. */
+/** Note/UI hop — sticky decide cadence (E/H period updates every sample). */
 const NOVERLAP = 8;
 const DETECT_EVERY = N / NOVERLAP;
 /**
- * G1 — correction-mode period refine. TRACK_DRIVE=false: audio = g3 baseline.
- * Open: beat g3 with drive on; true recursive E/H (see docs/CENTINEL-vs-SOURCES.md).
+ * US5973252A autocorrelation track.
+ * Detection: anti-alias + 8:1 DS, L∈[2,110], test E−2H ≤ εE.
+ * Correction: N=8 lag window, update every sample, refine every 5.
  */
-const TRACK_DRIVE = false;
-const TRACK_HALF = 3;
-const TRACK_REFINE_EVERY = 32;
-const TRACK_RESEED_REL = 0.16;
-const TRACK_MAX_REL_STEP = 0.04;
-const TRACK_PERIOD_ALPHA = 0.18;
-const TRACK_CLARITY_NEED = 0.55;
-/**
- * G2 — patent cycle splice (formant-off). Rate-convert through the input ring;
- * when the read delay drifts past ±~1 cycle vs N/2 latency, ± exactly one
- * Cycle_period (repeat when going sharper / delete when flatter).
- * Open: pop chip still defaults formant=1 (PSOLA); wire period from G1 track;
- * crossfade splice↔PSOLA; prove ≤ g3 regression on --formant=0 vs AT goal.
- */
+const EH_DS = 8;
+const EH_LMIN = 2;
+const EH_LMAX = 110;
+const EH_TRACK_N = 8;
+const EH_REFINE_EVERY = 5;
+const EH_EPS_TIGHT = 0.1;
+const EH_EPS_LOOSE = 0.4;
+const EH_DS_BUF = 256;
+/** Relative period jump/refine → tracking failure → re-detect. */
+const EH_MAX_REL_STEP = 0.18;
+/** Consecutive refine fails before leaving correction mode. */
+const EH_FAIL_NEED = 6;
+/** formant-off wet = patent cycle splice (false → Fairbanks OLA). */
 const CYCLE_SPLICE = true;
+/**
+ * Run patent E/H per-sample (updates `_periodSamp` only).
+ * Must NOT write `_inphincTgt` — process() copies that → inphinc every sample
+ * (p1a–e silent regression). Drive into splice/R* only via EH_DRIVE when ready.
+ */
+const EH_LIVE = true;
+/** When true, splice Cycle_period uses E/H `_periodSamp` (gated — needs offline win). */
+const EH_DRIVE = true;
 /**
  * Note commit / retarget only every N detect hops — keeps hold/hyst at the old
  * ~11.6 ms cadence so faster YIN doesn't hair-trigger neighbor flips.
@@ -186,25 +192,27 @@ const HUMANIZE_OFF_CENTER_CENTS = 8;
  * Post-commit center lock — stationary only. Target sustained loose holds
  * (15–35¢ ≥80 ms) left after hum-soft; don't touch scoop path.
  */
-const CENTER_LOCK_AGE_MS = 28;
+const CENTER_LOCK_AGE_MS = 22;
 /** |audibleWant − tgt| window (cents) once glide has settled. */
 const CENTER_LOCK_CENTS = 48;
 /** Center-chase tau floor (ms) while stationary. */
-const CENTER_LOCK_SPEED_MS = 9;
+const CENTER_LOCK_SPEED_MS = 7;
 /** Glide settled: |wantTgt − audibleWant| under this (cents) before speeding up. */
-const CENTER_LOCK_SETTLE_CENTS = 22;
+const CENTER_LOCK_SETTLE_CENTS = 28;
 /** Fast chase while parked in the loose-hold band (cents). */
-const LOOSE_HOLD_LO_CENTS = 10;
-const LOOSE_HOLD_HI_CENTS = 38;
-const LOOSE_HOLD_SPEED_MS = 12;
+const LOOSE_HOLD_LO_CENTS = 8;
+const LOOSE_HOLD_HI_CENTS = 42;
+const LOOSE_HOLD_SPEED_MS = 8;
 /**
  * Soft-land: brake the center chase inside this window so want can't punch
  * through sticky tgt (mid-phrase overshoot → audible wobble vs AT).
  * Keep above the loose-hold band's *finish* zone — f2's 10¢ cut reopened parks.
  */
-const SOFT_LAND_CENTS = 14;
+const SOFT_LAND_CENTS = 12;
 /** Chase tau near dead-center while soft-landing (ms). */
-const SOFT_LAND_FLOOR_MS = 20;
+const SOFT_LAND_FLOOR_MS = 16;
+/** Allow center-chase while commit-soft has this much left (ms). */
+const CENTER_LOCK_COMMIT_SOFT_MAX_MS = 40;
 /** Enter center latch once this close (cents), stationary — no hard R* snap. */
 const SNAP_CENTER_CENTS = 7;
 /** Leave center latch when |det − tgt| exceeds this (semitones). */
@@ -495,45 +503,6 @@ function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
   return { f0, clarity, confidence, ambiguous };
 }
 
-/**
- * Narrow-band period refine: YIN difference function on [pe±half], parabolic.
- * Returns refined period (samples) or 0 on failure.
- */
-function refinePeriodDF(buf, pe, half, dScratch) {
-  const n = buf.length;
-  if (!(pe > 2) || n < 32) return 0;
-  const tau0 = Math.round(pe);
-  const lo = Math.max(2, tau0 - half);
-  const hi = Math.min(n - 2, tau0 + half);
-  if (hi <= lo + 1) return 0;
-  let bestTau = lo;
-  let bestD = Infinity;
-  for (let tau = lo; tau <= hi; tau++) {
-    let sum = 0;
-    const lim = n - tau;
-    for (let i = 0; i < lim; i++) {
-      const delta = buf[i] - buf[i + tau];
-      sum += delta * delta;
-    }
-    dScratch[tau - lo] = sum;
-    if (sum < bestD) {
-      bestD = sum;
-      bestTau = tau;
-    }
-  }
-  const k = bestTau - lo;
-  const x0 = k > 0 ? dScratch[k - 1] : bestD;
-  const x1 = bestD;
-  const x2 = k + 1 <= hi - lo ? dScratch[k + 1] : bestD;
-  const denom = 2 * (2 * x1 - x2 - x0);
-  let refined = bestTau;
-  if (denom !== 0 && Math.abs(denom) > 1e-18) {
-    const delta = (x2 - x0) / denom;
-    if (delta > -1.25 && delta < 1.25) refined = bestTau + delta;
-  }
-  return refined;
-}
-
 function cubicAt(buf, indd) {
   const n = buf.length;
   const ind1 = Math.floor(indd);
@@ -643,8 +612,24 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._yinScratch = new Float32Array(N2);
     this._yinD = new Float32Array(N2);
     this._yinCmnd = new Float32Array(N2);
-    /** Narrow-band DF scratch (TRACK_HALF*2+1 bins). */
-    this._trackD = new Float32Array(TRACK_HALF * 2 + 1);
+    /** Patent E/H — downsampled detect + full-rate correction track. */
+    this._ed = new Float32Array(EH_LMAX + 1);
+    this._hd = new Float32Array(EH_LMAX + 1);
+    this._dsBuf = new Float32Array(EH_DS_BUF);
+    this._dsWr = 0;
+    this._dsN = 0;
+    this._dsAcc = 0;
+    this._dsLpf = 0;
+    this._dsLpfCoeff = Math.exp((-2 * Math.PI * (0.45 * sampleRate) / EH_DS) / sampleRate);
+    this._trackE = new Float32Array(EH_TRACK_N);
+    this._trackH = new Float32Array(EH_TRACK_N);
+    this._ehOffset = 0;
+    this._ehRefineCnt = 0;
+    this._ehSeeded = false;
+    this._detectionMode = true;
+    this._ehClarity = 0;
+    this._ehEps = EH_EPS_TIGHT;
+    this._ehFail = 0;
 
     this._on = true;
     this._key = 0;
@@ -721,12 +706,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._corrMidi = 60;
     /** Locked input pitch for ratio denominator (stays_locked). */
     this._lockedDet = 60;
-    /** Continuous period track (samples) — correction mode; 0 = off. */
+    /** Cycle_period (samples) from E/H correction mode; 0 = unknown. */
     this._periodSamp = 0;
     this._periodMidi = 60;
-    this._trackOn = false;
     this._trackOk = false;
-    this._trackCnt = 0;
     /** Committed snapped target for ratio numerator (hold-gated). */
     this._committedWant = 60;
     /** Scale/MIDI target note for hysteresis (sticky until real commit). */
@@ -929,10 +912,22 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   _stopPeriodTrack() {
-    this._trackOn = false;
     this._trackOk = false;
     this._periodSamp = 0;
-    this._trackCnt = 0;
+    this._detectionMode = true;
+    this._ehRefineCnt = 0;
+    this._ehSeeded = false;
+    this._ehClarity = 0;
+    this._ehFail = 0;
+    this._ed.fill(0);
+    this._hd.fill(0);
+    this._trackE.fill(0);
+    this._trackH.fill(0);
+    this._dsBuf.fill(0);
+    this._dsWr = 0;
+    this._dsN = 0;
+    this._dsAcc = 0;
+    this._dsLpf = 0;
   }
 
   _resetCycleSplice() {
@@ -946,6 +941,244 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
+   * Soft Retune / patent Decay: glide want→tgt across notes at Retune Speed.
+   * PSOLA formant path, or cycle-splice (formant-off) — Fairbanks stays
+   * within-note-only when CYCLE_SPLICE is off.
+   */
+  _softRatioChase() {
+    if (!(this._effSpeedMs >= 0.5)) return false;
+    if (this._formant >= 0.5) return true;
+    return this._useCycleSplice();
+  }
+
+  _ringMono(at) {
+    const j = ((at % N) + N) % N;
+    return 0.5 * (this.cbiL[j] + this.cbiR[j]);
+  }
+
+  _dsMono(at) {
+    const j = ((at % EH_DS_BUF) + EH_DS_BUF) % EH_DS_BUF;
+    return this._dsBuf[j];
+  }
+
+  /** Snapshot E(L), H(L) over last 2L samples ending at wr. */
+  _ehSnapshot(L, wr, monoFn) {
+    let E = 0;
+    let H = 0;
+    for (let j = 0; j < 2 * L; j++) {
+      const x = monoFn.call(this, wr - j);
+      E += x * x;
+    }
+    for (let j = 0; j < L; j++) {
+      H += monoFn.call(this, wr - j) * monoFn.call(this, wr - j - L);
+    }
+    return { E, H };
+  }
+
+  _ehEnterCorrection(peFull) {
+    const peMin = Math.max(16, Math.floor(sampleRate / this._fMax));
+    const peMax = Math.min(N2 - 4, Math.floor(sampleRate / this._fMin));
+    let pe = peFull;
+    if (!(pe >= peMin && pe <= peMax)) return false;
+    pe = Math.max(peMin, Math.min(peMax, pe));
+    const L0 = Math.round(pe);
+    const half = EH_TRACK_N >> 1;
+    let off = L0 - half;
+    if (off < peMin) off = peMin;
+    if (off + EH_TRACK_N - 1 > peMax) off = Math.max(peMin, peMax - EH_TRACK_N + 1);
+    this._ehOffset = off | 0;
+    const wr = this.cbiwr;
+    for (let k = 0; k < EH_TRACK_N; k++) {
+      const L = this._ehOffset + k;
+      const { E, H } = this._ehSnapshot(L, wr, this._ringMono);
+      this._trackE[k] = E;
+      this._trackH[k] = H;
+    }
+    this._periodSamp = pe;
+    this._periodMidi = this._foldIntoRange(hzToMidi(sampleRate / pe));
+    this._detectionMode = false;
+    this._trackOk = true;
+    this._ehRefineCnt = 0;
+    this._ehFail = 0;
+    this._ehSeeded = true;
+    // Do not touch _inphincTgt here (see EH_LIVE comment).
+    if (this._ehClarity < 0.4) this._ehClarity = 0.55;
+    return true;
+  }
+
+  _ehFailToDetect() {
+    this._ehFail++;
+    if (this._ehFail < EH_FAIL_NEED) return;
+    this._detectionMode = true;
+    this._trackOk = false;
+    this._periodSamp = 0;
+    this._ehClarity *= 0.5;
+    this._ehFail = 0;
+  }
+
+  /**
+   * Detection mode: best local min of E−2H ≤ εE inside the input-type band
+   * (patent searches L=2…110 then octave-checks; we restrict to vocal lags so
+   * the first short-L harmonic trough doesn't win).
+   */
+  _ehDetectFromDown() {
+    const eps = this._ehEps;
+    const peMin = Math.max(16, Math.floor(sampleRate / this._fMax));
+    const peMax = Math.min(N2 - 4, Math.floor(sampleRate / this._fMin));
+    const lDsMin = Math.max(EH_LMIN, Math.ceil(peMin / EH_DS));
+    const lDsMax = Math.min(EH_LMAX, Math.floor(peMax / EH_DS));
+    if (lDsMax <= lDsMin + 1) return;
+
+    let bestL = 0;
+    let bestScore = Infinity;
+    for (let L = lDsMin; L <= lDsMax; L++) {
+      const E = this._ed[L];
+      if (!(E > 1e-8)) continue;
+      const cost = E - 2 * this._hd[L];
+      if (cost > eps * E) continue;
+      const c0 = L > lDsMin ? this._ed[L - 1] - 2 * this._hd[L - 1] : Infinity;
+      const c2 = L < lDsMax ? this._ed[L + 1] - 2 * this._hd[L + 1] : Infinity;
+      if (cost <= c0 && cost <= c2 && cost < bestScore) {
+        bestScore = cost;
+        bestL = L;
+      }
+    }
+    if (!bestL) return;
+
+    // Missing-fundamental: if ~2× lag is nearly as good on full-rate, prefer it.
+    let pe = bestL * EH_DS;
+    const pe2 = pe * 2;
+    if (pe2 >= peMin && pe2 <= peMax) {
+      const wr = this.cbiwr;
+      const a = this._ehSnapshot(pe, wr, this._ringMono);
+      const b = this._ehSnapshot(pe2, wr, this._ringMono);
+      const ca = a.E > 1e-12 ? (a.E - 2 * a.H) / a.E : Infinity;
+      const cb = b.E > 1e-12 ? (b.E - 2 * b.H) / b.E : Infinity;
+      if (cb <= ca * 1.05) pe = pe2;
+    }
+    this._ehFail = 0;
+    this._ehEnterCorrection(pe);
+  }
+
+  /**
+   * Correction-mode refine (every EH_REFINE_EVERY samples): min E−2H in window,
+   * quadratic period, slide lag band (US5973252A FIGS 5A–5C).
+   * @returns {boolean} false → tracking failed
+   */
+  _ehRefineTrack() {
+    const eps = this._ehEps;
+    let bestK = -1;
+    let bestCost = Infinity;
+    let bestE = 0;
+    for (let k = 0; k < EH_TRACK_N; k++) {
+      const E = this._trackE[k];
+      if (!(E > 1e-12)) continue;
+      const cost = E - 2 * this._trackH[k];
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestK = k;
+        bestE = E;
+      }
+    }
+    if (bestK < 0 || bestCost > EH_EPS_LOOSE * bestE) return false;
+    // Soft accept absolute min even if slightly above eps (shape change).
+    if (bestCost > eps * bestE && bestCost > 0.05 * bestE) {
+      // Still ok if clearly the trough
+    }
+
+    let L = this._ehOffset + bestK;
+    if (bestK > 0 && bestK < EH_TRACK_N - 1) {
+      const c0 = this._trackE[bestK - 1] - 2 * this._trackH[bestK - 1];
+      const c1 = bestCost;
+      const c2 = this._trackE[bestK + 1] - 2 * this._trackH[bestK + 1];
+      const denom = 2 * (2 * c1 - c2 - c0);
+      if (Math.abs(denom) > 1e-18) {
+        const delta = (c2 - c0) / denom;
+        if (delta > -1.25 && delta < 1.25) L += delta;
+      }
+    }
+
+    const peMin = Math.max(16, sampleRate / this._fMax);
+    const peMax = Math.min(N2 - 4, sampleRate / this._fMin);
+    let pe = Math.max(peMin, Math.min(peMax, L));
+    const prev = this._periodSamp;
+    if (prev > 1) {
+      const rel = Math.abs(pe - prev) / prev;
+      if (rel > EH_MAX_REL_STEP) return false;
+    }
+    this._periodSamp = pe;
+    this._periodMidi = this._foldIntoRange(hzToMidi(sampleRate / pe));
+    this._trackOk = true;
+    this._ehFail = 0;
+    // Clarity from how tight E−2H is vs energy (1 = perfect period match).
+    const fit = bestE > 1e-12 ? Math.max(0, 1 - bestCost / bestE) : 0;
+    this._ehClarity = Math.max(0, Math.min(1, fit));
+
+    // Slide lag window when min hugs an edge (patent EH_Offset shift).
+    if (bestK <= 1 || bestK >= EH_TRACK_N - 2) {
+      this._ehEnterCorrection(pe);
+    }
+    return true;
+  }
+
+  /**
+   * Per-sample patent path: DS detect updates + full-rate E/H track.
+   * Call after writing cbi[cbiwr].
+   */
+  _ehOnSample() {
+    const x = this._ringMono(this.cbiwr);
+    // Anti-alias (one-pole) + 8:1 downsample for detection mode.
+    const a = this._dsLpfCoeff;
+    this._dsLpf = a * this._dsLpf + (1 - a) * x;
+    this._dsN++;
+    if (this._dsN >= EH_DS) {
+      this._dsN = 0;
+      const y = this._dsLpf;
+      this._dsBuf[this._dsWr] = y;
+      // Recursive Edown/Hdown for L∈[2,110]
+      const dwr = this._dsWr;
+      const y2 = y * y;
+      for (let L = EH_LMIN; L <= EH_LMAX; L++) {
+        const yL = this._dsMono(dwr - L);
+        const y2L = this._dsMono(dwr - 2 * L);
+        let E = this._ed[L] + y2 - y2L * y2L;
+        let H = this._hd[L] + y * yL - yL * y2L;
+        if (E < 0) E = 0;
+        this._ed[L] = E;
+        this._hd[L] = H;
+      }
+      this._dsWr++;
+      if (this._dsWr >= EH_DS_BUF) this._dsWr = 0;
+      if (this._detectionMode) this._ehDetectFromDown();
+    }
+
+    if (this._detectionMode) return;
+
+    if (this._ehSeeded) {
+      this._ehSeeded = false;
+      return;
+    }
+
+    // Correction mode: update narrow E/H every sample.
+    const xi = x;
+    const xi2 = xi * xi;
+    for (let k = 0; k < EH_TRACK_N; k++) {
+      const L = this._ehOffset + k;
+      const xiL = this._ringMono(this.cbiwr - L);
+      const xi2L = this._ringMono(this.cbiwr - 2 * L);
+      let E = this._trackE[k] + xi2 - xi2L * xi2L;
+      let H = this._trackH[k] + xi * xiL - xiL * xi2L;
+      if (E < 0) E = 0;
+      this._trackE[k] = E;
+      this._trackH[k] = H;
+    }
+    this._ehRefineCnt++;
+    if (this._ehRefineCnt % EH_REFINE_EVERY === 0) {
+      if (!this._ehRefineTrack()) this._ehFailToDetect();
+    }
+  }
+
+  /**
    * US5973252A corrector: interpolate input at a rate-converted read pointer;
    * ± one Cycle_period when delay leaves the N2±pe window.
    * @returns {[number, number]} wet L/R
@@ -955,22 +1188,22 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._spliceDelay = N2;
       this._spliceInit = true;
     }
+    // Cycle_period: E/H when EH_DRIVE; else YIN-locked inphinc (g2a-winning path).
     let pe =
-      this.inphinc > 1e-6
-        ? 1 / this.inphinc
-        : sampleRate / Math.max(1e-6, midiToHz(this._lockedDet));
+      EH_DRIVE && this._trackOk && this._periodSamp > 1
+        ? this._periodSamp
+        : this.inphinc > 1e-6
+          ? 1 / this.inphinc
+          : sampleRate / Math.max(1e-6, midiToHz(this._lockedDet));
     pe = this._clampPe(pe);
     const r = Math.max(FACT_MIN, Math.min(FACT_MAX, rate));
 
-    // Delay change: write +1 / read +r → Δdelay = 1−r
     this._spliceDelay += 1 - r;
 
     const minD = Math.max(pe * 0.35, N2 - pe);
     const maxD = Math.min(N - pe - 4, N2 + pe);
-    // Repeat cycle (going sharper): delay shrank → jump read back one period.
     let guard = 0;
     while (this._spliceDelay < minD && guard++ < 8) this._spliceDelay += pe;
-    // Delete cycle (going flatter): delay grew → jump read forward one period.
     guard = 0;
     while (this._spliceDelay > maxD && guard++ < 8) this._spliceDelay -= pe;
     if (this._spliceDelay < 4) this._spliceDelay = 4;
@@ -978,73 +1211,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
 
     const indd = this.cbiwr - this._spliceDelay;
     return [cubicAt(this.cbiL, indd), cubicAt(this.cbiR, indd)];
-  }
-
-  /** Seed correction-mode period from YIN (or prior refine). */
-  _seedPeriodTrack(periodSamp) {
-    const peMin = Math.max(2, sampleRate / this._fMax);
-    const peMax = Math.min(N2 - 4, sampleRate / this._fMin);
-    if (!(periodSamp >= peMin && periodSamp <= peMax)) return false;
-    this._periodSamp = Math.max(peMin, Math.min(peMax, periodSamp));
-    this._periodMidi = this._foldIntoRange(hzToMidi(sampleRate / this._periodSamp));
-    this._trackOn = true;
-    this._trackOk = true;
-    this._trackCnt = 0;
-    return true;
-  }
-
-  /**
-   * Between YIN hops: narrow-band DF refine around locked period.
-   * Slews inphinc gently — full snaps from refine noise shook R* (h1a/b).
-   */
-  _updatePeriodTrack() {
-    if (!this._trackOn || !(this._periodSamp > 1)) return;
-    this._trackCnt++;
-    if (this._trackCnt % TRACK_REFINE_EVERY !== 0) return;
-
-    if (this._clarity < TRACK_CLARITY_NEED) return;
-
-    // Don't touch _analysisRms — mid-hop RMS updates gated loudEnough (h1f).
-    this._readMonoWindow(this._yinScratch, false);
-    let pe = refinePeriodDF(
-      this._yinScratch,
-      this._periodSamp,
-      TRACK_HALF,
-      this._trackD,
-    );
-    if (!(pe > 1)) {
-      this._trackOk = false;
-      return;
-    }
-    const peMin = Math.max(2, sampleRate / this._fMax);
-    const peMax = Math.min(N2 - 4, sampleRate / this._fMin);
-    pe = Math.max(peMin, Math.min(peMax, pe));
-    const prev = this._periodSamp;
-    const rel = Math.abs(pe - prev) / prev;
-    if (rel > TRACK_MAX_REL_STEP) {
-      pe = prev + Math.sign(pe - prev) * prev * TRACK_MAX_REL_STEP;
-    }
-    this._periodSamp += (pe - this._periodSamp) * TRACK_PERIOD_ALPHA;
-    this._periodMidi = this._foldIntoRange(
-      hzToMidi(sampleRate / this._periodSamp),
-    );
-    this._trackOk = true;
-    this._inphincTgt = 1 / this._periodSamp;
-  }
-
-  /** YIN hop: acquire / re-anchor the continuous period refine. */
-  _syncPeriodTrackFromYin(f0) {
-    if (!(f0 > 0)) return false;
-    const pe = sampleRate / f0;
-    if (!this._trackOn || !this._trackOk) return this._seedPeriodTrack(pe);
-    const rel = Math.abs(pe - this._periodSamp) / Math.max(1, this._periodSamp);
-    if (rel >= TRACK_RESEED_REL) return this._seedPeriodTrack(pe);
-    // Soft pull toward YIN so refine can't slowly walk off.
-    this._periodSamp += (pe - this._periodSamp) * 0.35;
-    this._periodMidi = this._foldIntoRange(
-      hzToMidi(sampleRate / this._periodSamp),
-    );
-    return true;
   }
 
   /** Fold octave errors into the selected input-type band. */
@@ -1130,7 +1296,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
 
   /** True when formant mode + soft (effective) speed — ratio may glide across notes. */
   _softPsola() {
-    return this._formant >= 0.5 && this._effSpeedMs >= 0.5;
+    // Legacy name: soft ratio chase (PSOLA formant OR patent splice + Retune Speed).
+    return this._softRatioChase();
   }
 
   /**
@@ -1140,7 +1307,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
    */
   _effectiveSpeed(speedMs, humanize) {
     let spd = Math.max(0, speedMs);
-    if (this._formant >= 0.5 && spd >= 0.5) {
+    if (this._softRatioChase()) {
       // Cold: taper floor → base speed over COLD_START_MS (no cliff at expiry).
       if (this._coldStart) {
         const u = Math.min(1, this._coldStartMs / COLD_START_MS);
@@ -1872,21 +2039,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     }
     // Confidence ducks wet amount in process() — do not bend want/R* here.
     this._wantTgt = wantEff;
-    // Soft+PSOLA slews _audibleWant in process(); robot snaps here.
-    if (!(this._formant >= 0.5 && this._speedMs >= 0.5)) {
+    // Soft chase (PSOLA or patent splice) slews _audibleWant in process(); robot snaps.
+    if (!this._softRatioChase()) {
       this._audibleWant = wantEff;
     }
     this._corrMidi = this._audibleWant;
 
-    // R* + inphinc must share one period estimate (split det vs period = wrong notes).
-    const usePe =
-      TRACK_DRIVE &&
-      this._trackOk &&
-      this._periodSamp > 1 &&
-      this._clarity >= TRACK_CLARITY_NEED &&
-      this._pitchVel < SCOOP_VEL_ST_S &&
-      !justCommitted;
-    const inHz = usePe ? sampleRate / this._periodSamp : midiToHz(det);
+    // R* from sticky want / lockedDet (YIN note path). Cycle_period from E/H
+    // feeds the splice pointer only — driving R* from raw E/H regressed notes.
+    const inHz = midiToHz(det);
     const outHz = midiToHz(this._audibleWant);
     let rStar = outHz / Math.max(1e-12, inHz);
     if (rStar < FACT_MIN) rStar = FACT_MIN;
@@ -1898,18 +2059,21 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         this._beginCommitRecapture();
         if (this._speedMs >= 0.5) {
           this._commitSoftMs = COMMIT_SOFT_MS;
-          // Keep audible want where it was — Retune Speed glides to the new note.
+          // Keep audible want — Retune Speed glides to the new note.
         } else {
           this._audibleWant = wantEff;
         }
+      } else if (this._softRatioChase()) {
+        // Patent splice + Decay: glide want across notes; no PSOLA grain.
+        this._clearCommitRecapture();
+        this._psolaHalf = 0;
+        this._commitSoftMs = COMMIT_SOFT_MS;
       } else {
         this._clearCommitRecapture();
         this._psolaHalf = 0;
         this._audibleWant = wantEff;
       }
-      // Seed from *base* speed — Humanize must not turn a robot commit into a glide.
-      if (!(this._formant >= 0.5 && this._speedMs >= 0.5))
-        this._seedPhases(this._rStar);
+      if (!this._softRatioChase()) this._seedPhases(this._rStar);
     }
 
     this._inphincTgt = inHz / sampleRate;
@@ -1928,8 +2092,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       return;
     }
 
+    // Tracking knob → patent ε (looser = tolerate cycle-shape change).
+    const tr = Math.max(0, Math.min(1, tracking));
+    this._ehEps = EH_EPS_LOOSE + (EH_EPS_TIGHT - EH_EPS_LOOSE) * tr;
+
+    // Notes/sticky: YIN (stable vs AT goal). E/H runs per-sample for Cycle_period
+    // on the splice path; YIN also seeds/reanchors correction mode.
     this._readMonoWindow(this._yinScratch);
-    const { f0, clarity, confidence, ambiguous } = yinPitch(
+    const yin = yinPitch(
       this._yinScratch,
       sampleRate,
       this._fMin,
@@ -1937,10 +2107,23 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._yinD,
       this._yinCmnd,
     );
+    const f0 = yin.f0;
+    const clarity = yin.clarity;
+    const ambiguous = yin.ambiguous;
+    if (EH_LIVE && f0 > 0 && clarity >= 0.3) {
+      const pe = sampleRate / f0;
+      if (this._detectionMode || !this._trackOk) {
+        this._ehEnterCorrection(pe);
+      } else {
+        const rel =
+          Math.abs(pe - this._periodSamp) / Math.max(1, this._periodSamp);
+        if (rel > 0.2) this._ehEnterCorrection(pe);
+      }
+      this._ehClarity = Math.max(this._ehClarity, clarity);
+    }
     this._clarity = clarity;
     this._ambiguous = !!ambiguous;
-    // EMA confidence — reverb chatters frame-to-frame
-    const confInst = f0 > 0 ? confidence : clarity * 0.3;
+    const confInst = f0 > 0 ? (yin.confidence ?? clarity) : clarity * 0.3;
     if (!this._havePitch) this._pitchConf = confInst;
     else this._pitchConf += (confInst - this._pitchConf) * 0.28;
     if (ambiguous) this._reverbSoftMs = REVERB_SOFT_MS;
@@ -2021,7 +2204,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._holdCand = midi;
           this._holdAccumMs = 0;
           this._pendingHold = false;
-          if (TRACK_DRIVE) this._syncPeriodTrackFromYin(f0);
           // Clean onset: unity ratio until PE settles — never duck olaGain (that gated)
           this._commitWant(midi, amount, flexCents, transpose);
           this._setUnityPhases(midi); // lock inphinc/outphinc to *this* note before OLA runs
@@ -2061,7 +2243,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._unvoicedN = 0;
       if (this._armed) {
         this._psolaOnsetMs += this._detectDt * 1000;
-        if (TRACK_DRIVE) this._syncPeriodTrackFromYin(f0);
       }
 
       if (this._armed) {
@@ -2122,8 +2303,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (this._unvoicedN >= UNVOICED_DROP) {
         // Phrase gap: clear sticky note/detect hop, keep ring (no click).
         this._resetCorrectionState(false);
-      } else if (TRACK_DRIVE && this._unvoicedN > 6) {
-        this._trackOk = false;
+      } else if (this._unvoicedN > 6 && !this._detectionMode) {
+        this._ehFailToDetect();
       }
       tgt =
         nearestScaleMidi(
@@ -2400,7 +2581,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       // Phrase-end: close wet fast (ring was loud vs dry).
       if (this._edgeQuiet) return EDGE_WET_XFADE_MS;
       let ms = WET_XFADE_MS;
-      if (this._coldStart && this._formant >= 0.5 && this._speedMs >= 0.5) {
+      if (this._coldStart && this._softRatioChase()) {
         ms = Math.max(ms, COLD_WET_XFADE_MS);
       }
       // Conf gate closed, or mid dry↔wet: slower fade (avoids click/comb chatter).
@@ -2411,7 +2592,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     })();
     const wetXfadeAlpha =
       1 - Math.exp(-1 / Math.max(1, (wetXfadeMs / 1000) * sampleRate));
-    const softPsola = this._formant >= 0.5 && spd >= 0.5;
+    const softPsola = this._softRatioChase();
     // Default: Retune Speed through note transitions. Stationary + near center
     // → finish last cents faster. Allow late commit-soft so loose holds don't
     // wait out the full soft window before the chase engages.
@@ -2424,7 +2605,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       spd >= 0.5 &&
       this._noteAgeMs >= CENTER_LOCK_AGE_MS &&
       this._stablePitchMs >= STABLE_PITCH_MS &&
-      this._commitSoftMs <= 28 &&
+      this._commitSoftMs <= CENTER_LOCK_COMMIT_SOFT_MAX_MS &&
       this._pitchVel < SCOOP_VEL_ST_S &&
       !this._commitRecapture &&
       !this._coldStart &&
@@ -2439,25 +2620,25 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         audErrCents <= CENTER_LOCK_CENTS &&
         glideErrCents <= CENTER_LOCK_SETTLE_CENTS
       ) {
-        // Cap vs knob, not humanized spd — still no Cher snap below ~0.9× knob.
-        const tighten = Math.max(CENTER_LOCK_SPEED_MS, knobSpd * 0.9);
+        // Cap vs knob, not humanized spd — still no Cher snap below ~0.85× knob.
+        const tighten = Math.max(CENTER_LOCK_SPEED_MS, knobSpd * 0.85);
         wantChaseMs = Math.min(wantChaseMs, tighten);
       }
-      // Sustained 15–35¢ parks vs AT: chase at knob rate even if Humanize is on.
+      // Sustained loose parks vs AT: chase at knob rate even if Humanize is on.
       if (
         audErrCents >= LOOSE_HOLD_LO_CENTS &&
         audErrCents <= LOOSE_HOLD_HI_CENTS &&
-        glideErrCents <= 40
+        glideErrCents <= 48
       ) {
-        const loose = Math.max(LOOSE_HOLD_SPEED_MS, knobSpd * 0.85);
+        const loose = Math.max(LOOSE_HOLD_SPEED_MS, knobSpd * 0.75);
         wantChaseMs = Math.min(wantChaseMs, loose);
       }
-      // Soft-land brake: ease tau back up as we enter the last cents so the
-      // finish doesn't punch flat-of-center (8.5s overshoot on pop bounce).
+      // Soft-land brake: ease tau back up in the last cents (lighter than pre-p2
+      // so we don't re-park in the 15–35¢ band after a quick loose chase).
       if (audErrCents < SOFT_LAND_CENTS) {
         const u = audErrCents / SOFT_LAND_CENTS;
         const brake =
-          Math.max(SOFT_LAND_FLOOR_MS, knobSpd * 0.85) * (1 - u) * (1 - u) +
+          Math.max(SOFT_LAND_FLOOR_MS, knobSpd * 0.7) * (1 - u) * (1 - u) +
           wantChaseMs * (1 - (1 - u) * (1 - u));
         wantChaseMs = Math.max(wantChaseMs, brake);
       }
@@ -2486,10 +2667,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         );
       }
 
-      // Correction-mode refine (only when TRACK_DRIVE — keep hop path bit-stable otherwise).
-      if (TRACK_DRIVE && this._trackOn && this._armed && this._voiced) {
-        this._updatePeriodTrack();
-      }
+      // Patent E/H: detect/track every sample after the write (gated — see EH_LIVE).
+      if (EH_LIVE) this._ehOnSample();
 
       const dryIdx = (((this.cbiwr - N2) % N) + N) % N;
       const dryL = this.cbiL[dryIdx];
@@ -2535,19 +2714,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         // Soft-land brake + wantTgt clamp handle overshoot — never hard-assign
         // audibleWant (that tore PSOLA at ~12 ms and read as muted clicks).
         // When E/H track is ok, denominator follows continuous period (not hop YIN).
-        // Correction-mode period → inphinc between hops (gated — see TRACK_DRIVE).
-        if (
-          TRACK_DRIVE &&
-          this._trackOk &&
-          this._periodSamp > 1 &&
-          this._pitchVel < SCOOP_VEL_ST_S &&
-          !this._pendingHold &&
-          !this._onsetUnity &&
-          this._armed
-        ) {
-          this.inphinc += (this._inphincTgt - this.inphinc) * 0.35;
-        }
-
         if (softPsola && !this._onsetUnity) {
           this._audibleWant += (this._wantTgt - this._audibleWant) * wantAlpha;
           const inHzA = Math.max(1e-12, this.inphinc * sampleRate);
@@ -2663,11 +2829,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           !this._edgeQuiet
         ) {
           wantWet = 1;
-          if (
-            this._coldStart &&
-            this._formant >= 0.5 &&
-            this._speedMs >= 0.5
-          ) {
+          if (this._coldStart && this._softRatioChase()) {
             const cents = Math.abs(this._wantTgt - this._audibleWant) * 100;
             const open =
               1 - (cents - COLD_WET_CENTS * 0.4) / (COLD_WET_CENTS * 1.2);

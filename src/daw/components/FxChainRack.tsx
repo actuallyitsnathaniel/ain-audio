@@ -1053,10 +1053,10 @@ function DevicePanel({
                   Math.abs((p.tracking ?? 0) - 1) < 0.05 &&
                   Math.abs((p.humanize ?? 0) - 0.18) < 0.05 &&
                   Math.abs(p.vibrato ?? 0) < 0.05 &&
-                  (p.formant ?? 0) >= 0.5
+                  (p.formant ?? 0) < 0.5
                 }
                 enabled={p.on}
-                title="Pop — ~20ms soft ratio under PSOLA, light Humanize (tighter centers vs AT goal)"
+                title="Pop — ~20ms Retune on patent cycle-splice (formant off), light Humanize"
                 onClick={() =>
                   set({
                     speed: 20,
@@ -1064,7 +1064,7 @@ function DevicePanel({
                     humanize: 0.18,
                     vibrato: 0,
                     amount: 1,
-                    formant: 1,
+                    formant: 0,
                     tracking: 1,
                   })
                 }
@@ -1194,7 +1194,7 @@ function DevicePanel({
             label="speed"
             disabled={!p.on}
             fmt={(v) => (v < 0.5 ? "lock" : Math.round(v) + "ms")}
-            tip="Retune speed (ms) — main R* chase tau (near-center catch can go faster after commit). 0 = robot snap. Soft/pop + formant≥50% glide to the sticky note; Fairbanks (formant off) softs within-note only. Do-no-harm clamp still applies."
+            tip="Retune speed (ms) — main R* chase tau (near-center catch can go faster after commit). 0 = robot snap. Soft/pop glides to the sticky note on cycle-splice (formant off) or PSOLA (formant≥50%). Fairbanks-only (splice off) softs within-note only."
           />
           <Knob
             value={p.amount}
