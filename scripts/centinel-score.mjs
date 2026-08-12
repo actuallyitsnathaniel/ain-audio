@@ -15,6 +15,8 @@ function parseArgs(argv) {
     latencySamp: 1024,
     json: false,
     csv: null,
+    dumpDisagree: false,
+    dumpPath: null,
     key: 9, // A
     files: [],
   };
@@ -23,6 +25,11 @@ function parseArgs(argv) {
     else if (a.startsWith("--latency-ms="))
       out.latencyMs = Number(a.slice(13));
     else if (a === "--json") out.json = true;
+    else if (a === "--dump-disagree") out.dumpDisagree = true;
+    else if (a.startsWith("--dump-disagree=")) {
+      out.dumpDisagree = true;
+      out.dumpPath = a.slice("--dump-disagree=".length);
+    }
     else if (a.startsWith("--csv=")) out.csv = a.slice(6);
     else if (a.startsWith("--key=")) out.key = Number(a.slice(6));
     else if (!a.startsWith("-")) out.files.push(a);
@@ -181,6 +188,70 @@ function nearestScaleMidi(midi, pcs) {
   return midi + bestD;
 }
 
+const PC_NAMES = [
+  "C",
+  "C#",
+  "D",
+  "D#",
+  "E",
+  "F",
+  "F#",
+  "G",
+  "G#",
+  "A",
+  "A#",
+  "B",
+];
+
+function midiName(m) {
+  if (!(m > 0)) return "—";
+  const n = Math.round(m);
+  const cents = Math.round((m - n) * 100);
+  const pc = ((n % 12) + 12) % 12;
+  const oct = Math.floor(n / 12) - 1;
+  const c = cents === 0 ? "" : cents > 0 ? `+${cents}` : `${cents}`;
+  return `${PC_NAMES[pc]}${oct}${c}`;
+}
+
+function clusterDisagree(frames, hopSec) {
+  const runs = [];
+  let cur = null;
+  for (const f of frames) {
+    if (cur && f.i <= cur.i1 + 2) {
+      cur.i1 = f.i;
+      cur.t1 = f.t;
+      cur.n++;
+      cur.frames.push(f);
+    } else {
+      if (cur) runs.push(cur);
+      cur = { i0: f.i, i1: f.i, t0: f.t, t1: f.t, n: 1, frames: [f] };
+    }
+  }
+  if (cur) runs.push(cur);
+  for (const r of runs) {
+    r.ms = (r.i1 - r.i0 + 1) * hopSec * 1000;
+    const kinds = { dryAt: 0, scoop: 0, oct: 0, other: 0 };
+    for (const f of r.frames) {
+      const step = Math.abs(f.qw - f.qg);
+      if (step >= 11 && step <= 13) kinds.oct++;
+      else if (f.qd === f.qg) kinds.dryAt++;
+      else kinds.scoop++;
+    }
+    r.kind =
+      kinds.oct >= r.n * 0.5
+        ? "octave"
+        : kinds.dryAt >= r.n * 0.5
+          ? "dry+goal vs wet"
+          : "goal≠dry (timing)";
+    const mid = r.frames[Math.floor(r.n / 2)];
+    r.dry = mid.dryName;
+    r.wet = mid.wetName;
+    r.goal = mid.goalName;
+    r.q = `${PC_NAMES[((mid.qd % 12) + 12) % 12]}→${PC_NAMES[((mid.qw % 12) + 12) % 12]} (goal ${PC_NAMES[((mid.qg % 12) + 12) % 12]})`;
+  }
+  return runs;
+}
+
 function align(mono, latencySamp) {
   if (!latencySamp) return mono;
   const out = new Float32Array(mono.length);
@@ -316,6 +387,7 @@ export function scoreCentinel({
   let lastSign = 0;
   let disagree = 0;
   let disagreeDryAt = 0; // dry agrees AT, wet not
+  const disagreeFrames = [];
   // Lever-3 proxy that doesn't need AT align: dry clearly owns a scale note
   // (|err|≤25¢) but wet quantized to a different degree.
   let owned = 0;
@@ -401,6 +473,20 @@ export function scoreCentinel({
       if (qw !== qg) {
         disagree++;
         if (qd === qg) disagreeDryAt++;
+        disagreeFrames.push({
+          i,
+          t: +dryT.times[i].toFixed(3),
+          dry: +md[i].toFixed(2),
+          wet: +mw[i].toFixed(2),
+          goal: +mg[i].toFixed(2),
+          qd,
+          qw,
+          qg,
+          dryName: midiName(md[i]),
+          wetName: midiName(mw[i]),
+          goalName: midiName(mg[i]),
+          dryAt: qd === qg ? 1 : 0,
+        });
       }
     }
   }
@@ -558,6 +644,8 @@ export function scoreCentinel({
     },
     noteDisagreePct: goalDisagree,
     noteDisagreeDryAtFrames: disagreeDryAt,
+    disagreeFrames,
+    disagreeRuns: goalT ? clusterDisagree(disagreeFrames, hop) : [],
     /** Wet leaves a scale note dry clearly owns (≤25¢) — primary lever-3 metric. */
     ownedNoteMissPct: owned ? (100 * ownedMiss) / owned : 0,
     ownedNoteFrames: owned,
@@ -617,6 +705,66 @@ function main() {
     console.log(
       `=== note disagree vs goal: ${s.noteDisagreePct.toFixed(1)}%  (dry+goal agree / wet wrong: ${s.noteDisagreeDryAtFrames} frames) ===`,
     );
+  }
+  if (args.dumpDisagree && s.disagreeRuns) {
+    console.log("");
+    console.log(`=== disagree runs (${s.disagreeRuns.length} clusters, ${s.disagreeFrames.length} frames) ===`);
+    console.log(
+      "t0–t1".padEnd(16) +
+        "ms".padStart(5) +
+        "n".padStart(4) +
+        "  " +
+        "kind".padEnd(18) +
+        "  dry        wet        goal       q",
+    );
+    for (const r of s.disagreeRuns) {
+      const span = `${r.t0.toFixed(2)}–${r.t1.toFixed(2)}`;
+      console.log(
+        `${span.padEnd(16)} ${r.ms.toFixed(0).padStart(5)} ${String(r.n).padStart(3)}  ${r.kind.padEnd(18)}  ${r.dry.padEnd(10)} ${r.wet.padEnd(10)} ${r.goal.padEnd(10)} ${r.q}`,
+      );
+    }
+    const byKind = {};
+    let longMs = 0;
+    for (const r of s.disagreeRuns) {
+      byKind[r.kind] = (byKind[r.kind] || 0) + r.n;
+      if (r.ms >= 40) longMs += r.ms;
+    }
+    console.log("");
+    console.log(
+      "by frames: " +
+        Object.entries(byKind)
+          .map(([k, n]) => `${k} ${n}`)
+          .join(" · ") +
+        `  ·  runs ≥40ms: ${s.disagreeRuns.filter((r) => r.ms >= 40).length} (${longMs.toFixed(0)}ms)`,
+    );
+    const dumpPath =
+      args.dumpPath || ".tmp_centinel/disagree.json";
+    writeFileSync(
+      dumpPath,
+      JSON.stringify(
+        {
+          wet: s.wet,
+          voiced: s.voiced,
+          disagreePct: s.noteDisagreePct,
+          dryAtFrames: s.noteDisagreeDryAtFrames,
+          runs: s.disagreeRuns.map((r) => ({
+            t0: r.t0,
+            t1: r.t1,
+            ms: +r.ms.toFixed(1),
+            n: r.n,
+            kind: r.kind,
+            dry: r.dry,
+            wet: r.wet,
+            goal: r.goal,
+            q: r.q,
+            frames: r.frames,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+    console.log(`\nwrote ${dumpPath}`);
   }
   console.log("");
   console.log(

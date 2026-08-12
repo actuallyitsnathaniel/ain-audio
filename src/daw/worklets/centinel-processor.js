@@ -1,11 +1,12 @@
-// Centinel — patent-core pitch corrector (US5973252A, expired) + product layer.
-// Detect: 8:1 DS + recursive E/H search. Correct: narrow-band E/H track →
-// Cycle_period → rate convert + ±1 cycle insert/delete (formant-off).
-// formant ≥ 0.5: optional period PSOLA (Lent-adjacent). Fairbanks = splice off.
-// Product on top: Retune Speed / Humanize / Flex / Nat Vib / sticky. Latency N/2.
+// Centinel — US5973252A (expired) pitch corrector.
+// Detect: 8:1 DS + recursive E/H. Correct: Cycle_period → rate + ±1 cycle.
+// Decay = Retune Speed. Desired = nearest scale / MIDI-follow.
+// formant 0–1: cepstral-smoothed LPC envelope copy onto splice (not PSOLA).
+// PSOLA remains for CYCLE_SPLICE=false only — not the AT reference.
+// Product: G3 sticky hold on committed scale note. Humanize / Flex / Nat Vib parked.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-11g2n5i-flatslew";
+const CENTINEL_BUILD = "2026-08-12g2d-cep";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -28,22 +29,23 @@ const EH_DS_BUF = 256;
 /** Relative period jump/refine → tracking failure → re-detect. */
 const EH_MAX_REL_STEP = 0.18;
 /** Consecutive refine fails before leaving correction mode. */
-const EH_FAIL_NEED = 6;
+const EH_FAIL_NEED = 2;
 /** formant-off wet = patent cycle splice (false → Fairbanks OLA). */
 const CYCLE_SPLICE = true;
-/**
- * Run patent E/H per-sample (updates `_periodSamp` only).
- * Must NOT write `_inphincTgt` — process() copies that → inphinc every sample
- * (p1a–e silent regression). Drive into splice/R* only via EH_DRIVE when ready.
- */
+/** Cepstral-smoothed LPC envelope copy onto splice. */
+const LPC_P = 16;
+const CEP_N = 1024;
+const CEP_LIFT = 30;
+const LPC_WIN = CEP_N;
+const LPC_HOP = 256;
+const LPC_PRE = 0.97;
+const LPC_KMAX = 0.995;
+/** Pole shrink after Levinson — kills F0-ripple peaks that chew. */
+const LPC_BW = 0.96;
+/** Per-sample E/H detect/track → `_periodSamp`. */
 const EH_LIVE = true;
-/** When true, splice Cycle_period uses E/H `_periodSamp` (gated — needs offline win). */
+/** Splice Cycle_period uses E/H `_periodSamp`. */
 const EH_DRIVE = true;
-/**
- * Note commit / retarget only every N detect hops — keeps hold/hyst at the old
- * ~11.6 ms cadence so faster YIN doesn't hair-trigger neighbor flips.
- */
-const NOTE_DECIDE_HOPS = 2;
 const F_MIN_DEFAULT = 110;
 const F_MAX_DEFAULT = 700;
 const AREF = 440;
@@ -51,8 +53,11 @@ const VIZ_BINS = 96;
 const MIDI_LO = 36;
 const MIDI_HI = 84;
 const VIZ_EVERY = 2;
-const STABLE_NEED = 5; // was 3 @ hop512 (~35ms); 5 @ hop256 ≈ 29ms arm
+/** Hop confirm before arm — E/H correction-mode lock is the real gate. */
+const STABLE_NEED = 1;
 const MAX_JUMP_SEMI = 7;
+/** G3: keep committed note until live is clearly closer (semitones). */
+const STICKY_HYST_SEMI = 0.4;
 const FACT_MIN = 0.5;
 const FACT_MAX = 2.0;
 const RMS_GATE = 0.01;
@@ -309,64 +314,6 @@ const INPUT_HZ = {
   bassInst: { fMin: 45, fMax: 250 },
 };
 
-/**
- * AT Flex-Tune strength: correction only as pitch approaches the target note.
- * flex=0 → always correct (hard). Higher flexCents → smaller correction radius
- * (manual: more expressive variation allowed through).
- * Hard mode still tapers when far from sticky so scoops aren't yanked opposite
- * the gesture (Retune-Speed interaction AT gets for free; we approximate).
- */
-function flexCorrectionStrength(absErrSemi, flexCents) {
-  const f = Math.max(0, Math.min(100, flexCents));
-  if (f < 0.5) {
-    // Hard / pop flex=0: full pull near center; ease out so scoops aren't inverted.
-    // hardLo 0.28 (g2j) beat center but opened dips — keep a1.
-    const hardLo = 0.22;
-    const hardSpan = 0.4;
-    if (absErrSemi <= hardLo) return 1;
-    return Math.max(0, 1 - (absErrSemi - hardLo) / hardSpan);
-  }
-  // flex 0.5..100 → radius ~0.50..0.10 st (higher flex = tighter island).
-  const u = f / 100;
-  const radius = 0.5 * (1 - 0.8 * u);
-  if (absErrSemi >= radius) return 0;
-  const x = absErrSemi / Math.max(1e-6, radius);
-  return (1 - x) * (1 - x);
-}
-
-function pullToward(det, tgt, amount, flexCents, ownedFinish = false) {
-  const err = tgt - det;
-  const absErr = Math.abs(err);
-  const amt = Math.max(0, Math.min(1, amount));
-  let strength = flexCorrectionStrength(absErr, flexCents);
-  // Listen gaps ~14.2–14.5: owned sticky, dry wobbles flat and hard taper
-  // zeros → wet≈dry. Finish hard when flat; stay gentle when sharp (lag-dips).
-  if (ownedFinish && flexCents < 0.5 && absErr <= 0.9) {
-    const flat = err > 0; // sticky above det
-    const floor = flat
-      ? absErr <= 0.22
-        ? 1
-        : absErr <= 0.35
-          ? 0.96
-          : absErr <= 0.48
-            ? 0.9
-            : absErr <= 0.6
-              ? 0.78
-              : absErr <= 0.75
-                ? 0.6
-                : 0.45
-      : absErr <= 0.22
-        ? 1
-        : absErr <= 0.35
-          ? 0.9
-          : absErr <= 0.48
-            ? 0.55
-            : 0.28;
-    strength = Math.max(strength, floor);
-  }
-  return det + err * amt * strength;
-}
-
 function scalePcsOf(scale, customPcs) {
   if (scale === "custom") {
     const pcs = Array.isArray(customPcs)
@@ -422,129 +369,11 @@ function nearestScaleMidi(midi, key, scalePcs) {
   return midi + best;
 }
 
-/** Hold time: longer when soft so we don't commit to a wrong neighbor mid-glide.
- * Midway: AT-ish settle without f-strict-at robotics (cap was 48 → 60). */
-function holdMsForSpeed(speedMs, coldStart, pitchConf) {
-  if (!(speedMs >= 0.5)) return HOLD_MS_BASE;
-  let ms = Math.max(HOLD_MS_BASE, Math.min(60, speedMs * 0.32));
-  // Cold re-arm: slight extra hold — first note of a run still needs a beat of trust.
-  if (coldStart) ms = Math.max(ms, Math.min(72, ms + 18));
-  // Reverb / low confidence: commit slower — fewer false neighbor snaps.
-  if (pitchConf < CONF_RETARGET) {
-    ms = Math.max(ms, Math.min(95, ms + 26));
-  }
-  return ms;
-}
-
 function octaveLock(midi, ref) {
   let m = midi;
   while (m - ref > 6) m -= 12;
   while (ref - m > 6) m += 12;
   return m;
-}
-
-function yinPitch(buf, sr, fMin, fMax, d, cmnd) {
-  const n = buf.length;
-  const tauMax = Math.min(n - 2, Math.floor(sr / fMin));
-  const tauMin = Math.max(2, Math.floor(sr / fMax));
-  if (tauMax <= tauMin + 2)
-    return { f0: 0, clarity: 0, confidence: 0, ambiguous: false };
-
-  for (let tau = 1; tau <= tauMax; tau++) {
-    let sum = 0;
-    const lim = n - tau;
-    for (let i = 0; i < lim; i++) {
-      const delta = buf[i] - buf[i + tau];
-      sum += delta * delta;
-    }
-    d[tau] = sum;
-  }
-
-  cmnd[0] = 1;
-  let running = 0;
-  for (let tau = 1; tau <= tauMax; tau++) {
-    running += d[tau];
-    cmnd[tau] = running > 0 ? (d[tau] * tau) / running : 1;
-  }
-
-  const thresh = 0.12;
-  let tau = tauMin;
-  for (; tau <= tauMax; tau++) {
-    if (cmnd[tau] < thresh) {
-      while (tau + 1 <= tauMax && cmnd[tau + 1] < cmnd[tau]) tau++;
-      break;
-    }
-  }
-  if (tau >= tauMax || cmnd[tau] >= 1) {
-    return { f0: 0, clarity: 0, confidence: 0, ambiguous: false };
-  }
-
-  const tau2 = tau * 2;
-  if (tau2 + 1 <= tauMax) {
-    let t2 = tau2;
-    if (t2 > 1 && cmnd[t2 - 1] < cmnd[t2]) t2--;
-    if (t2 + 1 <= tauMax && cmnd[t2 + 1] < cmnd[t2]) t2++;
-    // Prefer longer period only when *clearly* better. Rooms make 2τ look
-    // "as good" as τ (early reflection / subharmonic) — 1.02 was octave-downing.
-    if (cmnd[t2] < cmnd[tau] * 0.95 && cmnd[t2] < 0.08) tau = t2;
-  }
-
-  const x0 = tau > 1 ? cmnd[tau - 1] : cmnd[tau];
-  const x1 = cmnd[tau];
-  const x2 = tau + 1 <= tauMax ? cmnd[tau + 1] : cmnd[tau];
-  const denom = 2 * (2 * x1 - x2 - x0);
-  const better = denom !== 0 ? tau + (x2 - x0) / denom : tau;
-  const f0 = sr / better;
-  const clarity = Math.max(0, Math.min(1, 1 - cmnd[tau]));
-  if (!(f0 >= fMin && f0 <= fMax)) {
-    return { f0: 0, clarity: 0, confidence: 0, ambiguous: false };
-  }
-
-  const primary = cmnd[tau];
-  // Non-octave multipitch (other notes / clutter). Near-τ skipped as same trough.
-  let second = 1;
-  const nearLo = tau * 0.78;
-  const nearHi = tau * 1.28;
-  const octLo = tau * 1.85;
-  const octHi = tau * 2.2;
-  const halfLo = tau * 0.48;
-  const halfHi = tau * 0.54;
-  for (let t = tauMin; t <= tauMax; t++) {
-    if (t >= nearLo && t <= nearHi) continue;
-    if (t >= octLo && t <= octHi) continue;
-    if (t >= halfLo && t <= halfHi) continue;
-    if (cmnd[t] < second) second = cmnd[t];
-  }
-  // Room reflections love ≈2τ / ≈½τ rivals that clean harmonics also show —
-  // only flag when the rival is nearly as deep as the primary (not "expected weak").
-  let octBest = 1;
-  for (
-    let t = Math.max(tauMin, Math.floor(octLo));
-    t <= Math.min(tauMax, Math.ceil(octHi));
-    t++
-  ) {
-    if (cmnd[t] < octBest) octBest = cmnd[t];
-  }
-  let halfBest = 1;
-  for (
-    let t = Math.max(tauMin, Math.floor(halfLo));
-    t <= Math.min(tauMax, Math.ceil(halfHi));
-    t++
-  ) {
-    if (cmnd[t] < halfBest) halfBest = cmnd[t];
-  }
-  const octaveRival =
-    (octBest <= primary * 1.18 && octBest < 0.16) ||
-    (halfBest <= primary * 1.12 && halfBest < 0.14);
-  const multiOther = second < primary * 1.4 && second < 0.22;
-  const ambiguous = multiOther || octaveRival;
-  let confidence = clarity;
-  if (octaveRival) confidence *= 0.32;
-  else if (multiOther) confidence *= 0.42;
-  // Soften when primary trough isn't crisp either
-  if (primary > 0.1) confidence *= 0.85;
-
-  return { f0, clarity, confidence, ambiguous };
 }
 
 function cubicAt(buf, indd) {
@@ -563,6 +392,108 @@ function cubicAt(buf, indd) {
   vald -= 0.5 * val2 * (indd - ind0) * (indd - ind1) * (indd - ind3);
   vald += 0.166666666667 * val3 * (indd - ind0) * (indd - ind1) * (indd - ind2);
   return vald;
+}
+
+/** Levinson–Durbin → reflection coeffs k[0..p). false on silence / unstable. */
+function lpcLevinson(r, p, k, a, at) {
+  let e = r[0];
+  if (!(e > 1e-10)) return false;
+  a[0] = 1;
+  for (let i = 1; i <= p; i++) a[i] = 0;
+  for (let m = 1; m <= p; m++) {
+    let acc = r[m];
+    for (let j = 1; j < m; j++) acc += a[j] * r[m - j];
+    let km = -acc / e;
+    if (km > LPC_KMAX) km = LPC_KMAX;
+    else if (km < -LPC_KMAX) km = -LPC_KMAX;
+    k[m - 1] = km;
+    for (let j = 1; j < m; j++) at[j] = a[j] + km * a[m - j];
+    for (let j = 1; j < m; j++) a[j] = at[j];
+    a[m] = km;
+    e *= 1 - km * km;
+    if (!(e > 1e-12)) return false;
+  }
+  return true;
+}
+
+/** k → LPC a[0]=1, a[1..p]. `at` is scratch length p+1. */
+function lpcKToA(k, a, at) {
+  const p = k.length;
+  a[0] = 1;
+  for (let i = 1; i <= p; i++) a[i] = 0;
+  for (let m = 1; m <= p; m++) {
+    const km = k[m - 1];
+    for (let j = 1; j < m; j++) at[j] = a[j] + km * a[m - j];
+    for (let j = 1; j < m; j++) a[j] = at[j];
+    a[m] = km;
+  }
+}
+
+/** e = x + a[1]x[n-1] + … (whitening). z[i] = x[n-1-i]. */
+function lpcWhiten(x, a, z) {
+  const p = a.length - 1;
+  let e = x;
+  for (let i = 0; i < p; i++) e += a[i + 1] * z[i];
+  for (let i = p - 1; i > 0; i--) z[i] = z[i - 1];
+  z[0] = x;
+  return e;
+}
+
+/** y = e − a[1]y[n-1] − … (all-pole). z[i] = y[n-1-i]. */
+function lpcShape(e, a, z) {
+  const p = a.length - 1;
+  let y = e;
+  for (let i = 0; i < p; i++) y -= a[i + 1] * z[i];
+  for (let i = p - 1; i > 0; i--) z[i] = z[i - 1];
+  z[0] = y;
+  return y;
+}
+
+function fftRadix2(re, im, inverse) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      let t = re[i];
+      re[i] = re[j];
+      re[j] = t;
+      t = im[i];
+      im[i] = im[j];
+      im[j] = t;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = ((inverse ? 2 : -2) * Math.PI) / len;
+    const wlenRe = Math.cos(ang);
+    const wlenIm = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let wRe = 1;
+      let wIm = 0;
+      const half = len >> 1;
+      for (let j = 0; j < half; j++) {
+        const uRe = re[i + j];
+        const uIm = im[i + j];
+        const vRe = re[i + j + half] * wRe - im[i + j + half] * wIm;
+        const vIm = re[i + j + half] * wIm + im[i + j + half] * wRe;
+        re[i + j] = uRe + vRe;
+        im[i + j] = uIm + vIm;
+        re[i + j + half] = uRe - vRe;
+        im[i + j + half] = uIm - vIm;
+        const nRe = wRe * wlenRe - wIm * wlenIm;
+        wIm = wRe * wlenIm + wIm * wlenRe;
+        wRe = nRe;
+      }
+    }
+  }
+  if (inverse) {
+    const inv = 1 / n;
+    for (let i = 0; i < n; i++) {
+      re[i] *= inv;
+      im[i] *= inv;
+    }
+  }
 }
 
 class AinCentinelProcessor extends AudioWorkletProcessor {
@@ -654,9 +585,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this.hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N);
     }
 
-    this._yinScratch = new Float32Array(N2);
-    this._yinD = new Float32Array(N2);
-    this._yinCmnd = new Float32Array(N2);
+    this._rmsWin = new Float32Array(N2);
     /** Patent E/H — downsampled detect + full-rate correction track. */
     this._ed = new Float32Array(EH_LMAX + 1);
     this._hd = new Float32Array(EH_LMAX + 1);
@@ -698,6 +627,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._fMax = INPUT_HZ[po.inputType].fMax;
     }
     if (typeof po.on === "boolean") this._on = po.on;
+    /** Offline only: post |periodSamp − 1/inphinc| (G1 Step 0). Live UI off. */
+    this._ehValidate = !!po.ehValidate;
+    this._ehValHop = 0;
 
     this.phasein = 0;
     this.phaseout = 0;
@@ -715,6 +647,39 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
      */
     this._spliceDelay = N2;
     this._spliceInit = false;
+    this._spliceXf = 0;
+    this._spliceXfN = 24;
+    this._spliceXfDelay = N2;
+    this._lpcR = new Float32Array(LPC_P + 1);
+    this._lpcAWork = new Float32Array(LPC_P + 1);
+    this._lpcAt = new Float32Array(LPC_P + 1);
+    this._cepRe = new Float32Array(CEP_N);
+    this._cepIm = new Float32Array(CEP_N);
+    this._cepHann = new Float32Array(CEP_N);
+    for (let i = 0; i < CEP_N; i++)
+      this._cepHann[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / CEP_N));
+    this._lpcKDry = new Float32Array(LPC_P);
+    this._lpcKWet = new Float32Array(LPC_P);
+    this._lpcKDryTgt = new Float32Array(LPC_P);
+    this._lpcKWetTgt = new Float32Array(LPC_P);
+    this._lpcADry = new Float32Array(LPC_P + 1);
+    this._lpcAWet = new Float32Array(LPC_P + 1);
+    this._lpcADry[0] = 1;
+    this._lpcAWet[0] = 1;
+    this._lpcZxL = new Float32Array(LPC_P);
+    this._lpcZxR = new Float32Array(LPC_P);
+    this._lpcZyL = new Float32Array(LPC_P);
+    this._lpcZyR = new Float32Array(LPC_P);
+    this._lpcWetL = new Float32Array(LPC_WIN);
+    this._lpcWetR = new Float32Array(LPC_WIN);
+    this._lpcWetWr = 0;
+    this._lpcHop = 0;
+    this._lpcPreXL = 0;
+    this._lpcPreXR = 0;
+    this._lpcPreYL = 0;
+    this._lpcPreYR = 0;
+    this._lpcHave = false;
+    this._lpcKAlpha = 1 - Math.exp(-1 / Math.max(1, 0.006 * sampleRate));
     /** Prefer fresh PSOLA grain after note commit (single buffer — no slap). */
     this._commitRecapture = false;
     this._commitRecaptureMs = 0;
@@ -836,8 +801,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._vizTick = 0;
     this._warmup = N;
     this._detectDt = DETECT_EVERY / sampleRate;
-    /** Hold/retarget clock — NOTE_DECIDE_HOPS × detect (legacy cadence). */
-    this._noteDt = (DETECT_EVERY * NOTE_DECIDE_HOPS) / sampleRate;
+    this._noteDt = DETECT_EVERY / sampleRate;
     this._detectHop = 0;
     this._hpCoeff = Math.exp((-2 * Math.PI * 120) / sampleRate);
     this._fMin = F_MIN_DEFAULT;
@@ -873,6 +837,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       }
       if (typeof d.midiFollow === "boolean") this._midiFollow = d.midiFollow;
       if (typeof d.viz === "boolean") this._viz = d.viz;
+      if (typeof d.ehValidate === "boolean") this._ehValidate = d.ehValidate;
       if (typeof d.inputType === "string" && INPUT_HZ[d.inputType]) {
         this._inputType = d.inputType;
         this._fMin = INPUT_HZ[d.inputType].fMin;
@@ -957,8 +922,20 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._vibCenter = 60;
     this._vibSemiSlew = 0;
     this._vibGateSlew = 0;
-    this._stopPeriodTrack();
-    if (clearRing) this._wetMix = 0;
+    if (clearRing) {
+      this._stopPeriodTrack();
+      this._wetMix = 0;
+    } else {
+      // Phrase gap: fail → re-detect, keep DS E/H so the next onset isn't cold.
+      this._trackOk = false;
+      this._periodSamp = 0;
+      this._detectionMode = true;
+      this._ehRefineCnt = 0;
+      this._ehSeeded = false;
+      this._ehFail = 0;
+      this._trackE.fill(0);
+      this._trackH.fill(0);
+    }
   }
 
   _stopPeriodTrack() {
@@ -983,11 +960,38 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   _resetCycleSplice() {
     this._spliceDelay = N2;
     this._spliceInit = false;
+    this._spliceXf = 0;
+    this._spliceXfDelay = N2;
+    this._lpcReset();
   }
 
-  /** True when formant-off patent cycle-splice owns the wet path. */
+  _lpcReset() {
+    this._lpcKDry.fill(0);
+    this._lpcKWet.fill(0);
+    this._lpcKDryTgt.fill(0);
+    this._lpcKWetTgt.fill(0);
+    this._lpcADry.fill(0);
+    this._lpcAWet.fill(0);
+    this._lpcADry[0] = 1;
+    this._lpcAWet[0] = 1;
+    this._lpcZxL.fill(0);
+    this._lpcZxR.fill(0);
+    this._lpcZyL.fill(0);
+    this._lpcZyR.fill(0);
+    this._lpcWetL.fill(0);
+    this._lpcWetR.fill(0);
+    this._lpcWetWr = 0;
+    this._lpcHop = 0;
+    this._lpcPreXL = 0;
+    this._lpcPreXR = 0;
+    this._lpcPreYL = 0;
+    this._lpcPreYR = 0;
+    this._lpcHave = false;
+  }
+
+  /** True when patent cycle-splice owns the wet path. formant = envelope preserve. */
   _useCycleSplice() {
-    return CYCLE_SPLICE && this._formant < 0.5;
+    return CYCLE_SPLICE;
   }
 
   /**
@@ -1044,6 +1048,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._trackE[k] = E;
       this._trackH[k] = H;
     }
+    const prevPe = this._periodSamp;
     this._periodSamp = pe;
     this._periodMidi = this._foldIntoRange(hzToMidi(sampleRate / pe));
     this._detectionMode = false;
@@ -1051,7 +1056,24 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._ehRefineCnt = 0;
     this._ehFail = 0;
     this._ehSeeded = true;
-    // Do not touch _inphincTgt here (see EH_LIVE comment).
+    // Period octave (harmonic→f0): notes / R* follow E/H. octaveLock-to-old-midi
+    // was a YIN leftover that shifted a correct C#4 period back up to C#5.
+    if (prevPe > 1) {
+      const ratio = pe / prevPe;
+      const oct = (ratio > 1.8 && ratio < 2.3) || (ratio > 0.43 && ratio < 0.56);
+      if (oct) {
+        const pm = this._periodMidi;
+        this._lockedDet = pm;
+        this._detMidi = pm;
+        if (typeof this._committedTgt === "number")
+          this._committedTgt = octaveLock(this._committedTgt, pm);
+        if (typeof this._audibleWant === "number")
+          this._audibleWant = octaveLock(this._audibleWant, pm);
+        if (typeof this._wantTgt === "number")
+          this._wantTgt = octaveLock(this._wantTgt, pm);
+      }
+    }
+    // inphinc is written from periodSamp in process() (E/H owns the period).
     if (this._ehClarity < 0.4) this._ehClarity = 0.55;
     return true;
   }
@@ -1095,19 +1117,22 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     }
     if (!bestL) return;
 
-    // Missing-fundamental: if ~2× lag is nearly as good on full-rate, prefer it.
-    let pe = bestL * EH_DS;
-    const pe2 = pe * 2;
-    if (pe2 >= peMin && pe2 <= peMax) {
-      const wr = this.cbiwr;
-      const a = this._ehSnapshot(pe, wr, this._ringMono);
-      const b = this._ehSnapshot(pe2, wr, this._ringMono);
-      const ca = a.E > 1e-12 ? (a.E - 2 * a.H) / a.E : Infinity;
-      const cb = b.E > 1e-12 ? (b.E - 2 * b.H) / b.E : Infinity;
-      if (cb <= ca * 1.05) pe = pe2;
+    // Patent octave check on the same DS E/H: 2L/4L often still meet ε when
+    // the search landed on a harmonic. Stop before subharmonic (~C#3).
+    let L = bestL;
+    for (let k = 0; k < 2; k++) {
+      const L2 = L * 2;
+      if (L2 > lDsMax) break;
+      const pe2 = L2 * EH_DS;
+      if (pe2 > peMax || sampleRate / pe2 < 140) break;
+      const E2 = this._ed[L2];
+      if (!(E2 > 1e-8)) break;
+      const n2 = (E2 - 2 * this._hd[L2]) / E2;
+      if (n2 <= EH_EPS_LOOSE) L = L2;
+      else break;
     }
     this._ehFail = 0;
-    this._ehEnterCorrection(pe);
+    this._ehEnterCorrection(L * EH_DS);
   }
 
   /**
@@ -1160,9 +1185,23 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._periodMidi = this._foldIntoRange(hzToMidi(sampleRate / pe));
     this._trackOk = true;
     this._ehFail = 0;
-    // Clarity from how tight E−2H is vs energy (1 = perfect period match).
     const fit = bestE > 1e-12 ? Math.max(0, 1 - bestCost / bestE) : 0;
     this._ehClarity = Math.max(0, Math.min(1, fit));
+
+    // Locked on a harmonic: 2L still meets ε → re-seed on the fundamental.
+    // hz>450 so F#4 (~370) stays. Above ~520 Hz (C#5+) fold even if the
+    // harmonic trough is tighter — that's this 21s C#4 sung as C#5.
+    const pe2 = pe * 2;
+    const hz = sampleRate / pe;
+    const hz2 = sampleRate / pe2;
+    if (hz > 450 && pe2 >= peMin && pe2 <= peMax && hz2 >= 140) {
+      const b = this._ehSnapshot(pe2, this.cbiwr, this._ringMono);
+      const cb = b.E > 1e-12 ? (b.E - 2 * b.H) / b.E : Infinity;
+      if (cb <= EH_EPS_LOOSE || hz > 520) {
+        this._ehEnterCorrection(pe2);
+        return true;
+      }
+    }
 
     // Slide lag window when min hugs an edge (patent EH_Offset shift).
     if (bestK <= 1 || bestK >= EH_TRACK_N - 2) {
@@ -1238,7 +1277,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._spliceDelay = N2;
       this._spliceInit = true;
     }
-    // Cycle_period: E/H when EH_DRIVE; else YIN-locked inphinc (g2a-winning path).
+    // Cycle_period: E/H when tracking; else last inphinc.
     let pe =
       EH_DRIVE && this._trackOk && this._periodSamp > 1
         ? this._periodSamp
@@ -1249,18 +1288,140 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const r = Math.max(FACT_MIN, Math.min(FACT_MAX, rate));
 
     this._spliceDelay += 1 - r;
+    if (this._spliceXf > 0) this._spliceXfDelay += 1 - r;
 
     const minD = Math.max(pe * 0.35, N2 - pe);
     const maxD = Math.min(N - pe - 4, N2 + pe);
-    let guard = 0;
-    while (this._spliceDelay < minD && guard++ < 8) this._spliceDelay += pe;
-    guard = 0;
-    while (this._spliceDelay > maxD && guard++ < 8) this._spliceDelay -= pe;
+    const before = this._spliceDelay;
+    // Patent: ± exactly one Cycle_period per sample (not a burst of jumps).
+    if (this._spliceDelay < minD) this._spliceDelay += pe;
+    else if (this._spliceDelay > maxD) this._spliceDelay -= pe;
     if (this._spliceDelay < 4) this._spliceDelay = 4;
     if (this._spliceDelay > N - 4) this._spliceDelay = N - 4;
 
+    if (this._spliceDelay !== before) {
+      this._spliceXfDelay = before;
+      this._spliceXfN = Math.max(8, Math.min(48, pe * 0.25));
+      this._spliceXf = 1;
+    }
+
     const indd = this.cbiwr - this._spliceDelay;
-    return [cubicAt(this.cbiL, indd), cubicAt(this.cbiR, indd)];
+    let l = cubicAt(this.cbiL, indd);
+    let rS = cubicAt(this.cbiR, indd);
+    if (this._spliceXf > 0) {
+      const ind0 = this.cbiwr - this._spliceXfDelay;
+      const w = this._spliceXf;
+      l = w * cubicAt(this.cbiL, ind0) + (1 - w) * l;
+      rS = w * cubicAt(this.cbiR, ind0) + (1 - w) * rS;
+      this._spliceXf -= 1 / this._spliceXfN;
+      if (this._spliceXf < 0) this._spliceXf = 0;
+    }
+    return [l, rS];
+  }
+
+  /**
+   * Cepstral-smoothed autocorr → Levinson. Lifter strips F0 harmonic ripples
+   * so the IIR follows the throat, not the pitch comb.
+   */
+  _lpcFitRing(buf, wr, kTgt) {
+    const nBuf = buf.length;
+    const re = this._cepRe;
+    const im = this._cepIm;
+    const hann = this._cepHann;
+    for (let i = 0; i < CEP_N; i++) {
+      const x = buf[(((wr - (CEP_N - 1 - i)) % nBuf) + nBuf) % nBuf];
+      re[i] = x * hann[i];
+      im[i] = 0;
+    }
+    fftRadix2(re, im, false);
+    const half = CEP_N >> 1;
+    re[0] = Math.log(Math.abs(re[0]) + 1e-12);
+    im[0] = 0;
+    for (let k = 1; k < half; k++) {
+      const mag = Math.hypot(re[k], im[k]) + 1e-12;
+      const lg = Math.log(mag);
+      re[k] = lg;
+      re[CEP_N - k] = lg;
+      im[k] = 0;
+      im[CEP_N - k] = 0;
+    }
+    re[half] = Math.log(Math.abs(re[half]) + 1e-12);
+    im[half] = 0;
+    fftRadix2(re, im, true);
+    for (let i = CEP_LIFT + 1; i < CEP_N - CEP_LIFT; i++) {
+      re[i] = 0;
+      im[i] = 0;
+    }
+    for (let i = 0; i < CEP_N; i++) im[i] = 0;
+    fftRadix2(re, im, false);
+    for (let k = 0; k <= half; k++) {
+      const pwr = Math.exp(2 * re[k]);
+      re[k] = pwr;
+      if (k > 0 && k < half) re[CEP_N - k] = pwr;
+      im[k] = 0;
+      if (k > 0) im[CEP_N - k] = 0;
+    }
+    im[half] = 0;
+    fftRadix2(re, im, true);
+    const r = this._lpcR;
+    for (let lag = 0; lag <= LPC_P; lag++) r[lag] = re[lag];
+    if (!lpcLevinson(r, LPC_P, kTgt, this._lpcAWork, this._lpcAt)) return false;
+    let bw = LPC_BW;
+    for (let i = 0; i < LPC_P; i++) {
+      kTgt[i] *= bw;
+      bw *= LPC_BW;
+    }
+    return true;
+  }
+
+  /**
+   * Copy dry cepstral envelope onto spliced wet (source-filter). Amount = formant * R*-gate.
+   * Inverse-filter wet (shifted formants) → residual; resynthesize with dry poles.
+   */
+  _formantRestore(sL, sR, amt) {
+    this._lpcWetL[this._lpcWetWr] = sL;
+    this._lpcWetR[this._lpcWetWr] = sR;
+    this._lpcWetWr++;
+    if (this._lpcWetWr >= LPC_WIN) this._lpcWetWr = 0;
+
+    this._lpcHop++;
+    if (this._lpcHop >= LPC_HOP) {
+      this._lpcHop = 0;
+      const dryWr = this.cbiwr - N2;
+      const dryOk = this._lpcFitRing(this.cbiL, dryWr, this._lpcKDryTgt);
+      const wetOk = this._lpcFitRing(
+        this._lpcWetL,
+        this._lpcWetWr - 1,
+        this._lpcKWetTgt,
+      );
+      this._lpcHave = dryOk && wetOk;
+    }
+
+    if (!this._lpcHave || amt < 0.001) return [sL, sR];
+
+    const ka = this._lpcKAlpha;
+    for (let i = 0; i < LPC_P; i++) {
+      this._lpcKDry[i] += (this._lpcKDryTgt[i] - this._lpcKDry[i]) * ka;
+      this._lpcKWet[i] += (this._lpcKWetTgt[i] - this._lpcKWet[i]) * ka;
+    }
+    lpcKToA(this._lpcKDry, this._lpcADry, this._lpcAt);
+    lpcKToA(this._lpcKWet, this._lpcAWet, this._lpcAt);
+
+    const preL = sL - LPC_PRE * this._lpcPreXL;
+    this._lpcPreXL = sL;
+    const yL =
+      lpcShape(lpcWhiten(preL, this._lpcAWet, this._lpcZxL), this._lpcADry, this._lpcZyL) +
+      LPC_PRE * this._lpcPreYL;
+    this._lpcPreYL = yL;
+
+    const preR = sR - LPC_PRE * this._lpcPreXR;
+    this._lpcPreXR = sR;
+    const yR =
+      lpcShape(lpcWhiten(preR, this._lpcAWet, this._lpcZxR), this._lpcADry, this._lpcZyR) +
+      LPC_PRE * this._lpcPreYR;
+    this._lpcPreYR = yR;
+
+    return [sL + (yL - sL) * amt, sR + (yR - sR) * amt];
   }
 
   /** Fold octave errors into the selected input-type band. */
@@ -1350,50 +1511,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     return this._softRatioChase();
   }
 
-  /**
-   * Auto-Tune Humanize: keep Retune Speed for attacks/short notes; stretch it
-   * on the sustained portion of longer notes — but not while still finishing
-   * into note center (humanize was undoing center-tight on pop).
-   */
-  _effectiveSpeed(speedMs, humanize) {
-    let spd = Math.max(0, speedMs);
-    if (this._softRatioChase()) {
-      // Cold: taper floor → base speed over COLD_START_MS (no cliff at expiry).
-      if (this._coldStart) {
-        const u = Math.min(1, this._coldStartMs / COLD_START_MS);
-        const floor = COLD_START_SPEED_FLOOR_MS * (1 - u) + spd * u;
-        if (floor > spd) spd = floor;
-      }
-      // Rapid-run commits: brief floor so each note isn't a 25ms staircase.
-      // Stationary: cap floor at the knob so pop-speed (~27) isn't slowed.
-      if (this._commitSoftMs > 0) {
-        const stable =
-          this._stablePitchMs >= STABLE_PITCH_MS &&
-          this._pitchVel < SCOOP_VEL_ST_S &&
-          !this._pendingHold;
-        // Stationary: cap floor at the knob. Transitions: full commit soft floor
-        // (anti-staircase). Center-chase capped separately so no soft→Cher snap.
-        const floor = stable
-          ? Math.min(COMMIT_SOFT_STABLE_FLOOR_MS, spd)
-          : COMMIT_SOFT_FLOOR_MS;
-        if (spd < floor) spd = floor;
-      }
-      if (this._reverbSoftMs > 0 && spd < REVERB_SOFT_FLOOR_MS) {
-        spd = REVERB_SOFT_FLOOR_MS;
-      }
-    }
-    const h = Math.max(0, Math.min(1, humanize));
-    if (h < 0.001 || this._noteAgeMs <= HUMANIZE_SUSTAIN_MS) return spd;
-    // Lever 1: no humanize stretch while off sticky center.
-    const centerErrCents =
-      Math.abs(this._audibleWant - this._committedTgt) * 100;
-    if (centerErrCents > HUMANIZE_OFF_CENTER_CENTS) return spd;
-    if (this._pendingHold) return spd;
-    const sustain = Math.min(
-      1,
-      (this._noteAgeMs - HUMANIZE_SUSTAIN_MS) / HUMANIZE_RAMP_MS,
-    );
-    return spd + h * sustain * HUMANIZE_EXTRA_MS;
+  /** Decay = Retune Speed. Product Humanize stretch is parked. */
+  _effectiveSpeed(speedMs) {
+    return Math.max(0, speedMs);
   }
 
   /** Mark note-commit: refresh grain in-place ASAP (never dual-place). */
@@ -1407,8 +1527,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._commitRecaptureMs = 0;
   }
 
-  /** Snap locked det → scale/MIDI want (amount + AT Flex-Tune). */
-  _wantFromDet(det, amount, flexCents, transpose) {
+  /** Nearest scale (or MIDI-follow). Octave-lock to ref when provided. */
+  _nearestTgt(det, transpose, refMidi) {
     const scalePcs = scalePcsOf(this._scale, this._customPcs);
     let tgt;
     if (this._midiFollow && this._midiNotes.length > 0) {
@@ -1416,210 +1536,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     } else {
       tgt = nearestScaleMidi(det, this._key, scalePcs) + transpose;
     }
-    const want = pullToward(det, tgt, amount, flexCents);
-    return { tgt, want };
+    if (typeof refMidi === "number") tgt = octaveLock(tgt, refMidi);
+    return tgt;
   }
 
-  /**
-   * Autotune-style: keep sticky scale target until raw is clearly closer to
-   * another note (hysteresis). Directed scoops use softer hyst so midzone
-   * doesn't park then cliff. Lever 3: stable vib-center + latch + step cap.
-   */
-  _shouldRetarget(
-    rawMidi,
-    amount,
-    flexCents,
-    transpose,
-    midzone,
-    isStable,
-  ) {
-    // Reverb multipitch / octave rival: don't chase a new neighbor.
-    if (this._ambiguous || this._pitchConf < CONF_RETARGET) return false;
-    // Soft-land park: only a directed scoop may leave the latched note.
-    const scooping =
-      Math.abs(this._signedPitchVel) >= RETARGET_RAW_VEL_ST_S ||
-      this._pitchVel >= SCOOP_VEL_ST_S;
-    if (
-      this._centerLatched &&
-      !(midzone && midzone.u >= 0.45) &&
-      !scooping &&
-      this._pitchVel < GESTURE_VEL_ST_S
-    ) {
-      return false;
-    }
-    // Stationary: judge retarget on vib-center so vibrato/flatness doesn't
-    // flip A↔G#. Directed scoops must use live raw — vib-center lag dipped.
-    // Exception: if live raw has already left sticky farther than vib-center,
-    // vib-center lag was *hiding* orphan sticky (dry_2 @ ~6.0 / ~9.6: raw on
-    // A, vib-center still near B → never released).
-    let pitch =
-      isStable && !midzone && !scooping ? this._vibCenter : rawMidi;
-    const sticky = this._committedTgt;
-    if (
-      isStable &&
-      !scooping &&
-      Math.abs(rawMidi - sticky) > Math.abs(this._vibCenter - sticky) + 0.12
-    ) {
-      pitch = rawMidi;
-    }
-    const fresh = this._wantFromDet(pitch, amount, flexCents, transpose);
-    let tgt = octaveLock(fresh.tgt, sticky);
-    if (Math.abs(tgt - sticky) < 0.25) return false;
-    if (
-      Math.abs(tgt - sticky) > MAX_RETARGET_STEP_SEMI &&
-      this._pitchVel < GESTURE_VEL_ST_S
-    ) {
-      return false;
-    }
-    // Anti-dip: never retarget opposite the scoop (was A→G# while dry rose).
-    const stepDir = Math.sign(tgt - sticky);
-    if (
-      scooping &&
-      stepDir !== 0 &&
-      this._signedPitchVel * stepDir < -0.5
-    ) {
-      return false;
-    }
-    // Neighbor must lie on the same side of sticky as live pitch — blocks
-    // brief reverse dips (dry 57.6→57.1) from arming the lower neighbor.
-    const side = Math.sign(pitch - sticky);
-    if (stepDir !== 0 && side !== 0 && stepDir !== side) {
-      return false;
-    }
-    const dSticky = Math.abs(pitch - sticky);
-    const dFresh = Math.abs(pitch - tgt);
-    // Stronger hysteresis when confidence is merely OK (verby) / parked.
-    let hyst = RETUNE_HYST_SEMI + (1 - Math.min(1, this._pitchConf)) * 0.28;
-    if (isStable && !midzone && !scooping) hyst += RETUNE_HYST_STABLE_EXTRA;
-    if (midzone) hyst *= MIDZONE_HYST_SCALE;
-    // Scooping: lighten hyst so sticky doesn't drag through the bend.
-    // dry_2: 0.72 armed ~0.8st late; 0.4 opened wobble — land in between.
-    if (scooping && !midzone) hyst *= 0.55;
-    // Past the midpoint toward neighbor: sticky no longer owns the pitch.
-    // Without this, a scoop can land closer to A while sticky=B, vel drops,
-    // stable hyst engages, and we park on the wrong note (dry_2 ~5.5 / ~9.6).
-    const mid = (sticky + tgt) * 0.5;
-    const pastMid =
-      stepDir !== 0 && (pitch - mid) * stepDir > 0;
-    if (pastMid) hyst *= 0.32;
-    // Orphan sticky: clearly closer to fresh than sticky — release even parked.
-    if (!scooping && dFresh + 0.28 < dSticky) hyst *= 0.4;
-    return dFresh + hyst < dSticky;
-  }
-
-  /** True if hold candidate still beats sticky — re-check before committing. */
-  _holdStillWins(holdMidi, amount, flexCents, transpose, midzone, isStable) {
-    return this._shouldRetarget(
-      holdMidi,
-      amount,
-      flexCents,
-      transpose,
-      midzone,
-      isStable,
-    ) || !!(midzone && midzone.u >= 0.55);
-  }
-
-  /**
-   * Live pitch clearly owns a neighbor over sticky (past midpoint / far closer).
-   * Used to skip the hold wait — sticky+stable-hyst was parking wrong notes
-   * for tens of ms after the scoop already landed (dry_2 @ 6.0s A←B).
-   */
-  _orphanNeighbor(rawMidi, amount, flexCents, transpose) {
-    // Cold re-entry: conf/ambiguous gates were blocking the E→F# land @ ~20s
-    // right after the phrase gap (YIN conf still slewing up).
-    if (
-      !this._coldStart &&
-      (this._ambiguous || this._pitchConf < CONF_RETARGET * 0.85)
-    ) {
-      return null;
-    }
-    const sticky = this._committedTgt;
-    const fresh = this._wantFromDet(rawMidi, amount, flexCents, transpose);
-    const tgt = octaveLock(fresh.tgt, sticky);
-    if (Math.abs(tgt - sticky) < 0.25) return null;
-    if (Math.abs(tgt - sticky) > MAX_RETARGET_STEP_SEMI) return null;
-    const dS = Math.abs(rawMidi - sticky);
-    const dF = Math.abs(rawMidi - tgt);
-    const toward = Math.sign(tgt - sticky);
-    const side = Math.sign(rawMidi - sticky);
-    if (toward !== 0 && side !== 0 && toward !== side) return null;
-    const mid = (sticky + tgt) * 0.5;
-    const pastMid = toward !== 0 && (rawMidi - mid) * toward > 0;
-    // g3: slightly earlier release — dry_2 @ 6.67 / 9.88 parked on B while
-    // raw already owned A (stable hyst hid shouldRetarget; orphan must fire).
-    if (pastMid && dF + 0.14 < dS) return { tgt, want: fresh.want };
-    if (dF + 0.32 < dS) return { tgt, want: fresh.want };
-    // g2l: dry firmly on natural (|err|≤42¢) while sticky is another note —
-    // flex-to-stale was dry-through @ ~20s. Release without waiting pastMid.
-    if (dF <= 0.42 && dS >= 0.7 && dF + 0.22 < dS) {
-      return { tgt, want: fresh.want };
-    }
-    // g2m: post-silence scoop (dry_2 @ ~20s) — cold re-entry still has mild
-    // vel / conf; release as soon as natural clearly owns over sticky.
-    if (
-      this._coldStart &&
-      dF <= 0.5 &&
-      dS >= 0.55 &&
-      dF + 0.08 < dS
-    ) {
-      return { tgt, want: fresh.want };
-    }
-    return null;
-  }
-
-  /**
-   * Scoop clearly heading toward a neighbor through the midzone.
-   * Returns null, or { want, tgt, u } with u in 0..1 (how committed the approach is).
-   */
-  _midzoneApproach(rawMidi, amount, flexCents, transpose) {
-    if (this._ambiguous || this._pitchConf < CONF_RETARGET * 0.8) return null;
-    if (this._pitchVel < MIDZONE_VEL_ST_S) return null;
-    const fresh = this._wantFromDet(rawMidi, amount, flexCents, transpose);
-    const sticky = this._committedTgt;
-    const neigh = octaveLock(fresh.tgt, sticky);
-    if (Math.abs(neigh - sticky) < 0.25) return null;
-    if (Math.abs(neigh - sticky) > MAX_RETARGET_STEP_SEMI) return null;
-    const dSticky = Math.abs(rawMidi - sticky);
-    const dFresh = Math.abs(rawMidi - neigh);
-    if (dSticky < MIDZONE_ENTER_SEMI) return null;
-    // Still clearly owned by sticky (not closing).
-    if (dFresh > dSticky + MIDZONE_CLOSE_SLACK) return null;
-    // Motion must be toward the neighbor, not vibrato chatter / opposite dip.
-    const toward = Math.sign(neigh - sticky);
-    if (!(this._signedPitchVel * toward > MIDZONE_TOWARD_ST_S)) return null;
-    if (this._signedPitchVel * toward < 0) return null;
-    // Same-side gate: pitch must already be on the neighbor's side of sticky.
-    const side = Math.sign(rawMidi - sticky);
-    if (toward !== 0 && side !== 0 && toward !== side) return null;
-    // u: rises as soon as we're past enter + closing; →1 as neighbor wins.
-    const gap = dSticky - dFresh;
-    const u = Math.max(
-      0,
-      Math.min(
-        1,
-        (dSticky - MIDZONE_ENTER_SEMI) / 0.35 +
-          (gap + MIDZONE_CLOSE_SLACK) / (0.28 + MIDZONE_CLOSE_SLACK) * 0.55,
-      ),
-    );
-    // Want pulled toward octave-locked neighbor (not a flipped register).
-    const want = pullToward(rawMidi, neigh, amount, flexCents);
-    return { want, tgt: neigh, u, dSticky, dFresh };
-  }
-
-  _commitWant(det, amount, flexCents, transpose) {
-    const c = this._wantFromDet(det, amount, flexCents, transpose);
-    let tgt = c.tgt;
-    let want = c.want;
-    // Keep register with prior sticky — octave flips were a chunk of disagree.
-    // (w1 commit-time sticky-keep raised owned-note misses — retarget hyst
-    // alone gates the switch; once hold wins, take the fresh neighbor.)
-    if (this._everLocked) {
-      const locked = octaveLock(tgt, this._committedTgt);
-      if (Math.abs(locked - tgt) > 0.05) {
-        tgt = locked;
-        want = pullToward(det, tgt, amount, flexCents);
-      }
-    }
+  _commitWant(det, amount, transpose) {
+    const tgt = this._nearestTgt(det, transpose);
+    const amt = Math.max(0, Math.min(1, amount));
+    const want = det + (tgt - det) * amt;
     this._committedWant = want;
     this._committedTgt = tgt;
     this._tgtMidi = tgt;
@@ -1628,22 +1552,33 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Do-no-harm: corrected pitch must never be more off-key than dry vs the note
-   * the dry pitch actually belongs to, and must stay on the det↔want segment
-   * (no pull past the correction target). Soft lag + sticky-old-want was
-   * yanking past the recording toward a stale note — this forbids that.
+   * Keep committed scale note until live owns a neighbor (past midpoint)
+   * or is clearly closer by hyst. Same-side only — no opposite-neighbor dips.
+   */
+  _stickyRetarget(det, transpose) {
+    const sticky = this._committedTgt;
+    const fresh = this._nearestTgt(det, transpose, sticky);
+    if (Math.abs(fresh - sticky) < 0.25) return sticky;
+    const toward = Math.sign(fresh - sticky);
+    const side = Math.sign(det - sticky);
+    if (toward !== 0 && side !== 0 && toward !== side) return sticky;
+    const dS = Math.abs(det - sticky);
+    const dF = Math.abs(det - fresh);
+    if (dF + STICKY_HYST_SEMI < dS) return fresh;
+    return sticky;
+  }
+
+  /**
+   * Do-no-harm: stay on the det↔want segment; never farther from the natural
+   * scale note than dry. Safety rail, not a second detector.
    */
   _guardRatio(inHz, fact, detMidi, wantMidi, naturalTgt) {
     if (!(inHz > 1e-6) || !(fact > 1e-6)) return 1;
     let out = hzToMidi(inHz * fact);
-
-    // Stay between dry and correction target (no overshoot past want)
     let lo = Math.min(detMidi, wantMidi);
     let hi = Math.max(detMidi, wantMidi);
     if (out < lo) out = lo;
     if (out > hi) out = hi;
-
-    // Never worse than dry relative to the natural scale note for this det
     const nat = naturalTgt;
     const maxErr = Math.abs(detMidi - nat);
     if (Math.abs(out - nat) > maxErr + 1e-4) {
@@ -1652,7 +1587,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (out < lo) out = lo;
       if (out > hi) out = hi;
     }
-
     let f = midiToHz(out) / inHz;
     if (f < FACT_MIN) f = FACT_MIN;
     if (f > FACT_MAX) f = FACT_MAX;
@@ -1660,731 +1594,54 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Note commit: stays_locked + hysteretic hold.
-   * Sticky tgt until raw clearly prefers another note; R* always tracks
-   * hz(committedWant)/hz(liveDet). Do-no-harm clamp applied in process().
-   * @param {boolean} decideNote — false: update vel/want/R* only (fast YIN);
-   *   true: also run hold/retarget (legacy ~11.6 ms decide rate).
+   * Desired = sticky scale note from E/H midi. Decay slews audibleWant in process().
    */
-  _applyCorrection(
-    rawMidi,
-    amount,
-    speedMs,
-    flexCents,
-    transpose,
-    vibrato,
-    decideNote,
-  ) {
+  _applyCorrection(rawMidi, amount, transpose) {
     const dtMs = this._detectDt * 1000;
-    const noteDtMs = this._noteDt * 1000;
-    const livePitch =
-      typeof this._liveYinMidi === "number" ? this._liveYinMidi : rawMidi;
-    // Pitch velocity — mild seasoning only (see HOLD_* / boundary follow).
-    if (!this._haveRawVel) {
-      this._prevRawVel = livePitch;
-      this._haveRawVel = true;
-      this._pitchVel = 0;
-      this._signedPitchVel = 0;
-      this._stablePitchMs = 0;
-    } else {
-      const dRaw = livePitch - this._prevRawVel;
-      const dSt = dRaw / Math.max(1e-4, this._detectDt);
-      this._signedPitchVel += (dSt - this._signedPitchVel) * 0.4;
-      this._pitchVel += (Math.abs(dSt) - this._pitchVel) * 0.4;
-      this._prevRawVel = livePitch;
-      if (this._pitchVel < STABLE_VEL_ST_S) this._stablePitchMs += dtMs;
-      else this._stablePitchMs = 0;
-    }
-    const isStable = this._stablePitchMs >= STABLE_PITCH_MS;
-    const isGesture = this._pitchVel >= GESTURE_VEL_ST_S;
-    // Vib-center for boundary soften / stays widen — not for retarget lag.
-    const pitchSoft =
-      this._noteAgeMs > VIB_CENTER_MS * 0.35 ? this._vibCenter : livePitch;
-    const midzone = this._noteLocked
-      ? this._midzoneApproach(livePitch, amount, flexCents, transpose)
-      : null;
-
-    let needHold = holdMsForSpeed(speedMs, this._coldStart, this._pitchConf);
-    if (midzone) needHold *= MIDZONE_HOLD_SCALE;
-    else if (isStable) needHold *= HOLD_STABLE_SCALE;
-    else if (isGesture) needHold *= HOLD_GESTURE_SCALE;
-    // Orphan / past-mid holds: don't wait a full stable hold on the wrong note.
-    if (this._pendingHold && this._noteLocked) {
-      const candTgt = octaveLock(
-        this._wantFromDet(this._holdCand, amount, flexCents, transpose).tgt,
-        this._committedTgt,
-      );
-      const mid = (this._committedTgt + candTgt) * 0.5;
-      const toward = Math.sign(candTgt - this._committedTgt);
-      if (
-        toward !== 0 &&
-        (rawMidi - mid) * toward > 0 &&
-        Math.abs(rawMidi - candTgt) + 0.2 < Math.abs(rawMidi - this._committedTgt)
-      ) {
-        needHold *= 0.55;
-      }
-    }
-    let justCommitted = false;
-
-    if (!decideNote) {
-      // Fast path: track det, refresh Flex-Tune want — no note flip this hop.
-      if (this._noteLocked) {
-        const detA = isGesture || midzone ? 0.28 : 0.12;
-        this._lockedDet += (rawMidi - this._lockedDet) * detA;
-        this._tgtMidi = this._committedTgt;
-      }
-    } else if (!this._noteLocked) {
-      this._lockedDet = rawMidi;
-      this._holdCand = rawMidi;
-      this._holdAccumMs = 0;
-      this._pendingHold = false;
-      this._noteLocked = true;
-      this._commitWant(rawMidi, amount, flexCents, transpose);
-      justCommitted = true;
-    } else if (this._pendingHold) {
-      // Reverb: freeze hold clock while ambiguous — abort→recommit clicked.
-      if (this._ambiguous || this._pitchConf < CONF_RETARGET * 0.9) {
-        this._lockedDet += (rawMidi - this._lockedDet) * 0.1;
-      } else if (this._orphanNeighbor(livePitch, amount, flexCents, transpose)) {
-        // Scoop already landed on the neighbor — don't wait out needHold.
-        // g3: orphan alone is enough; holdStillWins re-applied stable hyst and
-        // aborted the fast commit (wet sat on sticky center of the wrong note).
-        this._lockedDet = livePitch;
-        this._holdAccumMs = 0;
-        this._pendingHold = false;
-        this._orphanCommit = true;
-        this._commitWant(this._lockedDet, amount, flexCents, transpose);
-        justCommitted = true;
-      } else if (Math.abs(livePitch - this._holdCand) <= STAYS_LOCKED_SEMI) {
-        this._holdCand += (livePitch - this._holdCand) * 0.4;
-        this._holdAccumMs += noteDtMs;
-        // Live det still tracks so R* keeps output on sticky want
-        this._lockedDet += (rawMidi - this._lockedDet) * 0.25;
-        if (this._holdAccumMs >= needHold) {
-          // Re-validate at commit — flat sustains often no longer beat sticky.
-          if (
-            !this._holdStillWins(
-              this._holdCand,
-              amount,
-              flexCents,
-              transpose,
-              midzone,
-              isStable,
-            )
-          ) {
-            this._pendingHold = false;
-            this._holdAccumMs = 0;
-          } else {
-            this._lockedDet = this._holdCand;
-            this._holdAccumMs = 0;
-            this._pendingHold = false;
-            this._commitWant(this._lockedDet, amount, flexCents, transpose);
-            justCommitted = true;
-          }
-        }
-      } else if (
-        this._shouldRetarget(
-          livePitch,
-          amount,
-          flexCents,
-          transpose,
-          !!midzone,
-          isStable,
-        )
-      ) {
-        // New candidate wins — restart hold
-        this._holdCand = livePitch;
-        this._holdAccumMs = noteDtMs;
-        this._lockedDet += (rawMidi - this._lockedDet) * 0.25;
-      } else if (midzone && midzone.u > 0.12) {
-        // Still scooping toward neighbor — keep hold alive, don't abort.
-        this._holdCand += (livePitch - this._holdCand) * 0.4;
-        this._holdAccumMs += noteDtMs * 0.95;
-        this._lockedDet += (rawMidi - this._lockedDet) * 0.28;
-        if (this._holdAccumMs >= needHold) {
-          if (
-            !this._holdStillWins(
-              this._holdCand,
-              amount,
-              flexCents,
-              transpose,
-              midzone,
-              isStable,
-            )
-          ) {
-            this._pendingHold = false;
-            this._holdAccumMs = 0;
-          } else {
-            this._lockedDet = this._holdCand;
-            this._holdAccumMs = 0;
-            this._pendingHold = false;
-            this._commitWant(this._lockedDet, amount, flexCents, transpose);
-            justCommitted = true;
-          }
-        }
-      } else {
-        // Drifted but sticky still wins — cancel hold
-        this._pendingHold = false;
-        this._holdAccumMs = 0;
-        this._lockedDet += (rawMidi - this._lockedDet) * 0.15;
-      }
-    } else if (
-      Math.abs(pitchSoft - this._committedTgt) <= STAYS_LOCKED_SEMI ||
-      Math.abs(livePitch - this._committedTgt) <= STAYS_LOCKED_SEMI
-    ) {
-      // Near sticky: slow det track — rough vocals were pumping R* via lockedDet.
-      const detA = isGesture || midzone ? 0.22 : 0.08;
-      this._lockedDet += (rawMidi - this._lockedDet) * detA;
-      this._tgtMidi = this._committedTgt;
-      // g3: orphan is independent of shouldRetarget — vib-center lag / stable
-      // hyst often false-negative while raw already owns the neighbor.
-      const orphan = this._orphanNeighbor(
-        livePitch,
-        amount,
-        flexCents,
-        transpose,
-      );
-      if (orphan) {
-        this._lockedDet = livePitch;
-        this._pendingHold = false;
-        this._holdAccumMs = 0;
-        this._orphanCommit = true;
-        this._commitWant(livePitch, amount, flexCents, transpose);
-        justCommitted = true;
-      } else {
-        const wantRetarget =
-          this._shouldRetarget(
-            livePitch,
-            amount,
-            flexCents,
-            transpose,
-            !!midzone,
-            isStable,
-          ) || (midzone && midzone.u >= MIDZONE_HOLD_ARM_U);
-        if (wantRetarget) {
-          this._holdCand = livePitch;
-          this._holdAccumMs = noteDtMs;
-          this._pendingHold = true;
-        }
-      }
-    } else if (
-      this._shouldRetarget(
-        livePitch,
-        amount,
-        flexCents,
-        transpose,
-        !!midzone,
-        isStable,
-      ) ||
-      (midzone && midzone.u >= MIDZONE_HOLD_ARM_U)
-    ) {
-      const orphan = this._orphanNeighbor(
-        livePitch,
-        amount,
-        flexCents,
-        transpose,
-      );
-      if (orphan) {
-        this._lockedDet = livePitch;
-        this._pendingHold = false;
-        this._holdAccumMs = 0;
-        this._orphanCommit = true;
-        this._commitWant(livePitch, amount, flexCents, transpose);
-        justCommitted = true;
-      } else {
-        this._holdCand = livePitch;
-        this._holdAccumMs = noteDtMs;
-        this._pendingHold = true;
-        this._lockedDet += (rawMidi - this._lockedDet) * 0.25;
-      }
-    } else {
-      // Outside stays window — still release if raw already owns a neighbor.
-      const orphan = this._orphanNeighbor(
-        livePitch,
-        amount,
-        flexCents,
-        transpose,
-      );
-      if (orphan) {
-        this._lockedDet = livePitch;
-        this._pendingHold = false;
-        this._holdAccumMs = 0;
-        this._orphanCommit = true;
-        this._commitWant(livePitch, amount, flexCents, transpose);
-        justCommitted = true;
-      } else {
-        // Sticky still preferred — ease det, keep want
-        const detA = isGesture || midzone ? 0.22 : 0.1;
-        this._lockedDet += (rawMidi - this._lockedDet) * detA;
-        this._tgtMidi = this._committedTgt;
-      }
-    }
-
+    this._lockedDet = rawMidi;
     const det = this._lockedDet;
     this._detMidi = det;
-    this._corrMidi = this._committedWant;
-    const tgt = this._committedTgt;
+
+    const fresh = this._nearestTgt(det, transpose);
+    let tgt = this._committedTgt;
+    if (this._everLocked) {
+      tgt = this._stickyRetarget(det, transpose);
+      if (Math.abs(tgt - this._committedTgt) >= 0.25) this._noteAgeMs = 0;
+    } else {
+      tgt = fresh;
+    }
+    const amt = Math.max(0, Math.min(1, amount));
+    const want = det + (tgt - det) * amt;
+    this._committedTgt = tgt;
+    this._committedWant = want;
     this._tgtMidi = tgt;
-    // Full-snap natural target for current det (amount=1, flex=0) — guardrail ref
-    this._naturalTgt = this._wantFromDet(det, 1, 0, transpose).tgt;
+    this._naturalTgt = fresh;
+    this._wantTgt = want;
+    this._noteAgeMs += dtMs;
 
-    // Note age + vibrato center (Humanize / Natural Vibrato)
-    if (justCommitted) {
-      this._noteAgeMs = 0;
-      this._vibCenter = det;
-      this._vibSemiSlew = 0;
-      this._vibGateSlew = 0;
-      this._wantBaseSlew = this._committedWant;
-      this._stablePitchMs = 0;
-      this._ownedSustainHoldMs = 0;
-    } else {
-      this._noteAgeMs += dtMs;
-      const vibA = 1 - Math.exp(-this._detectDt / (VIB_CENTER_MS / 1000));
-      this._vibCenter += (det - this._vibCenter) * vibA;
-    }
-
-    // Post-commit: pull sticky want onto scale center while stationary.
-    // Gestures / pending / midzone skip — scoop territory (anti-shake).
-    if (
-      !justCommitted &&
-      !this._pendingHold &&
-      !isGesture &&
-      !midzone &&
-      isStable &&
-      this._noteAgeMs >= CENTER_LOCK_AGE_MS
-    ) {
-      const residCents =
-        Math.abs(this._committedWant - this._committedTgt) * 100;
-      if (residCents > 0.15 && residCents <= 55) {
-        const u = Math.min(
-          1,
-          (this._noteAgeMs - CENTER_LOCK_AGE_MS) / 40,
-        );
-        this._committedWant +=
-          (this._committedTgt - this._committedWant) *
-          (CENTER_WANT_PULL * u);
-        // Near-center / loose-hold band: finish hard (≤15¢ + kill 15–35¢ parks).
-        if (residCents <= 38) {
-          this._committedWant +=
-            (this._committedTgt - this._committedWant) * (0.48 * u);
-        }
-        // Score loose band: extra pull so Decay doesn't linger 80ms+ at ~25¢.
-        if (residCents >= LOOSE_HOLD_LO_CENTS && residCents <= 35) {
-          this._committedWant +=
-            (this._committedTgt - this._committedWant) * (0.4 * u);
-        }
-      }
-    }
-
-    // Want base: live Flex-Tune pull toward sticky (not frozen commit want).
-    // AT: correction only near the note — far scoops pass through.
-    const nat = this._wantFromDet(det, 1, 0, transpose);
-    const dSticky = Math.abs(det - this._committedTgt);
-    const dNat = Math.abs(det - nat.tgt);
-    // Live YIN (pre trust-blend) — trust blend toward lockedDet was hiding
-    // post-gap landings from orphan/landedNatural (dry_2 @ ~20.2).
-    const live =
-      typeof this._liveYinMidi === "number" ? this._liveYinMidi : rawMidi;
-    const rawNat = this._wantFromDet(live, 1, 0, transpose);
-    const dStickyRaw = Math.abs(live - this._committedTgt);
-    const dNatRaw = Math.abs(live - rawNat.tgt);
-    const quietPark =
-      !isGesture &&
-      !midzone &&
-      !this._pendingHold &&
-      !justCommitted &&
-      this._pitchVel < SCOOP_VEL_ST_S &&
-      this._noteAgeMs >= 35;
-    // 14s: mild YIN wobble keeps vel 5–12 (above SCOOP) and isStable false —
-    // quietPark never sticks, hard taper parks want ~25¢ then collapses.
-    // Gate on *live* natural too — lockedDet lag + stale sticky caused lag-dips.
-    const sticky = this._committedTgt;
-    // Flat-only arm: 14s sits 25–90¢ under sticky. Sharp-side finish yanks
-    // wet below dry (lag-dips @ ~5s / ~10s / ~16s). Hysteresis on the hold
-    // so brief YIN chatter across center doesn't drop the 14s finish.
-    const flatOfSticky = live <= sticky + 0.08 && det <= sticky + 0.08;
-    const ownedSustainNow =
-      !justCommitted &&
-      !midzone &&
-      !this._pendingHold &&
-      this._noteAgeMs >= 28 &&
-      this._pitchVel < GESTURE_VEL_ST_S * 1.7 &&
-      flatOfSticky &&
-      sticky - det <= 0.95 &&
-      sticky - live <= 0.95 &&
-      Math.abs(nat.tgt - sticky) < 0.25 &&
-      Math.abs(rawNat.tgt - sticky) < 0.25;
-    if (ownedSustainNow) this._ownedSustainHoldMs = 58;
-    else if (
-      midzone ||
-      this._pendingHold ||
-      Math.abs(rawNat.tgt - sticky) >= 0.25 ||
-      live > sticky + 0.22 ||
-      live < sticky - 0.98
-    ) {
-      this._ownedSustainHoldMs = 0;
-    } else {
-      this._ownedSustainHoldMs = Math.max(0, this._ownedSustainHoldMs - dtMs);
-    }
-    const ownedSustain = ownedSustainNow || this._ownedSustainHoldMs > 0;
-    let wantBase;
-    // Post-gap scoop (dry_2 @ ~20s): arm on E, pitch lands on F#, soft-chase
-    // audibleWant catches det → R*→1 (listen wet≈dry). Judge on rawMidi.
-    const landedNatural =
-      !justCommitted &&
-      dNatRaw <= 0.4 &&
-      dStickyRaw >= 0.85 &&
-      Math.abs(rawNat.tgt - this._committedTgt) >= 0.5 &&
-      (this._coldStart ||
-        (!this._ambiguous && this._pitchConf >= CONF_RETARGET * 0.65));
-    if (landedNatural) {
-      this._lockedDet = live;
-      this._pendingHold = false;
-      this._holdAccumMs = 0;
-      this._orphanCommit = true;
-      this._commitWant(live, amount, flexCents, transpose);
-      justCommitted = true;
-      this._noteAgeMs = 0;
-      this._vibCenter = live;
-      this._vibSemiSlew = 0;
-      // Strong blend (not Cher snap) — g2m9 full assign was the stair.
-      this._audibleWant += (rawNat.tgt - this._audibleWant) * COLD_ORPHAN_BLEND;
-      this._wantBaseSlew = rawNat.tgt;
-      this._wantTgt = rawNat.tgt;
-      this._committedWant = rawNat.tgt;
-      this._coldStartMs = Math.max(
-        this._coldStartMs,
-        COLD_START_MS * COLD_ORPHAN_ADVANCE,
-      );
-      if (this._coldStartMs >= COLD_START_MS) this._coldStart = false;
-      this._commitSoftMs = Math.min(this._commitSoftMs, ORPHAN_COMMIT_SOFT_MS);
-    }
-    const naturalOwns =
-      landedNatural ||
-      (!midzone &&
-        dSticky > 0.55 &&
-        dNat <= 0.42 &&
-        Math.abs(nat.tgt - this._committedTgt) >= 0.5 &&
-        this._pitchConf >= CONF_RETARGET * 0.7) ||
-      (!midzone &&
-        dStickyRaw > 0.55 &&
-        dNatRaw <= 0.42 &&
-        Math.abs(rawNat.tgt - this._committedTgt) >= 0.5 &&
-        this._pitchConf >= CONF_RETARGET * 0.7);
-    if (
-      (quietPark || ownedSustain) &&
-      det <= sticky + 0.08 &&
-      sticky - det <= 0.9
-    ) {
-      // Owned sticky, flat only: finish up to center (14s). Sharp-side
-      // ownedFinish scored as lag-dips (wet≪dry).
-      wantBase = pullToward(
-        det,
-        sticky,
-        amount,
-        flexCents,
-        true,
-      );
-      const resid = sticky - wantBase;
-      if (resid >= 0.06 && resid <= 0.42) {
-        wantBase += resid * 0.78;
-      } else if (resid > 0.42 && resid <= 0.9) {
-        wantBase += resid * 0.5;
-      }
-    } else if (naturalOwns) {
-      // Sticky lag dry-through (20s): dry already owns natural; flex-to-stale
-      // sticky was strength→0 → wet≡dry. Pull toward natural until orphan lands.
-      const pullTgt = dNatRaw <= dNat ? rawNat.tgt : nat.tgt;
-      wantBase = pullToward(
-        dNatRaw <= dNat ? live : det,
-        pullTgt,
-        amount,
-        0,
-        true,
-      );
-    } else {
-      wantBase = pullToward(det, this._committedTgt, amount, flexCents);
-    }
-    // Keep committedWant coherent for center-lock / viz.
-    this._committedWant += (wantBase - this._committedWant) * 0.35;
-    if (this._pendingHold && this._holdAccumMs > 0 && !justCommitted) {
-      const cand = this._wantFromDet(
-        this._holdCand,
-        amount,
-        flexCents,
-        transpose,
-      );
-      const candTgt = octaveLock(cand.tgt, this._committedTgt);
-      const sideRaw = Math.sign(livePitch - this._committedTgt);
-      const sideCand = Math.sign(candTgt - this._committedTgt);
-      // Don't pre-glide toward a neighbor on the opposite side of live pitch
-      // (brief reverse dips were bending want through the floor — ~9s A→G#).
-      if (sideCand === 0 || sideRaw === 0 || sideCand === sideRaw) {
-        const u = Math.min(1, this._holdAccumMs / Math.max(8, needHold));
-        const ease = midzone ? Math.min(1, u * 1.15) : u * u;
-        wantBase = wantBase + (cand.want - wantBase) * ease;
-      }
-    } else if (midzone && midzone.u > 0.08 && !justCommitted) {
-      // Before hold arms: ease toward neighbor through the midzone.
-      wantBase =
-        wantBase +
-        (midzone.want - wantBase) * (MIDZONE_PREGLIDE * midzone.u);
-    } else if (
-      !justCommitted &&
-      (isStable || ownedSustain) &&
-      !isGesture &&
-      !midzone &&
-      this._noteAgeMs >= CENTER_LOCK_AGE_MS
-    ) {
-      // Stationary park: bias want onto integer center.
-      // Hard flex=0 strength falls below 0.55 by ~40¢ — that skipped bias and
-      // left dry_2 ~10s sharp parks (AT finishes; we sat at pullToward residual).
-      // ownedSustain: same bias when mild wobble keeps isStable false (14s).
-      const absPark = Math.abs(det - this._committedTgt);
-      const near =
-        absPark <= 0.55 ||
-        flexCorrectionStrength(absPark, flexCents) > 0.28 ||
-        ownedSustain;
-      if (near) {
-        const biasScale = Math.min(
-          1,
-          Math.max(0.78, (this._speedMs - ROBOT_LATCH_MAX_SPEED_MS) / 40),
-        );
-        // Sharp: don't extra-bias onto center (wet≪dry lag-dips).
-        const sharp = det > sticky + 0.05;
-        if (!(ownedSustain && sharp)) {
-          wantBase += (sticky - wantBase) * CENTER_WANT_BIAS * biasScale;
-          if (flexCents < 0.5 && absPark <= 0.55) {
-            wantBase += (sticky - wantBase) * 0.22;
-          }
-        }
-      }
-    }
-
-    // Slew wantBase (boundary hop jumps were soft-popping).
-    if (justCommitted) {
-      this._wantBaseSlew = wantBase;
-    } else {
-      let a = WANT_BASE_SLEW_STABLE;
-      if (isGesture || midzone) a = WANT_BASE_SLEW_GESTURE;
-      else if (ownedSustain && det <= sticky + 0.08) {
-        a = 0.55;
-        const looseCents =
-          Math.abs(this._wantBaseSlew - this._committedTgt) * 100;
-        if (looseCents >= LOOSE_HOLD_LO_CENTS && looseCents <= LOOSE_HOLD_HI_CENTS) {
-          a = Math.max(a, 0.78);
-        }
-      } else if (isStable && this._noteAgeMs >= CENTER_LOCK_AGE_MS) {
-        a = 0.42;
-        // Loose park: snap wantBase onto sticky faster (pitchy 15–35¢ holds).
-        const looseCents =
-          Math.abs(this._wantBaseSlew - this._committedTgt) * 100;
-        if (looseCents >= LOOSE_HOLD_LO_CENTS && looseCents <= LOOSE_HOLD_HI_CENTS) {
-          a = Math.max(a, 0.72);
-        }
-      }
-      // If slew is stuck on the wrong side of sticky vs live pitch, snap back
-      // faster (kills lingering bend after an aborted opposite-side hold).
-      const sideSlew = Math.sign(this._wantBaseSlew - this._committedTgt);
-      const sideRaw2 = Math.sign(livePitch - this._committedTgt);
-      if (
-        sideSlew !== 0 &&
-        sideRaw2 !== 0 &&
-        sideSlew !== sideRaw2 &&
-        amount >= 0.85
-      ) {
-        a = Math.max(a, 0.55);
-        wantBase = this._committedWant;
-      }
-      this._wantBaseSlew += (wantBase - this._wantBaseSlew) * a;
-    }
-
-    // Natural Vibrato: −1 flatten … 0 leave … +1 amplify.
-    // Correct mapping uses leave≠0 at knob 0, but c2's raw (1+knob)*vibSemi
-    // shook (YIN) and hard motion gates flapped. Slew residual + continuous gate.
-    const vibAmt = Math.max(-1, Math.min(1, vibrato));
-    const vibRaw = Math.max(
-      -VIB_RESID_MAX_SEMI,
-      Math.min(VIB_RESID_MAX_SEMI, det - this._vibCenter),
-    );
-    this._vibSemiSlew += (vibRaw - this._vibSemiSlew) * 0.22;
-    // Knob → scale: -1→0, 0→VIB_LEAVE_SCALE, +1→~1.4
-    const knobScale =
-      vibAmt >= 0
-        ? VIB_LEAVE_SCALE + vibAmt * (1.4 - VIB_LEAVE_SCALE)
-        : VIB_LEAVE_SCALE * (1 + vibAmt);
-    let gateT = 1;
-    {
-      const velU = Math.min(1, this._pitchVel / GESTURE_VEL_ST_S);
-      gateT = (1 - velU) * (1 - velU);
-      if (justCommitted || midzone || this._pendingHold) gateT *= 0.12;
-      else if (!isStable || isGesture) gateT *= 0.35;
-      gateT *= Math.min(1, this._noteAgeMs / Math.max(1, VIB_CENTER_MS * 0.75));
-      // Sustained flat/sharp vs sticky is DC error, not vibrato — don't "leave" it
-      // (dry_2 ~10s sat ~30–40¢ sharp because leave re-injected the offset).
-      const dcCents = Math.abs(det - tgt) * 100;
-      if (isStable && dcCents > 18) gateT *= 0.08;
-      else if (isStable && dcCents > 10) gateT *= 0.28;
-    }
-    this._vibGateSlew += (gateT - this._vibGateSlew) * 0.16;
-    const vibScale = knobScale * this._vibGateSlew;
-    let wantEff = this._wantBaseSlew + this._vibSemiSlew * vibScale;
-    // Soft-land without hard R* snaps (those clicked at ~detect rate on t-soft-land).
-    // Latch want onto sticky center only in Cher-range speed — at 20ms latch
-    // read as robot plateaus (wet hops >30¢ ≫ goal).
-    const flexOwn =
-      flexCorrectionStrength(Math.abs(det - tgt), flexCents) > 0.55;
-    const allowLatch = this._speedMs < ROBOT_LATCH_MAX_SPEED_MS;
-    const audErrNow = Math.abs(this._audibleWant - tgt) * 100;
-    const softPark =
-      isStable &&
-      !isGesture &&
-      !midzone &&
-      !this._pendingHold &&
-      !justCommitted &&
-      this._noteAgeMs >= SOFT_PARK_AGE_MS &&
-      this._pitchVel < STABLE_VEL_ST_S &&
-      Math.abs(det - tgt) <= SOFT_PARK_DET_SEMI &&
-      audErrNow >= LOOSE_HOLD_LO_CENTS &&
-      audErrNow <= SOFT_PARK_AUD_HI_CENTS;
-    // g2n2: 14s parked want at ~25¢ while mild YIN wobble kept isStable false —
-    // allow pin without full stable gate (still block scoops).
-    const loosePark =
-      !softPark &&
-      !isGesture &&
-      !midzone &&
-      !this._pendingHold &&
-      !justCommitted &&
-      this._noteAgeMs >= SOFT_PARK_AGE_MS &&
-      this._pitchVel < GESTURE_VEL_ST_S &&
-      Math.abs(det - tgt) <= 0.7 &&
-      audErrNow >= 15 &&
-      audErrNow <= 38;
-    if (
-      justCommitted ||
-      isGesture ||
-      midzone ||
-      this._pendingHold ||
-      !flexOwn ||
-      (!allowLatch && !softPark && !loosePark) ||
-      Math.abs(det - tgt) > CENTER_LATCH_ESCAPE_SEMI
-    ) {
-      this._centerLatched = false;
-    } else if (
-      isStable &&
-      this._noteAgeMs >= CENTER_LOCK_AGE_MS &&
-      Math.abs(this._audibleWant - tgt) * 100 <= SNAP_CENTER_CENTS &&
-      Math.abs(this._wantBaseSlew - tgt) * 100 <= SNAP_CENTER_CENTS + 6
-    ) {
-      this._centerLatched = true;
-    }
-    if (this._centerLatched || softPark || loosePark) {
-      // Pin base to sticky center; keep (DC-gated) vibrato residual only.
-      wantEff = tgt + this._vibSemiSlew * Math.max(0, vibScale);
-      const pin = softPark || loosePark ? (loosePark ? 0.68 : 0.55) : 1;
-      this._wantBaseSlew += (tgt - this._wantBaseSlew) * pin;
-      if (this._centerLatched) {
-        this._wantBaseSlew = tgt;
-        this._committedWant = tgt;
-      } else {
-        this._committedWant += (tgt - this._committedWant) * (loosePark ? 0.58 : 0.45);
-      }
-      // 14s flat park: nudge audible toward sticky without Cher snap.
-      if (
-        loosePark &&
-        audErrNow >= 15 &&
-        audErrNow <= 40 &&
-        this._audibleWant <= tgt + 0.05
-      ) {
-        this._audibleWant += (tgt - this._audibleWant) * 0.35;
-      }
-    } else if (
-      !justCommitted &&
-      isStable &&
-      !isGesture &&
-      !midzone &&
-      !this._pendingHold &&
-      this._noteAgeMs >= CENTER_LOCK_AGE_MS
-    ) {
-      // Clamp corrected base through center; re-apply slewed vibrato after.
-      const aud = this._audibleWant;
-      let base = this._wantBaseSlew;
-      if ((aud - tgt) * (base - tgt) < 0) base = tgt;
-      wantEff = base + this._vibSemiSlew * vibScale;
-    }
-    // Confidence ducks wet amount in process() — do not bend want/R* here.
-    this._wantTgt = wantEff;
-    // Soft chase (PSOLA or patent splice) slews _audibleWant in process(); robot snaps.
     if (!this._softRatioChase()) {
-      this._audibleWant = wantEff;
+      this._audibleWant = want;
     }
-    this._corrMidi = this._audibleWant;
 
-    // R* from sticky want / lockedDet (YIN note path). Cycle_period from E/H
-    // feeds the splice pointer only — driving R* from raw E/H regressed notes.
-    const inHz = midiToHz(det);
+    const inHz =
+      this._trackOk && this._periodSamp > 1
+        ? sampleRate / this._periodSamp
+        : midiToHz(det);
     const outHz = midiToHz(this._audibleWant);
     let rStar = outHz / Math.max(1e-12, inHz);
     if (rStar < FACT_MIN) rStar = FACT_MIN;
     if (rStar > FACT_MAX) rStar = FACT_MAX;
     this._rStar = rStar;
 
-    if (justCommitted) {
-      const orphan = this._orphanCommit;
-      this._orphanCommit = false;
-      if (this._formant >= 0.5) {
-        this._beginCommitRecapture();
-        if (this._speedMs >= 0.5) {
-          this._commitSoftMs = orphan ? ORPHAN_COMMIT_SOFT_MS : COMMIT_SOFT_MS;
-          if (orphan) {
-            this._audibleWant +=
-              (wantEff - this._audibleWant) * ORPHAN_AUDIBLE_BLEND;
-          }
-          // Keep audible want — Retune Speed glides to the new note.
-        } else {
-          this._audibleWant = wantEff;
-        }
-      } else if (this._softRatioChase()) {
-        // Patent splice + Decay: glide want across notes; no PSOLA grain.
-        this._clearCommitRecapture();
-        this._psolaHalf = 0;
-        this._commitSoftMs = orphan ? ORPHAN_COMMIT_SOFT_MS : COMMIT_SOFT_MS;
-        if (orphan) {
-          // Post-gap land: strong blend + advance cold floor (not Cher snap).
-          if (this._coldStart || this._coldStartMs > 0) {
-            this._audibleWant +=
-              (wantEff - this._audibleWant) * COLD_ORPHAN_BLEND;
-            this._wantBaseSlew +=
-              (wantEff - this._wantBaseSlew) * COLD_ORPHAN_BLEND;
-            this._wantTgt = wantEff;
-            this._coldStartMs = Math.max(
-              this._coldStartMs,
-              COLD_START_MS * COLD_ORPHAN_ADVANCE,
-            );
-            if (this._coldStartMs >= COLD_START_MS) this._coldStart = false;
-            this._commitSoftMs = ORPHAN_COMMIT_SOFT_MS;
-          } else {
-            this._audibleWant +=
-              (wantEff - this._audibleWant) * ORPHAN_AUDIBLE_BLEND;
-          }
-        }
-      } else {
-        this._clearCommitRecapture();
-        this._psolaHalf = 0;
-        this._audibleWant = wantEff;
-      }
-      if (!this._softRatioChase()) this._seedPhases(this._rStar);
-    }
-
     this._inphincTgt = inHz / sampleRate;
     this.inphinc = this._inphincTgt;
-    // outphinc updated in process from live inphinc * phincSlew
     const outMidi = hzToMidi(inHz * this.phincfact);
     this._outMidi = outMidi;
+    this._corrMidi = this._audibleWant;
     return { det, tgt, out: outMidi };
   }
 
-  _lowRate(amount, speedMs, flexCents, tracking, transpose, humanize, vibrato) {
+  _lowRate(amount, tracking, transpose) {
     if (this._warmup > 0) {
       this._warmup -= DETECT_EVERY;
       this.phincfact = 1;
@@ -2396,56 +1653,24 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const tr = Math.max(0, Math.min(1, tracking));
     this._ehEps = EH_EPS_LOOSE + (EH_EPS_TIGHT - EH_EPS_LOOSE) * tr;
 
-    // Notes/sticky: YIN (stable vs AT goal). E/H runs per-sample for Cycle_period
-    // on the splice path; YIN also seeds/reanchors correction mode.
-    this._readMonoWindow(this._yinScratch);
-    const yin = yinPitch(
-      this._yinScratch,
-      sampleRate,
-      this._fMin,
-      this._fMax,
-      this._yinD,
-      this._yinCmnd,
-    );
-    const f0 = yin.f0;
-    const clarity = yin.clarity;
-    const ambiguous = yin.ambiguous;
-    if (EH_LIVE && f0 > 0 && clarity >= 0.3) {
-      const pe = sampleRate / f0;
-      if (this._detectionMode || !this._trackOk) {
-        this._ehEnterCorrection(pe);
-      } else {
-        const rel =
-          Math.abs(pe - this._periodSamp) / Math.max(1, this._periodSamp);
-        if (rel > 0.2) this._ehEnterCorrection(pe);
-      }
-      this._ehClarity = Math.max(this._ehClarity, clarity);
-    }
+    // Notes from patent E/H period (US5973252A).
+    this._readMonoWindow(this._rmsWin);
+    const peEh = this._periodSamp;
+    const f0 = this._trackOk && peEh > 1 ? sampleRate / peEh : 0;
+    const clarity = this._ehClarity;
+    const ambiguous = false;
     this._clarity = clarity;
-    this._ambiguous = !!ambiguous;
-    const confInst = f0 > 0 ? (yin.confidence ?? clarity) : clarity * 0.3;
+    this._ambiguous = false;
+    const confInst = f0 > 0 ? clarity : clarity * 0.3;
     if (!this._havePitch) this._pitchConf = confInst;
     else this._pitchConf += (confInst - this._pitchConf) * 0.28;
     if (ambiguous) this._reverbSoftMs = REVERB_SOFT_MS;
-    // Hysteresis + debounce close: room reflections dip conf for a hop or two —
-    // don't flash dry mid-vowel. Reopen is still immediate above HI.
-    const dtMs = this._detectDt * 1000;
-    if (this._confWetOpen) {
-      if (this._pitchConf < CONF_WET_LO) {
-        this._confWetLowMs += dtMs;
-        if (this._confWetLowMs >= CONF_WET_CLOSE_MS) {
-          this._confWetOpen = false;
-          this._confWetLowMs = 0;
-        }
-      } else {
-        this._confWetLowMs = 0;
-      }
-    } else if (this._pitchConf > CONF_WET_HI) {
-      this._confWetOpen = true;
-      this._confWetLowMs = 0;
-    }
+    // Conf→wet duck was a YIN multipitch gate. After phrase reset it latched
+    // closed (conf starts at 0, reopen needs >0.48) and left ~20s as latency-dry
+    // while E/H was already tracking. Patent path: if we have a period, correct.
+    this._confWetOpen = true;
+    this._confWetLowMs = 0;
 
-    const gate = 0.14 + (1 - Math.max(0, Math.min(1, tracking))) * 0.5;
     const loudEnough = this._analysisRms >= RMS_GATE;
     // Phrase-end ring: wet stayed open until UNVOICED_DROP (~450 ms). Debounce
     // quiet so consonants don't flash dry, then force wantWet→0 in process().
@@ -2463,28 +1688,22 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     let tgt = this._tgtMidi;
     let out = this._outMidi;
 
-    if (loudEnough && clarity >= gate && f0 > 0) {
+    // Patent: correction mode (trackOk) is the voiced gate — not YIN-style clarity.
+    if (loudEnough && f0 > 0) {
       let midi = this._foldIntoRange(hzToMidi(f0));
-      // Pre-smooth YIN (octave-locked only) — trust blend toward lockedDet was
-      // hiding post-gap landings from orphan/landedNatural (dry_2 @ ~20.2).
-      let liveYin = midi;
       if (this._havePitch) {
-        liveYin = octaveLock(midi, this._lockedDet || this._detMidi);
-        liveYin = this._foldIntoRange(liveYin);
-        midi = liveYin;
-        const jump = Math.abs(midi - (this._lockedDet || this._detMidi));
-        if (jump > MAX_JUMP_SEMI) {
+        midi = this._foldIntoRange(midi);
+        const prev = this._lockedDet || this._detMidi;
+        const jump = Math.abs(midi - prev);
+        if (jump >= 11 && jump <= 13) {
+          // E/H period octave — follow. Do not snap back via octaveLock/MAX_JUMP.
+          this._stable++;
+        } else if (jump > MAX_JUMP_SEMI) {
           this._stable = Math.max(0, this._stable - 2);
-          midi = this._lockedDet || this._detMidi;
-          liveYin = midi;
+          midi = prev;
         } else {
           this._stable++;
-          const trust = Math.max(
-            0.12,
-            Math.min(1, (this._pitchConf - gate) / 0.4),
-          );
-          const prev = this._lockedDet || this._detMidi;
-          midi = prev + (midi - prev) * (0.15 + 0.85 * trust);
+          midi = prev + (midi - prev) * 0.55;
         }
       } else {
         if (this._stable === 0) {
@@ -2510,7 +1729,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._holdAccumMs = 0;
           this._pendingHold = false;
           // Clean onset: unity ratio until PE settles — never duck olaGain (that gated)
-          this._commitWant(midi, amount, flexCents, transpose);
+          this._commitWant(midi, amount, transpose);
           this._setUnityPhases(midi); // lock inphinc/outphinc to *this* note before OLA runs
           this._seedPhases(1);
           this.phasein = 0;
@@ -2542,7 +1761,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._signedPitchVel = 0;
           this._stablePitchMs = 0;
         }
-        liveYin = midi;
       }
 
       this._voiced = true;
@@ -2554,17 +1772,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (this._armed) {
         this._everLocked = true;
         this._detectHop = (this._detectHop + 1) | 0;
-        const decideNote = this._detectHop % NOTE_DECIDE_HOPS === 0;
-        this._liveYinMidi = liveYin;
-        const c = this._applyCorrection(
-          midi,
-          amount,
-          speedMs,
-          flexCents,
-          transpose,
-          vibrato,
-          decideNote,
-        );
+        const c = this._applyCorrection(midi, amount, transpose);
         det = c.det;
         tgt = c.tgt;
         out = c.out;
@@ -2587,14 +1795,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._unvoicedN = Math.max(0, this._unvoicedN - 1);
       this._psolaOnsetMs += this._detectDt * 1000;
       const midi = this._lockedDet;
-      const c = this._applyCorrection(
-        midi,
-        amount,
-        speedMs,
-        flexCents,
-        transpose,
-        vibrato,
-      );
+      const c = this._applyCorrection(midi, amount, transpose);
       det = c.det;
       tgt = c.tgt;
       out = c.out;
@@ -2608,7 +1809,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this.outphinc =
         this.inphinc * Math.max(FACT_MIN, Math.min(FACT_MAX, this.phincfact));
       if (this._unvoicedN >= UNVOICED_DROP) {
-        // Phrase gap: clear sticky note/detect hop, keep ring (no click).
+        // Phrase gap: clear note lock, keep ring + DS E/H (re-detect, not cold).
         this._resetCorrectionState(false);
       } else if (this._unvoicedN > 6 && !this._detectionMode) {
         this._ehFailToDetect();
@@ -2629,6 +1830,46 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     if (this._vizTick >= VIZ_EVERY) {
       this._vizTick = 0;
       this._pushViz(det, tgt, this._armed && this._voiced ? out : det);
+    }
+    if (this._ehValidate) {
+      this._ehValHop++;
+      if (this._ehValHop % 4 === 0) {
+        const peEh = this._periodSamp;
+        const peYin = this.inphinc > 1e-9 ? 1 / this.inphinc : 0;
+        let cents = 0;
+        let oct = 0;
+        if (peEh > 1 && peYin > 1) {
+          let octs = Math.log(peEh / peYin) / Math.LN2;
+          oct = Math.abs(octs) >= 0.5 ? 1 : 0;
+          while (octs > 0.5) octs -= 1;
+          while (octs < -0.5) octs += 1;
+          cents = octs * 1200;
+        }
+        try {
+          this.port.postMessage({
+            type: "ehval",
+            t: +(this._sampleCount / sampleRate).toFixed(3),
+            peEh: +peEh.toFixed(2),
+            peYin: +peYin.toFixed(2),
+            cents: +cents.toFixed(1),
+            oct,
+            ok: this._trackOk ? 1 : 0,
+            det: this._detectionMode ? 1 : 0,
+            voiced: this._armed && this._voiced ? 1 : 0,
+            armed: this._armed ? 1 : 0,
+            unity: this._onsetUnity ? 1 : 0,
+            ever: this._everLocked ? 1 : 0,
+            edge: this._edgeQuiet ? 1 : 0,
+            r: +this._rStar.toFixed(4),
+            wet: +this._wetMix.toFixed(3),
+            want: +this._audibleWant.toFixed(2),
+            midi: +this._lockedDet.toFixed(2),
+            tgt: +this._committedTgt.toFixed(2),
+          });
+        } catch {
+          /* port closed */
+        }
+      }
     }
   }
 
@@ -2861,19 +2102,18 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const mix0 = parameters.mix[0];
     const amount = parameters.amount[0];
     const speed = parameters.speed[0];
-    const flex = parameters.flex[0];
-    const humanize = parameters.humanize[0];
-    const vibrato = parameters.vibrato[0];
     const tracking = parameters.tracking[0];
     const transpose = parameters.transpose[0];
     this._speedMs = Math.max(0, speed);
-    this._vibrato = vibrato;
-    this._effSpeedMs = this._effectiveSpeed(this._speedMs, humanize);
+    // Flex / Humanize / Nat Vib parked until E/H core is solid (still k-rate params).
+    this._vibrato = parameters.vibrato[0];
+    void parameters.flex[0];
+    void parameters.humanize[0];
+    this._effSpeedMs = this._effectiveSpeed(this._speedMs);
     this._formant = parameters.formant[0];
     if (this._formant < 0.5) this._psolaWant = false;
 
-    // Ratio chase: effective Retune Speed (Humanize may stretch on sustains).
-    // Robot snaps. Fairbanks = within-note only. Soft+PSOLA = full chase.
+    // Ratio chase: Retune Speed = patent Decay. Robot snaps.
     const spd = this._effSpeedMs;
     let ratioAlpha = 1;
     if (spd >= 0.5) {
@@ -2888,10 +2128,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       // Phrase-end: close wet fast (ring was loud vs dry).
       if (this._edgeQuiet) return EDGE_WET_XFADE_MS;
       let ms = WET_XFADE_MS;
-      if (this._coldStart && this._softRatioChase()) {
+      // Cold xfade is PSOLA-only (anti-staircase). On splice it was slower
+      // than the 0.001 wetMix floor → mix stuck at 0 for COLD_START_MS (~20s).
+      if (
+        this._coldStart &&
+        this._softRatioChase() &&
+        this._formant >= 0.5
+      ) {
         ms = Math.max(ms, COLD_WET_XFADE_MS);
       }
-      // Conf gate closed, or mid dry↔wet: slower fade (avoids click/comb chatter).
       if (!this._confWetOpen || (this._wetMix > 0.02 && this._wetMix < 0.98)) {
         ms = Math.max(ms, CONF_WET_XFADE_MS);
       }
@@ -2900,88 +2145,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const wetXfadeAlpha =
       1 - Math.exp(-1 / Math.max(1, (wetXfadeMs / 1000) * sampleRate));
     const softPsola = this._softRatioChase();
-    // Default: Retune Speed through note transitions. Stationary + near center
-    // → finish last cents faster. Allow late commit-soft so loose holds don't
-    // wait out the full soft window before the chase engages.
-    let wantChaseMs = spd;
-    // Knob Retune Speed (pre-Humanize) — finishing into center must not wait
-    // on sustain stretch or we park pitchy in the 15–35¢ band.
-    const knobSpd = Math.max(0.5, this._speedMs);
-    const audErrPre =
-      Math.abs(this._audibleWant - this._committedTgt) * 100;
-    const audFlat =
-      this._audibleWant <= this._committedTgt + 0.08;
-    // g3: mild dry wobble resets stablePitchMs; still finish *existing* loose
-    // parks (not mid-scoop — that regressed dips on g3c).
-    // Flat-only speedup: sharp-side chase was wet≪dry lag-dips.
-    const parkFinish =
-      this._stablePitchMs >= STABLE_PITCH_MS ||
-      (audFlat &&
-        audErrPre >= LOOSE_HOLD_LO_CENTS &&
-        audErrPre <= LOOSE_HOLD_HI_CENTS &&
-        this._noteAgeMs >= 40 &&
-        this._pitchVel < GESTURE_VEL_ST_S);
-    // g2g: commit-soft was blocking loose finish for ~70ms after note hops —
-    // exponential math says 15–35¢ should clear in ~17ms @ 20ms tau *unless*
-    // chase stays floored / gated. Allow loose-band finish through commit-soft.
-    const looseBandFinish =
-      softPsola &&
-      audFlat &&
-      audErrPre >= 15 &&
-      audErrPre <= 35 &&
-      this._noteAgeMs >= 28 &&
-      this._pitchVel < GESTURE_VEL_ST_S &&
-      !this._pendingHold &&
-      !this._coldStart &&
-      !this._onsetUnity &&
-      !this._commitRecapture;
-    if (looseBandFinish) {
-      const loose = Math.max(LOOSE_HOLD_SPEED_MS, knobSpd * 0.6);
-      wantChaseMs = Math.min(wantChaseMs, loose);
-    }
-    if (
-      softPsola &&
-      spd >= 0.5 &&
-      this._noteAgeMs >= CENTER_LOCK_AGE_MS &&
-      parkFinish &&
-      this._commitSoftMs <= CENTER_LOCK_COMMIT_SOFT_MAX_MS &&
-      this._pitchVel < SCOOP_VEL_ST_S &&
-      !this._commitRecapture &&
-      !this._coldStart &&
-      !this._onsetUnity &&
-      !this._pendingHold
-    ) {
-      const audErrCents = audErrPre;
-      const glideErrCents =
-        Math.abs(this._wantTgt - this._audibleWant) * 100;
-      if (
-        this._stablePitchMs >= STABLE_PITCH_MS &&
-        audErrCents <= CENTER_LOCK_CENTS &&
-        glideErrCents <= CENTER_LOCK_SETTLE_CENTS
-      ) {
-        // Cap vs knob, not humanized spd — still no Cher snap below ~0.85× knob.
-        const tighten = Math.max(CENTER_LOCK_SPEED_MS, knobSpd * 0.82);
-        wantChaseMs = Math.min(wantChaseMs, tighten);
-      }
-      // Sustained loose parks vs AT: finish under the score's 80ms threshold.
-      if (
-        audErrCents >= LOOSE_HOLD_LO_CENTS &&
-        audErrCents <= LOOSE_HOLD_HI_CENTS &&
-        glideErrCents <= 48
-      ) {
-        const loose = Math.max(LOOSE_HOLD_SPEED_MS, knobSpd * 0.65);
-        wantChaseMs = Math.min(wantChaseMs, loose);
-      }
-      // Soft-land brake: ease tau back up in the last cents (lighter than pre-p2
-      // so we don't re-park in the 15–35¢ band after a quick loose chase).
-      if (audErrCents < SOFT_LAND_CENTS) {
-        const u = audErrCents / SOFT_LAND_CENTS;
-        const brake =
-          Math.max(SOFT_LAND_FLOOR_MS, knobSpd * 0.7) * (1 - u) * (1 - u) +
-          wantChaseMs * (1 - (1 - u) * (1 - u));
-        wantChaseMs = Math.max(wantChaseMs, brake);
-      }
-    }
+    // Patent Decay: Retune Speed is the only chase tau.
+    const wantChaseMs = spd;
     const wantAlpha =
       softPsola && wantChaseMs >= 0.5
         ? 1 - Math.exp(-1 / Math.max(1, (wantChaseMs / 1000) * sampleRate))
@@ -2995,15 +2160,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this.cbiR[this.cbiwr] = xr;
 
       if (this.cbiwr % DETECT_EVERY === 0) {
-        this._lowRate(
-          amount,
-          speed,
-          flex,
-          tracking,
-          transpose,
-          humanize,
-          vibrato,
-        );
+        this._lowRate(amount, tracking, transpose);
       }
 
       // Patent E/H: detect/track every sample after the write (gated — see EH_LIVE).
@@ -3014,6 +2171,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       const dryR = this.cbiR[dryIdx];
 
       if (this._on) {
+        // Cycle_period → inphinc every sample (patent rate denominator).
+        if (this._trackOk && this._periodSamp > 1) {
+          this._inphincTgt = 1 / this._periodSamp;
+        }
         this.inphinc = this._inphincTgt;
 
         const gateT =
@@ -3203,7 +2364,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           }
         }
         this._wetMix += (wantWet - this._wetMix) * wetXfadeAlpha;
-        if (this._wetMix < 0.001) this._wetMix = 0;
+        if (this._wetMix < 1e-6) this._wetMix = 0;
         if (this._wetMix > 0.999) this._wetMix = 1;
 
         if (this._edgeQuiet) {
@@ -3296,8 +2457,18 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         const spliceRate =
           !this._armed || this._onsetUnity ? 1 : this._phincSlew;
         const pair = this._cycleSpliceSample(spliceRate);
-        wetL = pair[0];
-        wetR = pair[1];
+        let sL = pair[0];
+        let sR = pair[1];
+        if (this._armed && !this._onsetUnity) {
+          const r = Math.max(1e-6, this._phincSlew);
+          const oct = Math.abs(Math.log(r) / Math.LN2);
+          const gate = oct <= 0.02 ? 0 : oct >= 0.12 ? 1 : (oct - 0.02) / 0.1;
+          const f = this._formantRestore(sL, sR, this._formant * gate);
+          sL = f[0];
+          sR = f[1];
+        }
+        wetL = sL;
+        wetR = sR;
         this.cboL[this.cbord] = 0;
         this.cboR[this.cbord] = 0;
       } else {

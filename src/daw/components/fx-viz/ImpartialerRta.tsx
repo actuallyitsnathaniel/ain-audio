@@ -79,6 +79,9 @@ export function ImpartialerRta({
     // hierarchy: quantized fog first (mass), raw hairlines on top (ghost)
     drawFog(g, wetVoices.current, cssW, mid, halfMax, VIZ_WET_RGB);
     drawHairlines(g, dryVoices.current, cssW, mid, halfMax);
+    if (slot && slot.kind === "impartialer" && slot.f0N > 0) {
+      drawF0Marks(g, slot, cssW, mid, halfMax);
+    }
 
     drawLegend(g, cssH);
 
@@ -96,7 +99,7 @@ export function ImpartialerRta({
       ref={ref}
       className="block w-full rounded-[3px] border border-line bg-inset"
       style={{ height }}
-      data-tip="IMPARTIALER RTA — mirrored from center. Blue hairline = raw, green fog = quantized × strength."
+      data-tip="IMPARTIALER RTA — blue hairline = raw, green fog = quantized × strength, amber ticks = HPS F0."
       aria-hidden
     />
   );
@@ -161,7 +164,38 @@ function drawLegend(g: CanvasRenderingContext2D, h: number) {
   g.fill();
   g.fillStyle = "rgba(142,142,152,0.9)";
   g.fillText("quantized", 48, y);
+  g.fillStyle = "rgba(232,168,74,0.95)";
+  g.fillRect(108, y - 3, 2, 6);
+  g.fillStyle = "rgba(142,142,152,0.9)";
+  g.fillText("F0", 114, y);
   g.globalAlpha = 1;
+}
+
+/** Amber ticks at HPS fundamentals (log-freq 0..1). */
+function drawF0Marks(
+  g: CanvasRenderingContext2D,
+  slot: FxVizSlot,
+  w: number,
+  mid: number,
+  halfMax: number,
+) {
+  g.save();
+  for (let i = 0; i < slot.f0N; i++) {
+    const t = slot.f0[i];
+    if (!(t >= 0 && t <= 1)) continue;
+    const x = t * w;
+    g.strokeStyle = "rgba(232,168,74,0.55)";
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(x, mid - halfMax * 0.92);
+    g.lineTo(x, mid + halfMax * 0.92);
+    g.stroke();
+    g.fillStyle = "rgba(232,168,74,0.9)";
+    g.beginPath();
+    g.arc(x, mid, 2.2, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.restore();
 }
 
 /**

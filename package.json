@@ -13,6 +13,7 @@
     "centinel:render": "node scripts/centinel-render.mjs",
     "centinel:loop": "node scripts/centinel-loop.mjs",
     "centinel:listen": "node scripts/centinel-listen.mjs",
+    "centinel:eh-validate": "node scripts/centinel-render.mjs --eh-validate --out=.tmp_centinel/eh-validate.wav",
     "lint": "eslint ."
   },
   "dependencies": {

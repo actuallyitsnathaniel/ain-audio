@@ -1,0 +1,27 @@
+---
+description: Centinel pitch corrector — patent-strict core, no babysitter detectors
+globs: src/daw/worklets/centinel-processor.js, scripts/centinel-*.mjs, docs/CENTINEL-vs-SOURCES.md
+alwaysApply: true
+---
+
+# Centinel = US5973252A, then product knobs
+
+The live corrector is the expired Auto-Tune patent (recursive E/H detect/track → rate convert + ±1 Cycle_period + Decay). It is **not** Autotalent, Lent/PSOLA, YIN, or McLeod.
+
+## Do not
+
+- Mix a second pitch detector into the note / `R*` / `inphinc` / Cycle_period path (YIN was this. It borked output and caused a long runaround).
+- “Babysit” E/H with YIN, FFT, or any other f0. If E/H fails, fix E/H (fail → re-detect, lag window, ε) — don’t seed it.
+- Write `_inphincTgt` from a side path that fights `process()`.
+- Chase the AT scorecard by adding control-law hacks that fight the patent core. Ask first.
+
+## Do
+
+- **Ask before** changing the detector, shifter, who owns period/notes/`R*`, or stripping/restoring product knobs (Humanize / Flex / sticky / orphan).
+- Product knobs sit **on top of** a working patent core. They are not a substitute for one. Do not mix them back in to chase a scorecard hole.
+- PSOLA is optional formant≥0.5 only — not the AT-matching reference.
+- If a “fix” needs a second estimator to make the first one work, the first one isn’t done.
+
+## Lesson (g1)
+
+YIN (2002 CMNDF) is not in the 1997 patent. Using it as a babysitter for notes while E/H ran splice pe produced a split brain. Gut the babysitter; make E/H own acquire + notes + period.

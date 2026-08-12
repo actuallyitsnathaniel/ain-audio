@@ -215,6 +215,40 @@ still forces the PV path (the bin has to move).
    impartialer-detail canvas.)
 6. Optional: custom map, MIDI targets, sidechain key detect, faster-hop quality.
 
+### 4.5. Upheaval — multi-F0 track engine (reconciled)
+
+The interim device still maps **spectral peaks → MIDI**. That is not true polyphonic
+F0 detection; it is what washed the signal (noise peaks treated as notes). A Gemini
+brief proposed HPS → comb isolate → “Hildebrand ACF” → phase-locked remap. We keep
+the **pipeline shape** and reject the scaffolding / mislabels. Living note:
+impartialer-detail canvas (Upheaval tab).
+
+**Target phases**
+
+1. **HPS acquire** — on the existing STFT magnitude:  
+   \(P(\omega)=\prod_{r=1}^{R}|X(r\omega)|\) (R≈4). Local maxima of \(P\) → at most
+   \(M\) fundamental candidates (e.g. 4). Refresh on hop, not every sample.
+   **Shipped (step 1):** `runHps` in `impartialer-processor.js`; peaks may remap only
+   if they sit near \(n\cdot F_0\) (or legacy peaks when no F0 found). Amber F0 ticks
+   on the RTA.
+2. **Isolate** — per \(F_{0,n}\), a harmonic mask / light feedback comb  
+   \(H(z)=\frac{1}{1-\alpha z^{-K}}\) (\(K\approx f_s/F_0\)) as an *enhancer*, plus
+   residual \(= x - \sum\) masked tracks. A comb does **not** fully null competing
+   notes; do not claim demix.
+3. **Track** — per isolated mono ring, **US5973252A recursive E/H** (same math as
+   Centinel — not block \(R(\tau)\) branded “Hildebrand”). \(\varepsilon\) gate +
+   quadratic \(\tau^\*\). Latency win is continuous E/H between HPS refreshes.
+4. **Remap + sum** — one \(\beta=2^{\Delta/12}\) per track applied to the whole
+   harmonic group (snap/remap/MIDI). Phase continuity via public phase-vocoder /
+   instantaneous-frequency practice (Bernsee). Do **not** implement US11079418
+   (Zynaptiq, 2021) claims. Sum tracks + `residual`·untracked + outer `strength`.
+
+**Keep from detail pass:** strength, residual, hits, lo/mid/hi (as F0-range gates),
+viz, FxChain hosting (`ain-impartialer` only — no greenfield PitchMapperNode).
+
+**Share with Centinel:** E/H helper when a second copy would drift. Centinel’s
+corrector stays cycle-splice; impartialer’s stays spectral group shift.
+
 ***
 
 ## 5. Branch B — Spectral compressor (`speccomp`)
@@ -409,6 +443,9 @@ Impartialer
 - [x] Phase 2 snap-to-key
 - [x] Phase 3 remap (force nearest scale degree; polyphonic-lite / per-bin)
 - [x] Detail pass: residual + peak floor + lo/mid/hi + hits (onset duck)
+- [x] Upheaval step 1: HPS acquire + harmonic-gated peak remap + RTA F0 ticks
+- [ ] Upheaval step 2+: isolate → M× E/H track → group remap
+  (see §4.5; canvas Upheaval / Path tabs)
 
 Speccomp
 

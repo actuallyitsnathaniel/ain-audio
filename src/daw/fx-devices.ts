@@ -282,7 +282,7 @@ export interface FxParams {
     vibrato: number;
     /** 0..1 pitch tracking (1 = grabby / commercial “100%”; 0 = picky gate). */
     tracking: number;
-    /** 0 = Fairbanks OLA · ≥0.5 = period PSOLA (experimental). */
+    /** 0 = formants ride pitch · 1 = LPC-copy dry envelope onto splice. */
     formant: number;
     mix: number;
     transpose: number;
@@ -1686,7 +1686,7 @@ export const FX_DEVICES: Record<FxDeviceType, FxDeviceDef> = {
         humanize: 0,
         vibrato: 0,
         tracking: 1,
-        formant: 0,
+        formant: 0.85,
         mix: 1,
         transpose: 0,
         viz: true,

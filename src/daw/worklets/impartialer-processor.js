@@ -1,7 +1,8 @@
-// Impartialer — spectral partial remapper
-// Phase 1: global transpose · Phase 2: in-key snap · Phase 3: force remap to scale.
-// Detail pass: peak-only mapping, original-phase residual, lo/mid/hi amounts, onset duck.
-// STFT/OLA helpers stay inlined for now; extract to spectral-core.js when speccomp needs them.
+// Impartialer — spectral pitch mapper
+// Phases 1–3: global transpose / snap / remap (per-peak MIDI — interim).
+// Detail pass: residual, peak floor, lo/mid/hi, hits.
+// Upheaval step 1: HPS acquire → F0 candidates gate which peaks may remap.
+// Next: isolate → M× E/H → one-β group shift (see SPECTRAL.md §4.5).
 //
 // Dry/wet mixes INSIDE the worklet against a latency-aligned dry delay so strength
 // blends don't comb. Bypass still runs the delay so latency stays constant when
@@ -79,6 +80,140 @@ function fft(re, im, inverse) {
 const VIZ_BINS = 96;
 const SPLIT_LO_HZ = 250;
 const SPLIT_HI_HZ = 2500;
+
+/** HPS (Noll): P(k)=∏_{r=1..R} |X(r·k)| — multi-F0 acquire. */
+const HPS_R = 4;
+const HPS_MAX_F0 = 4;
+const HPS_FMIN = 55;
+const HPS_FMAX = 800;
+/** Relative HPS peak threshold vs frame HPS max. */
+const HPS_THRESH = 0.025;
+/** Peak may remap if within this many cents of n·F0 (n=1..HPS_HARM). */
+const HPS_HARM_CENTS = 45;
+const HPS_HARM = 8;
+/** Reject a new F0 within this many cents of an already-accepted one. */
+const HPS_SEP_CENTS = 70;
+
+/**
+ * Harmonic Product Spectrum on a precomputed magnitude spectrum.
+ * Writes top-M fundamentals into f0Hz / f0Score (descending score). Returns count.
+ * All buffers preallocated by caller — no alloc.
+ */
+function runHps(mag, half, binHz, hps, f0Hz, f0Score) {
+  for (let i = 0; i < HPS_MAX_F0; i++) {
+    f0Hz[i] = 0;
+    f0Score[i] = 0;
+  }
+  hps.fill(0);
+
+  const kMin = Math.max(1, Math.ceil(HPS_FMIN / binHz));
+  // Need r·k ≤ half for all r ≤ HPS_R
+  const kMax = Math.min(
+    Math.floor(half / HPS_R),
+    Math.floor(HPS_FMAX / binHz),
+  );
+  if (kMax <= kMin + 1) return 0;
+
+  let peakP = 1e-20;
+  for (let k = kMin; k <= kMax; k++) {
+    let p = mag[k];
+    if (!(p > 1e-12)) continue;
+    let ok = true;
+    for (let r = 2; r <= HPS_R; r++) {
+      const kr = k * r;
+      const mr = mag[kr];
+      if (!(mr > 1e-12)) {
+        ok = false;
+        break;
+      }
+      p *= mr;
+    }
+    if (!ok) continue;
+    hps[k] = p;
+    if (p > peakP) peakP = p;
+  }
+
+  const thresh = peakP * HPS_THRESH;
+  let nFound = 0;
+
+  for (let k = kMin + 1; k < kMax; k++) {
+    const y0 = hps[k];
+    if (!(y0 >= thresh)) continue;
+    const ym1 = hps[k - 1];
+    const yp1 = hps[k + 1];
+    if (!(y0 >= ym1 && y0 >= yp1)) continue;
+
+    // Parabolic refine in bin space (same shape as E/H quadratic trough refine)
+    const denom = 2 * (2 * y0 - yp1 - ym1);
+    let delta = 0;
+    if (Math.abs(denom) > 1e-30) {
+      delta = (yp1 - ym1) / denom;
+      if (delta > 1.25 || delta < -1.25) delta = 0;
+    }
+    let hz = (k + delta) * binHz;
+    if (!(hz >= HPS_FMIN && hz <= HPS_FMAX)) continue;
+
+    // Prefer missing-fundamental: if ~½hz also an HPS local peak, use it
+    const halfBin = Math.round((k + delta) * 0.5);
+    if (
+      halfBin >= kMin &&
+      halfBin <= kMax &&
+      hps[halfBin] >= thresh * 0.5 &&
+      hps[halfBin] >= (hps[halfBin - 1] || 0) &&
+      hps[halfBin] >= (hps[halfBin + 1] || 0)
+    ) {
+      hz = halfBin * binHz;
+    }
+
+    // Skip if too close to an already-kept F0
+    let tooClose = false;
+    for (let i = 0; i < nFound; i++) {
+      const cents = (1200 * Math.log(hz / f0Hz[i])) / Math.LN2;
+      if (Math.abs(cents) < HPS_SEP_CENTS) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (tooClose) continue;
+
+    // Insert into top-M by descending score
+    let slot = nFound;
+    if (nFound < HPS_MAX_F0) {
+      nFound++;
+      slot = nFound - 1;
+    } else if (y0 > f0Score[HPS_MAX_F0 - 1]) {
+      slot = HPS_MAX_F0 - 1;
+    } else {
+      continue;
+    }
+    while (slot > 0 && y0 > f0Score[slot - 1]) {
+      f0Score[slot] = f0Score[slot - 1];
+      f0Hz[slot] = f0Hz[slot - 1];
+      slot--;
+    }
+    f0Score[slot] = y0;
+    f0Hz[slot] = hz;
+  }
+
+  return nFound;
+}
+
+/** True if hz sits near n·F0 for some accepted fundamental (n=1..HPS_HARM). */
+function nearHpsHarmonic(hz, f0Hz, nF0) {
+  if (!(hz > 20) || nF0 <= 0) return false;
+  for (let i = 0; i < nF0; i++) {
+    const f0 = f0Hz[i];
+    if (!(f0 > 0)) continue;
+    for (let n = 1; n <= HPS_HARM; n++) {
+      const target = f0 * n;
+      if (target > hz * 1.15) break;
+      if (target < hz * 0.85) continue;
+      const cents = (1200 * Math.log(hz / target)) / Math.LN2;
+      if (Math.abs(cents) <= HPS_HARM_CENTS) return true;
+    }
+  }
+  return false;
+}
 
 function createChannel(fftSize, hop) {
   const half = fftSize / 2;
@@ -257,6 +392,17 @@ function processFrame(ch, window, fftSize, hop, opts) {
   const midAmt = Math.min(1, Math.max(0, bandMid));
   const hiAmt = Math.min(1, Math.max(0, bandHi));
 
+  // Upheaval §1 — HPS acquire (Noll). Gates which peaks may remap when F0s found.
+  // Only the analysis channel (L) recomputes; R reuses the last F0 list.
+  let nF0 = 0;
+  if (opts.runHps && opts.hps && opts.f0Hz && opts.f0Score) {
+    nF0 = runHps(mag, half, binHz, opts.hps, opts.f0Hz, opts.f0Score);
+    if (opts.f0N) opts.f0N[0] = nF0;
+  } else if (opts.f0N) {
+    nF0 = opts.f0N[0] | 0;
+  }
+  const f0Hz = opts.f0Hz;
+
   for (let k = 0; k <= half; k++) {
     const m = mag[k];
     if (m < 1e-12) continue;
@@ -272,8 +418,12 @@ function processFrame(ch, window, fftSize, hop, opts) {
       m >= mag[k + 1] &&
       m >= floorAbs;
 
+    // When HPS has F0s, only remap peaks that sit on a harmonic ladder.
+    // No F0s → legacy peak remap (silence / noise / below HPS band).
+    const hpsOk = nF0 <= 0 || nearHpsHarmonic(hz, f0Hz, nF0);
+
     let ratio = pitchRatio;
-    if (mapOn && isPeak && bandAmt > 0.001) {
+    if (mapOn && isPeak && hpsOk && bandAmt > 0.001) {
       let fHz = (freq[k] * sampleRate) / fftSize;
       if (!(fHz > 20 && fHz < sampleRate * 0.45)) fHz = hz;
       const midi = 69 + (12 * Math.log(fHz / 440)) / Math.LN2;
@@ -424,6 +574,13 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     this._vizWet = new Float32Array(VIZ_BINS);
     this._vizDryPos = new Float32Array(VIZ_BINS);
     this._vizWetPos = new Float32Array(VIZ_BINS);
+    // HPS acquire (shared across L analysis; stereo R reuses last F0s for gate)
+    const half = this.fftSize / 2;
+    this._hps = new Float32Array(half + 1);
+    this._f0Hz = new Float32Array(HPS_MAX_F0);
+    this._f0Score = new Float32Array(HPS_MAX_F0);
+    this._f0Log = new Float32Array(HPS_MAX_F0);
+    this._f0N = new Int32Array(1);
     this.port.onmessage = (ev) => {
       const d = ev.data || {};
       if (d.type !== "config") return;
@@ -466,14 +623,27 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     for (let i = 0; i < VIZ_BINS; i++) {
       this._vizWet[i] *= s;
     }
+    // F0 markers: log(bin)/log(half) to match fillVizLog peak positions
+    const nF0 = this._f0N[0] | 0;
+    const binHz = sampleRate / this.fftSize;
+    const logHalf = Math.log(half);
+    for (let i = 0; i < HPS_MAX_F0; i++) {
+      if (i < nF0 && this._f0Hz[i] > 0 && logHalf > 0) {
+        const k = Math.max(1, this._f0Hz[i] / binHz);
+        this._f0Log[i] = Math.log(k) / logHalf;
+      } else {
+        this._f0Log[i] = -1;
+      }
+    }
     this.port.postMessage({
       type: "viz",
       n: VIZ_BINS,
       a: this._vizDry,
       b: this._vizWet,
-      // true peak freq inside each log column — dry vs wet can diverge when snap moves energy
       xa: this._vizDryPos,
       xb: this._vizWetPos,
+      f0: this._f0Log,
+      f0N: nF0,
     });
   }
 
@@ -536,6 +706,11 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
           bandMid: frameOpts.bandMid,
           bandHi: frameOpts.bandHi,
           hits: frameOpts.hits,
+          runHps: emitViz, // L only — stereo R reuses F0 list
+          hps: this._hps,
+          f0Hz: this._f0Hz,
+          f0Score: this._f0Score,
+          f0N: this._f0N,
         });
         if (emitViz && this._viz) {
           this._vizCountdown--;

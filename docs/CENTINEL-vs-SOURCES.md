@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build era `g2n5i-flatslew`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build `g1l-oct`).
 
 Interactive companion (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx).
@@ -13,39 +13,37 @@ Interactive companion (open beside chat):
 **Order of work:**
 
 1. **Patent-faithful core first** — detection mode (8:1 DS + \(E/H\) search) → correction mode (narrow-band recursive \(E/H\), quadratic period) → rate convert + ±1 `Cycle_period` insert/delete.
-2. **Then refine past the patent** — Retune Speed / Humanize / Flex / Nat Vib / sticky/orphan on top. Keep what beats dry_2→AT goal.
+2. **Then refine past the patent** — Retune Speed is Decay. Humanize / Flex / Nat Vib / sticky sit **on top of** the G1 core (`g1l-oct`). Do not mix them in to chase a scorecard hole; one knob at a time.
 3. **PSOLA / Fairbanks / PV** are fallbacks or optional formant paths, not the AT-matching reference. Do not gut Lent-adjacent code until a later cleanup audit (see G4).
 
 ## Open items ledger (for the next plan)
 
-### G1 / patent E/H period track
+### G1 / patent E/H period track — **closed** (`g1l-oct`)
 - [x] Recursive \(E/H\) detect (8:1 DS, vocal-band best trough + octave check)
 - [x] Correction-mode narrow lag window (N=8), refine every 5 samples
-- [x] Live without poisoning audio (`EH_LIVE`) — must **not** write `_inphincTgt` (p1a–e bug: process copies tgt→inphinc every sample)
-- [x] `EH_DRIVE`: splice uses `_periodSamp` (neutral/slight win vs YIN pe @ p1h)
-- [ ] E/H as sole acquire (no YIN seed) without regressing notes
-- [ ] Drive R*/`inphinc` from E/H Cycle_period (patent-faithful); today YIN owns note sticky + R*
-- [x] Soft Retune (`Decay`) across notes on splice (`_softRatioChase`, p2)
-- [ ] E/H-only acquire / R* drive — see **Item 1 review** below
+- [x] `EH_LIVE` + `EH_DRIVE`: splice Cycle_period = `_periodSamp`
+- [x] Decay = Retune Speed across notes on splice
+- [x] E/H owns notes; `yinPitch` deleted
+- [x] `process()` sets `_inphincTgt = 1/periodSamp` when tracking (0¢ vs period). The old “never write `_inphincTgt`” rule was for the YIN-babysitter era (p1a–e); it does not apply now.
+- [x] Product pitch-law stripped so the core could be judged alone
+- [x] ~14s beats AT without Flex taper (54% vs 47%)
+- [x] ~20s mix actually opens (wet≈dry 85%→0%; leftover hole is nearest-note/Decay, not dry-through)
+- [x] Patent octave check (DS 2L/4L) + notes follow period. YIN-era `octaveLock`/`MAX_JUMP` was shifting a correct C#4 period back up (`R*=2`) — that was the 279ms 20.76s C#5 run.
+
+Freeze this core. Do **not** open another detector/slew/ε cut unless a listen shows the *period* is wrong.
 
 ### G2 — Cycle insert/delete
 - [x] Rate-convert + ±1 cycle (formant-off, `CYCLE_SPLICE`)
-- [x] Pop default `formant: 0` (render preset + chip + fx defaults)
-- [x] vs Fairbanks @ f0: note-disagree **10%→~3%**
-- [x] Center ≤15¢ **46%→63%** (goal ~54%) via soft Decay + owned-sustain flat finish
-- [x] **Listen pass** — ~20s at goal ≤15 (46%); ~14s closed (**51%** vs AT ~48%)
-- [x] Surgical fix for ~20s (cold orphan audibleWant blend + live YIN retarget)
-- [x] Soften g2m9 Cher snap → cold blend 0.94 + advance floor (g2n)
-- [ ] Crossfade splice ↔ PSOLA on formant automation
-- [x] Finish ~14s toward goal ≤15 (~48%) — `ownedSustain` flat finish (g2n5e)
-- [x] Dip trim without reopening 14s — sharp-side finish off (g2n5i; 8/441→7/383)
+- [x] Pop default `formant: 0.85` (LPC envelope copy — not PSOLA)
+- [x] **Seam** (`g2a-seam`) — patent ±1 `Cycle_period` per sample (was up to 8 hard jumps) + short equal-power blend on the jump.
+- [x] **Cepstral envelope** (`g2d-cep`) — lifter the log spectrum before Levinson so poles follow the throat, not the F0 comb. Same IIR copy onto splice; no STFT delay.
+- [ ] Optional formant *shift* (raise/lower independently) — later
 
-### G3 — Sticky / DC finish
-- [x] Orphan sticky ungated (final/near-sticky/hold) + faster orphan Decay blend
-- [x] ~6s / ~9.88 A↔B wrong-note frames fixed (wet now lands on A with dry/goal)
-- [x] Center bias when hard-flex residual ~40–55¢; loose chase band widened
-- [x] Listen pass (shared with G2) — ~20s + ~14s closed vs AT
-- [x] Surgical dry-through @ ~20s (orphan snap under cold Retune floor)
+### G3 — Sticky / DC finish (on G1 core, not the old YIN stack)
+- [x] **Minimal sticky** (`g3b-hyst`) — keep committed note until live is closer by 0.4 st, same-side only. No orphan, no ownedSustain, no Flex/Humanize.
+- [x] Disagree dump: 6.4% was **not** 40¢ wobble. 24 frames / 279ms at 20.76s were octave (wet C#5, dry+AT C#4) — closed in `g1l-oct`. Leftover is 12ms 50¢-line neighbor ticks. Do **not** chase those with orphan / Flex / ownedSustain.
+- [ ] Listen ~20s ≤15 vs AT ~46% (still 37%; scoop release is Decay, not missing hyst)
+- [ ] Humanize / Flex / Nat Vib — later, one at a time
 
 ### G4 — Stay away / later
 - [x] Do not merge Smuts phase vocoder into live Centinel
@@ -55,32 +53,34 @@ Interactive companion (open beside chat):
   renamed, or isolated once formant crossfade exists and 14s/20s gaps are closed.
   Killing formant mode to “purge Lent” would be the wrong move.
 
-## Current scorecard (`g2n5i-flatslew`, pop = splice + soft Decay)
+## Current scorecard (`g1l-oct` = G1 octave check + notes follow period + G3 sticky)
 
-| Metric | g2n5e | **g2n5i** | goal |
+| Metric | g1l | g3b | Goal |
 |---|---|---|---|
-| ≤15¢ | 63.3% | **62.7%** | ~54% |
-| note-disagree | 2.7% | **2.8%** | — |
-| dry✓/wet✗ | 21 | **23** | — |
-| loose runs | 4 | **3** | 2 |
-| dips | 8 / 441ms | **7 / 383ms** | — |
-| clicks wet/dry | 21/21 | **20/21** | — |
-| shake | 0.26 | 0.26 | — |
+| ≤15¢ of scale | **50.7%** | 50.6% | 53.7% |
+| loose holds (15–35¢ ≥80ms) | **0** | 0 | 2 |
+| listen ~14s ≤15 | **54%** | 54% | 47% |
+| listen ~20s ≤15 | **37%** | 37% | 46% |
+| ~20s wet≈dry | **0%** | 0% | — |
+| lag dips | 26 / 1474ms | 26 / 1474 | — |
+| clicks wet/dry | 19 / 21 | 20 / 21 | — |
+| note-disagree | **5.3%** | 6.4% | — |
+| octave disagree | **0** | 24 frames / 279ms | — |
 
-Listen: ~20s wet≤15 **46%** (= goal). ~14s wet≤15 **51%** (goal 48%) — held. Sharp-side ownedFinish was the extra lag-dips; further pin (g2n5h) hit 3/151ms but dropped 14s to 43%.
+G1 freeze: `inphinc` vs `_periodSamp` **0¢**. 14s beats AT. 20s mix opens. 21s C#5 run gone. Remaining disagree is 50¢-line neighbor ticks — leave them.
 
-Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true` (splice pe only).
+Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true`.
 
-## Item 1 review — E/H-only / R* drive (do not flip yet)
+## Item 1 — G1 closed
 
-| Path | Status | Evidence |
-|---|---|---|
-| `EH_LIVE` (shadow `_periodSamp`) | **ON — safe** | Must not write `_inphincTgt` (p1a–e poison) |
-| `EH_DRIVE` (splice Cycle_period) | **ON — neutral** | p1h ≈ p1g on scorecard |
-| E/H as sole acquire (no YIN seed) | **NOT ready** | p1a pure-E/H notes: disagree ~12%, ≤15¢ ~38% |
-| Drive R*/`inphinc` from E/H | **NOT ready** | Same; YIN sticky + R* still owns musical decisions |
+| Path | Status |
+|---|---|
+| `EH_LIVE` / `EH_DRIVE` | ON |
+| E/H sole acquire | ON — `yinPitch` deleted |
+| `inphinc` from E/H | ON — `1/periodSamp` in `process()` |
+| Product pitch-law | G3 sticky in progress; Flex/Humanize/orphan still parked |
 
-**Verdict:** Keep YIN for notes/R*. Next E/H work should be *validation* (log `|periodSamp − 1/inphinc|` vs dry_2) before any drive flip — not another blind `EH_DRIVE` expansion. Soft Decay + center chase bought more AT-match than E/H-as-detector did.
+`npm run centinel:eh-validate` → `.tmp_centinel/eh-validate.json`
 
 ---
 
@@ -119,11 +119,11 @@ E_i(L) - 2H_i(L) \le \varepsilon\, E_i(L)
 
 | Layer | Patent | Centinel now |
 |---|---|---|
-| Detect | Recursive E/H, 8× DS | E/H live + YIN seed/notes |
-| Period | Continuous correction track | `_periodSamp` (EH); splice via `EH_DRIVE` |
+| Detect | Recursive E/H, 8× DS | **E/H owns notes** (`g1l-oct`; YIN deleted; notes follow period octave) |
+| Period | Continuous correction track | `_periodSamp`; `inphinc = 1/periodSamp` |
 | Corrector | Rate + ±1 cycle | `CYCLE_SPLICE` (formant-off) |
-| Softness | Decay | Retune Speed (within-note on splice; cross-note = open) |
-| Product | — | Humanize / Flex / Nat Vib / sticky |
+| Softness | Decay | Retune Speed |
+| Product | — | G3: sticky first; Humanize / Flex / Nat Vib parked |
 
 ---
 

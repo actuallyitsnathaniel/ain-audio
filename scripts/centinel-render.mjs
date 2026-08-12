@@ -22,8 +22,8 @@ const PRESETS = {
     humanize: 0.18,
     vibrato: 0,
     amount: 1,
-    // Patent cycle-splice path (US5973252A). formant≥0.5 = optional PSOLA.
-    formant: 0,
+    // Patent cycle-splice + LPC formant preserve (not PSOLA).
+    formant: 0.85,
     tracking: 1,
     mix: 1,
     transpose: 0,
@@ -68,6 +68,7 @@ function parseArgs(argv) {
     base: process.env.CENTINEL_BASE || "http://localhost:3000",
     preset: "pop",
     params: {},
+    ehValidate: false,
   };
   for (const a of argv) {
     if (a.startsWith("--dry=")) out.dry = resolve(a.slice(6));
@@ -82,8 +83,53 @@ function parseArgs(argv) {
     else if (a.startsWith("--key=")) out.params.key = Number(a.slice(6));
     else if (a.startsWith("--tracking="))
       out.params.tracking = Number(a.slice(11));
+    else if (a === "--eh-validate") out.ehValidate = true;
   }
   return out;
+}
+
+function pctile(sorted, p) {
+  if (!sorted.length) return 0;
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.round((p / 100) * (sorted.length - 1))));
+  return sorted[i];
+}
+
+function windowStats(frames, t0, t1) {
+  const w = frames.filter((f) => f.t >= t0 && f.t <= t1 && f.voiced && f.ok && f.peEh > 1 && f.peYin > 1);
+  const abs = w.map((f) => Math.abs(f.cents)).sort((a, b) => a - b);
+  const oct = w.filter((f) => f.oct).length;
+  return {
+    n: w.length,
+    med: abs.length ? pctile(abs, 50) : 0,
+    p90: abs.length ? pctile(abs, 90) : 0,
+    octPct: w.length ? (100 * oct) / w.length : 0,
+  };
+}
+
+function summarizeEhVal(frames) {
+  const all = frames.length;
+  const voiced = frames.filter((f) => f.voiced);
+  const ok = voiced.filter((f) => f.ok && f.peEh > 1 && f.peYin > 1);
+  const abs = ok.map((f) => Math.abs(f.cents)).sort((a, b) => a - b);
+  const oct = ok.filter((f) => f.oct).length;
+  const det = voiced.filter((f) => f.det).length;
+  const trackOk = voiced.filter((f) => f.ok).length;
+  const gt15 = ok.filter((f) => Math.abs(f.cents) > 15).length;
+  const gt50 = ok.filter((f) => Math.abs(f.cents) > 50).length;
+  return {
+    frames: all,
+    voiced: voiced.length,
+    compared: ok.length,
+    trackOkPct: voiced.length ? (100 * trackOk) / voiced.length : 0,
+    detectModePct: voiced.length ? (100 * det) / voiced.length : 0,
+    medianAbsCents: abs.length ? pctile(abs, 50) : 0,
+    p90AbsCents: abs.length ? pctile(abs, 90) : 0,
+    gt15Pct: ok.length ? (100 * gt15) / ok.length : 0,
+    gt50Pct: ok.length ? (100 * gt50) / ok.length : 0,
+    octavePct: ok.length ? (100 * oct) / ok.length : 0,
+    loose14s: windowStats(frames, 14.1, 14.9),
+    loose20s: windowStats(frames, 19.95, 20.45),
+  };
 }
 
 function writeWavStereo(path, left, right, sampleRate) {
@@ -120,7 +166,10 @@ async function main() {
   const dryPath =
     args.dry ||
     process.env.CENTINEL_DRY ||
-    resolve(process.env.HOME || "", "Downloads/dry.wav");
+    resolve(
+      process.env.HOME || "",
+      args.ehValidate ? "Downloads/dry_2.wav" : "Downloads/dry.wav",
+    );
   const params = { ...PRESETS[args.preset] || PRESETS.pop, ...args.params };
 
   const dryBytes = readFileSync(dryPath);
@@ -148,7 +197,7 @@ async function main() {
   await page.goto(args.base, { waitUntil: "domcontentloaded", timeout: 30000 });
 
   const result = await page.evaluate(
-    async ({ dryB64, params }) => {
+    async ({ dryB64, params, ehValidate }) => {
       const bin = Uint8Array.from(atob(dryB64), (c) => c.charCodeAt(0));
       const probe = new AudioContext();
       const decoded = await probe.decodeAudioData(bin.buffer.slice(0));
@@ -175,11 +224,14 @@ async function main() {
           scale: params.scale,
           customPcs: [0, 2, 4, 5, 7, 9, 11],
           inputType: params.inputType,
+          ehValidate,
         },
       });
       let build = null;
+      const ehval = [];
       node.port.onmessage = (ev) => {
         if (ev.data?.type === "build") build = ev.data.build;
+        if (ev.data?.type === "ehval") ehval.push(ev.data);
       };
 
       const t0 = off.currentTime;
@@ -204,6 +256,7 @@ async function main() {
         midiFollow: false,
         inputType: params.inputType,
         viz: false,
+        ehValidate,
       });
 
       const src = off.createBufferSource();
@@ -213,19 +266,53 @@ async function main() {
       src.start(0);
 
       const rendered = await off.startRendering();
+      if (ehValidate) await new Promise((r) => setTimeout(r, 200));
       const left = Array.from(rendered.getChannelData(0));
       const right =
         rendered.numberOfChannels > 1
           ? Array.from(rendered.getChannelData(1))
           : left;
-      return { left, right, sampleRate: sr, build, frames: rendered.length };
+      return {
+        left,
+        right,
+        sampleRate: sr,
+        build,
+        frames: rendered.length,
+        ehval,
+      };
     },
-    { dryB64, params },
+    { dryB64, params, ehValidate: args.ehValidate },
   );
 
   await browser.close();
 
   writeWavStereo(args.out, result.left, result.right, result.sampleRate);
+  let ehSummary = null;
+  if (args.ehValidate) {
+    ehSummary = summarizeEhVal(result.ehval || []);
+    const jsonPath = resolve(dirname(args.out), "eh-validate.json");
+    writeFileSync(
+      jsonPath,
+      JSON.stringify({ build: result.build, summary: ehSummary, frames: result.ehval }, null, 2),
+    );
+    const s = ehSummary;
+    console.error(
+      `[centinel:eh-validate] build=${result.build} compared=${s.compared}/${s.voiced} voiced`,
+    );
+    console.error(
+      `  |Δ¢| med=${s.medianAbsCents.toFixed(1)} p90=${s.p90AbsCents.toFixed(1)}  >15¢=${s.gt15Pct.toFixed(1)}%  >50¢=${s.gt50Pct.toFixed(1)}%  octave=${s.octavePct.toFixed(1)}%`,
+    );
+    console.error(
+      `  trackOk=${s.trackOkPct.toFixed(1)}%  detectMode=${s.detectModePct.toFixed(1)}%`,
+    );
+    console.error(
+      `  ~14s n=${s.loose14s.n} med=${s.loose14s.med.toFixed(1)} p90=${s.loose14s.p90.toFixed(1)} oct=${s.loose14s.octPct.toFixed(1)}%`,
+    );
+    console.error(
+      `  ~20s n=${s.loose20s.n} med=${s.loose20s.med.toFixed(1)} p90=${s.loose20s.p90.toFixed(1)} oct=${s.loose20s.octPct.toFixed(1)}%`,
+    );
+    console.error(`  wrote ${jsonPath}`);
+  }
   console.log(
     JSON.stringify(
       {
@@ -236,6 +323,8 @@ async function main() {
         preset: args.preset,
         params,
         dry: dryPath,
+        ehValidate: args.ehValidate,
+        ehSummary,
       },
       null,
       2,

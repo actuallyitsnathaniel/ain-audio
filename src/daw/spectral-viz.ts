@@ -17,6 +17,7 @@ export type FxVizKind =
  * impartialer: `a`/`b` = dry / (adjusted×strength) mags (0..1);
  *              `xa`/`xb` = log-freq peak centers 0..1 for each bin (argmax inside the bin)
  *              so RTA can place dry vs wet at true frequencies — not the same column.
+ *              `f0` / `f0N` = HPS fundamental markers (log-freq 0..1, up to 4).
  * speccomp:    `a` = dry band envelope (−60..0 → 0..1), `b` = GR amount (0..1 ≈ 0..24 dB)
  * eq:          `a` = input spectrum (0..1 over analyser −90..−10);
  *              `b` = dyn engagement flash per bin (0..1);
@@ -37,6 +38,9 @@ export interface FxVizSlot {
   xa: Float32Array;
   /** Log-frequency 0..1 of the strongest FFT bin inside each viz column (wet). */
   xb: Float32Array;
+  /** HPS F0 log-freq markers 0..1 (impartialer). Unused slots = −1. */
+  f0: Float32Array;
+  f0N: number;
   gen: number;
 }
 
@@ -48,11 +52,13 @@ export function createFxVizSlot(kind: FxVizKind, bins = SPECTRAL_VIZ_BINS): FxVi
     b: new Float32Array(bins),
     xa: new Float32Array(bins),
     xb: new Float32Array(bins),
+    f0: new Float32Array(4),
+    f0N: 0,
     gen: 0,
   };
 }
 
-/** Apply a worklet `{ type:"viz", n, a, b, xa?, xb? }` message into a slot. */
+/** Apply a worklet `{ type:"viz", n, a, b, xa?, xb?, f0?, f0N? }` message into a slot. */
 export function ingestFxVizMessage(
   slot: FxVizSlot,
   data: {
@@ -61,6 +67,8 @@ export function ingestFxVizMessage(
     b?: ArrayLike<number>;
     xa?: ArrayLike<number>;
     xb?: ArrayLike<number>;
+    f0?: ArrayLike<number>;
+    f0N?: number;
   },
 ): void {
   const n = Math.max(0, Math.min(slot.a.length, data.n ?? 0));
@@ -74,5 +82,10 @@ export function ingestFxVizMessage(
     slot.xb[i] = data.xb ? (data.xb[i] ?? fallback) : fallback;
   }
   slot.n = n;
+  const f0N = Math.max(0, Math.min(slot.f0.length, data.f0N ?? 0));
+  slot.f0N = f0N;
+  for (let i = 0; i < slot.f0.length; i++) {
+    slot.f0[i] = data.f0 && i < f0N ? (data.f0[i] ?? -1) : -1;
+  }
   slot.gen = (slot.gen + 1) | 0;
 }
