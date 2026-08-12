@@ -118,6 +118,11 @@ export function ShortcutsHelp() {
                     click a pane to key-focus (edit keys follow focused pane;
                     space/undo are global)
                   </Li>
+                  <Li label="scroll">
+                    wheel = tracks · Shift+wheel = time ·{" "}
+                    <span className="keycap">⌘</span>+wheel = zoom ·{" "}
+                    <span className="keycap">⌘⌥</span>-drag = pan
+                  </Li>
                   <Li label="no selection">
                     <span className="keycap">←</span>/
                     <span className="keycap">→</span> move cursor ·{" "}
@@ -135,7 +140,8 @@ export function ShortcutsHelp() {
                   </Li>
                   <Li label="play">Space (from cursor)</Li>
                   <Li label="zoom">
-                    + / <span className="keycap">−</span>
+                    + / <span className="keycap">−</span> · double-click ruler
+                    = zoom to selection
                   </Li>
                   <Li label="grid">
                     <span className="keycap">⌘</span>1 /{" "}
@@ -191,11 +197,23 @@ export function ShortcutsHelp() {
                 <Sec title="midi, instruments & special">
                   <Li label="record">Shift+R</Li>
                   <Li label="computer keys as midi">M</Li>
-                  <Li label="loop">
-                    L · drag brace grips · Shift-drag ruler
-                  </Li>
+                  <Li label="loop on/off">L</Li>
                   <Li label="loop = selection">
-                    ⌘L · or double-click ruler
+                    <span className="keycap">⌘</span>L
+                  </Li>
+                  <Li label="select loop">
+                    <span className="keycap">⌘⇧</span>L · or click brace
+                  </Li>
+                  <Li label="brace keys">
+                    <span className="keycap">←</span>/
+                    <span className="keycap">→</span> nudge ·{" "}
+                    <span className="keycap">↑</span>/
+                    <span className="keycap">↓</span> by length ·{" "}
+                    <span className="keycap">⌘</span>+arrows
+                    resize/halve/double
+                  </Li>
+                  <Li label="brace mouse">
+                    drag grips · drag body · Shift-drag ruler to draw
                   </Li>
                   <Li label="move cursor">click timeline / ruler</Li>
                 </Sec>

@@ -332,8 +332,17 @@ export function ArrangementPage() {
     if (id !== MASTER_ID) engine.selectTrack(id);
     setFxTrackId((cur) => (cur === id ? null : id));
   };
-  // timeline zoom controls, filled by <Timeline> — the page key handler drives them
-  const zoomApiRef = useRef<{ zoom: (factor: number) => void } | null>(null);
+  // timeline zoom / scroll API, filled by <Timeline> — the page key handler drives zoom;
+  // the header column forwards plain-wheel vertical scroll into the same view.
+  const zoomApiRef = useRef<{
+    zoom: (factor: number) => void;
+    scrollByY: (dy: number) => void;
+  } | null>(null);
+  const headerTracksRef = useRef<HTMLDivElement>(null);
+  const onTimelineScrollY = (scrollY: number) => {
+    if (headerTracksRef.current)
+      headerTracksRef.current.style.transform = `translateY(${-scrollY}px)`;
+  };
   // ── pane KEY FOCUS (Ableton-style last-clicked area): edit keys go exclusively to
   // the focused pane. Ref for the (stable) key handler, state for the visual ring.
   const [pane, setPane] = useState<"timeline" | "editor">("timeline");
@@ -486,8 +495,13 @@ export function ArrangementPage() {
         return;
       }
       // ⌘L — set loop brace from the time / clip selection (and turn it on)
+      // ⌘⇧L — Ableton Select Loop: select everything inside the brace + focus it
       if (key === "l" && meta) {
         e.preventDefault();
+        if (e.shiftKey) {
+          engine.selectLoopContents();
+          return;
+        }
         if (!engine.loopFromSelection()) {
           const l = engine.arrangement.loop;
           if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
@@ -572,8 +586,34 @@ export function ArrangementPage() {
       if (meta && e.key.toLowerCase() === "c") { if (engine.selClips.size) { e.preventDefault(); engine.copySelection(); } return; }
       if (meta && e.key.toLowerCase() === "x") { if (engine.selClips.size) { e.preventDefault(); engine.cutSelection(); setEditSel(null); } return; }
       if (meta && e.key.toLowerCase() === "v") { if (engine.hasClipboard()) { e.preventDefault(); engine.pasteClipboard(); } return; }
-      // arrow keys — SELECTION WINS (nudge/resize/track-hop); with nothing selected
-      // they move the merged cursor instead (Ableton's context model).
+      // arrow keys — brace focus wins (Ableton), then selection, then cursor
+      if (engine.braceFocus && engine.arrangement.loop) {
+        const grid = engine.snapBeats > 0 ? engine.snapBeats : 1;
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          if (meta) engine.resizeLoopBrace(-grid);
+          else engine.nudgeLoopBrace(-grid);
+          return;
+        }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          if (meta) engine.resizeLoopBrace(grid);
+          else engine.nudgeLoopBrace(grid);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          if (meta) engine.scaleLoopBrace(0.5);
+          else engine.nudgeLoopBraceByLength(-1);
+          return;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          if (meta) engine.scaleLoopBrace(2);
+          else engine.nudgeLoopBraceByLength(1);
+          return;
+        }
+      }
       if (engine.selClips.size) {
         // "0" — deactivate/reactivate the selected clips (Ableton)
         if (e.key === "0" && !meta) { e.preventDefault(); engine.toggleMuteSelection(); return; }
@@ -698,47 +738,62 @@ export function ArrangementPage() {
             />
           </div>
 
-          {/* track headers (left) + timeline (right), MASTER pinned below */}
+          {/* track headers (left) + timeline (right), MASTER pinned below.
+              Timeline owns vertical scroll (Ableton plain-wheel); headers follow via onScrollY. */}
           <div
             className={
-              "mx-2 mb-2 min-h-0 flex-1 overflow-hidden rounded-sm border border-line" +
+              "mx-2 mb-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-sm border border-line" +
               (editorOpen && paneShown === "timeline" ? focusRing : "")
             }
           >
-            <div className="flex">
-              <div className="w-60 shrink-0 border-r border-line bg-[#0e0e12]">
-                <div className="border-b border-line" style={{ height: HEAD_H }} />
-                {tracks.map((t) => (
-                  <TrackHeader
-                    key={t.id}
-                    t={t}
-                    armed={eng.armedChannel === t.id}
-                    arming={
-                      eng.armedChannel === t.id &&
-                      t.kind === "audio" &&
-                      eng.inputStatus === "pending"
-                    }
-                    selected={eng.selTrackId === t.id}
-                    fxOpen={fxTrackId === t.id}
-                    onArm={tryArm}
-                    onFx={toggleFx}
-                  />
-                ))}
-                {tracks.length === 0 && (
-                  <div className="px-2.5 py-3 font-mono text-[9px] leading-snug text-faint">
-                    no tracks — add midi / drum / audio above, then double-click a
-                    lane.
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <div
+                className="flex w-60 shrink-0 flex-col overflow-hidden border-r border-line bg-[#0e0e12]"
+                onWheel={(e) => {
+                  // headers: plain wheel scrolls tracks (same axis as timeline). Shift does
+                  // NOT pan time here — horizontal scroll only when the pointer is over
+                  // the timeline canvas (Ableton + the requested gesture).
+                  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+                  e.preventDefault();
+                  zoomApiRef.current?.scrollByY(e.deltaY);
+                }}
+              >
+                <div className="shrink-0 border-b border-line" style={{ height: HEAD_H }} />
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <div ref={headerTracksRef} className="will-change-transform">
+                    {tracks.map((t) => (
+                      <TrackHeader
+                        key={t.id}
+                        t={t}
+                        armed={eng.armedChannel === t.id}
+                        arming={
+                          eng.armedChannel === t.id &&
+                          t.kind === "audio" &&
+                          eng.inputStatus === "pending"
+                        }
+                        selected={eng.selTrackId === t.id}
+                        fxOpen={fxTrackId === t.id}
+                        onArm={tryArm}
+                        onFx={toggleFx}
+                      />
+                    ))}
+                    {tracks.length === 0 && (
+                      <div className="px-2.5 py-3 font-mono text-[9px] leading-snug text-faint">
+                        no tracks — add midi / drum / audio above, then double-click a
+                        lane.
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
-              <div className="min-w-0 flex-1">
+              <div className="min-h-0 min-w-0 flex-1">
                 <Timeline
-                  height={Math.max(160, HEAD_H + tracks.length * ROW_H)}
                   onEditClip={(trackId, clipId) => {
                     setEditSel({ trackId, clipId });
                     focusPane("editor");
                   }}
                   zoomApiRef={zoomApiRef}
+                  onScrollY={onTimelineScrollY}
                 />
               </div>
             </div>

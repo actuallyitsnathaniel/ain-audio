@@ -5,7 +5,7 @@
 // Product on top: Retune Speed / Humanize / Flex / Nat Vib / sticky. Latency N/2.
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-11g2n5e-14close";
+const CENTINEL_BUILD = "2026-08-11g2n5i-flatslew";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -1999,27 +1999,27 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     // quietPark never sticks, hard taper parks want ~25¢ then collapses.
     // Gate on *live* natural too — lockedDet lag + stale sticky caused lag-dips.
     const sticky = this._committedTgt;
-    const flatOfSticky = live <= sticky + 0.08;
-    const ownRad = flatOfSticky ? 0.95 : 0.48;
-    const ownVel = flatOfSticky
-      ? GESTURE_VEL_ST_S * 1.7
-      : GESTURE_VEL_ST_S * 0.95;
+    // Flat-only arm: 14s sits 25–90¢ under sticky. Sharp-side finish yanks
+    // wet below dry (lag-dips @ ~5s / ~10s / ~16s). Hysteresis on the hold
+    // so brief YIN chatter across center doesn't drop the 14s finish.
+    const flatOfSticky = live <= sticky + 0.08 && det <= sticky + 0.08;
     const ownedSustainNow =
       !justCommitted &&
       !midzone &&
       !this._pendingHold &&
       this._noteAgeMs >= 28 &&
-      this._pitchVel < ownVel &&
-      Math.abs(det - sticky) <= ownRad &&
-      Math.abs(live - sticky) <= ownRad &&
+      this._pitchVel < GESTURE_VEL_ST_S * 1.7 &&
+      flatOfSticky &&
+      sticky - det <= 0.95 &&
+      sticky - live <= 0.95 &&
       Math.abs(nat.tgt - sticky) < 0.25 &&
       Math.abs(rawNat.tgt - sticky) < 0.25;
-    if (ownedSustainNow) this._ownedSustainHoldMs = flatOfSticky ? 70 : 28;
+    if (ownedSustainNow) this._ownedSustainHoldMs = 58;
     else if (
       midzone ||
       this._pendingHold ||
       Math.abs(rawNat.tgt - sticky) >= 0.25 ||
-      live > sticky + 0.65 ||
+      live > sticky + 0.22 ||
       live < sticky - 0.98
     ) {
       this._ownedSustainHoldMs = 0;
@@ -2071,8 +2071,13 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         dNatRaw <= 0.42 &&
         Math.abs(rawNat.tgt - this._committedTgt) >= 0.5 &&
         this._pitchConf >= CONF_RETARGET * 0.7);
-    if ((quietPark || ownedSustain) && Math.abs(det - sticky) <= 0.9) {
-      // Owned sticky: keep finishing when dry vibrates outside hardLo (14s).
+    if (
+      (quietPark || ownedSustain) &&
+      det <= sticky + 0.08 &&
+      sticky - det <= 0.9
+    ) {
+      // Owned sticky, flat only: finish up to center (14s). Sharp-side
+      // ownedFinish scored as lag-dips (wet≪dry).
       wantBase = pullToward(
         det,
         sticky,
@@ -2080,7 +2085,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         flexCents,
         true,
       );
-      // Flat resid bias (14s); skip when sharp to avoid lag-dips.
       const resid = sticky - wantBase;
       if (resid >= 0.06 && resid <= 0.42) {
         wantBase += resid * 0.78;
@@ -2146,13 +2150,13 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           1,
           Math.max(0.78, (this._speedMs - ROBOT_LATCH_MAX_SPEED_MS) / 40),
         );
-        // Sharp owned-sustain: light bias only — heavy pull scored as lag-dips.
+        // Sharp: don't extra-bias onto center (wet≪dry lag-dips).
         const sharp = det > sticky + 0.05;
-        const bias =
-          ownedSustain && sharp ? CENTER_WANT_BIAS * 0.35 : CENTER_WANT_BIAS;
-        wantBase += (sticky - wantBase) * bias * biasScale;
-        if (flexCents < 0.5 && absPark <= 0.55 && !(ownedSustain && sharp)) {
-          wantBase += (sticky - wantBase) * 0.22;
+        if (!(ownedSustain && sharp)) {
+          wantBase += (sticky - wantBase) * CENTER_WANT_BIAS * biasScale;
+          if (flexCents < 0.5 && absPark <= 0.55) {
+            wantBase += (sticky - wantBase) * 0.22;
+          }
         }
       }
     }
@@ -2163,7 +2167,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     } else {
       let a = WANT_BASE_SLEW_STABLE;
       if (isGesture || midzone) a = WANT_BASE_SLEW_GESTURE;
-      else if (ownedSustain) {
+      else if (ownedSustain && det <= sticky + 0.08) {
         a = 0.55;
         const looseCents =
           Math.abs(this._wantBaseSlew - this._committedTgt) * 100;
@@ -2905,11 +2909,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const knobSpd = Math.max(0.5, this._speedMs);
     const audErrPre =
       Math.abs(this._audibleWant - this._committedTgt) * 100;
+    const audFlat =
+      this._audibleWant <= this._committedTgt + 0.08;
     // g3: mild dry wobble resets stablePitchMs; still finish *existing* loose
     // parks (not mid-scoop — that regressed dips on g3c).
+    // Flat-only speedup: sharp-side chase was wet≪dry lag-dips.
     const parkFinish =
       this._stablePitchMs >= STABLE_PITCH_MS ||
-      (audErrPre >= LOOSE_HOLD_LO_CENTS &&
+      (audFlat &&
+        audErrPre >= LOOSE_HOLD_LO_CENTS &&
         audErrPre <= LOOSE_HOLD_HI_CENTS &&
         this._noteAgeMs >= 40 &&
         this._pitchVel < GESTURE_VEL_ST_S);
@@ -2918,6 +2926,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     // chase stays floored / gated. Allow loose-band finish through commit-soft.
     const looseBandFinish =
       softPsola &&
+      audFlat &&
       audErrPre >= 15 &&
       audErrPre <= 35 &&
       this._noteAgeMs >= 28 &&

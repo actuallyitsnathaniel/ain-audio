@@ -5,7 +5,11 @@
 // drag the right edge to resize, ⌥-drag/⌘D to duplicate, double-click a MIDI clip
 // to edit it below, right-click for the menu. The top ruler shows bars + the loop
 // brace + playhead; click/drag seeks, drag brace grips/body to edit the loop,
-// Shift-drag paints a new brace. Double-click ruler → loop from selection / toggle.
+// Shift-drag paints a new brace. Double-click ruler → zoom to selection (Ableton).
+//
+// Wheel (Ableton Arrangement): plain = vertical track scroll · Shift = horizontal
+// time scroll · ⌘/Ctrl = zoom around cursor. Trackpad deltaX always pans time.
+// ⌘⌥-drag (Ctrl+Alt) pans both axes (hand tool).
 
 import { useEffect, useRef } from "react";
 import type { MutableRefObject, PointerEvent as ReactPointerEvent } from "react";
@@ -42,30 +46,52 @@ type Drag =
   /** Resize existing brace start / end grip. */
   | { mode: "brace-edge"; which: "start" | "end" }
   /** Slide the whole brace; `grab` is pointer beat at drag start. */
-  | { mode: "brace-move"; grab: number; baseStart: number; baseEnd: number }
+  | { mode: "brace-move"; grab: number; baseStart: number; baseEnd: number; moved: boolean }
+  // ⌘⌥ / middle-button pan (Ableton hand tool)
+  | { mode: "pan"; startX: number; startY: number; baseX: number; baseY: number }
   // drag over empty lane space: paint a time selection + marquee-select intersecting clips
   | { mode: "marquee"; x0: number; y0: number; anchorBeat: number; anchorTrack: number; moved: boolean }
   | null;
 
 export function Timeline({
-  height = 320,
+  height,
   onEditClip,
   zoomApiRef,
+  onScrollY,
 }: {
+  /** Fixed px height; omit to fill the parent (`h-full`). */
   height?: number;
   onEditClip: (trackId: string, clipId: string) => void;
   // filled by Timeline for the page's keyboard authority (+/− zoom lives up there)
-  zoomApiRef?: MutableRefObject<{ zoom: (factor: number) => void } | null>;
+  zoomApiRef?: MutableRefObject<{
+    zoom: (factor: number) => void;
+    scrollByY: (dy: number) => void;
+  } | null>;
+  /** Fires when vertical track-scroll changes so the header column can stay locked. */
+  onScrollY?: (scrollY: number) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag>(null);
-  const view = useRef({ scrollX: 0, ppb: 24 });
+  const view = useRef({ scrollX: 0, scrollY: 0, ppb: 24 });
+  const onScrollYRef = useRef(onScrollY);
+  useEffect(() => {
+    onScrollYRef.current = onScrollY;
+  }, [onScrollY]);
 
   const tracks = () => engine.arrangement.tracks;
+  const contentH = () => HEAD_H + tracks().length * ROW_H;
+  const maxScrollY = (h: number) => Math.max(0, contentH() - h);
+  const setScrollY = (y: number, h: number) => {
+    const next = clamp(y, 0, maxScrollY(h));
+    if (Math.abs(next - view.current.scrollY) < 0.5) return;
+    view.current.scrollY = next;
+    onScrollYRef.current?.(next);
+  };
   const beatToX = (b: number) => KEY_W + b * view.current.ppb - view.current.scrollX;
   const xToBeat = (x: number) => (x - KEY_W + view.current.scrollX) / view.current.ppb;
-  const trackYOf = (i: number) => HEAD_H + i * ROW_H;
-  const yToTrackIndex = (y: number) => Math.floor((y - HEAD_H) / ROW_H);
+  const trackYOf = (i: number) => HEAD_H + i * ROW_H - view.current.scrollY;
+  const yToTrackIndex = (y: number) =>
+    Math.floor((y - HEAD_H + view.current.scrollY) / ROW_H);
   // snap grid from the playback pane (engine.snapBeats; 0 or ⌘ = free)
   const snapBeat = (b: number, free: boolean) => {
     const g = engine.snapBeats;
@@ -118,31 +144,47 @@ export function Timeline({
     cv.setPointerCapture(e.pointerId);
     const { x, y } = localXY(e);
 
-    // ruler: brace grips first (no modifier), then Shift/⌘-drag draws a new brace,
+    // Ableton hand tool: ⌘⌥-drag (Ctrl+Alt) or middle mouse pans the view
+    if (e.button === 1 || (e.button === 0 && cmd(e) && e.altKey)) {
+      drag.current = {
+        mode: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        baseX: view.current.scrollX,
+        baseY: view.current.scrollY,
+      };
+      return;
+    }
+
+    // ruler: brace grips first (no modifier), then Shift-drag draws a new brace,
     // bare click/drag seeks. Scrubbing QUANTIZES to the grid (⌘ = free).
     if (y < HEAD_H) {
       const raw = Math.max(0, xToBeat(x));
       const beat = Math.max(0, cmd(e) ? raw : scrubQuantize(raw));
       const grip = hitBrace(x);
       if (grip === "start" || grip === "end") {
+        engine.focusLoopBrace(true);
         drag.current = { mode: "brace-edge", which: grip };
         return;
       }
       if (grip === "body" && !e.shiftKey && !cmd(e)) {
         const loop = engine.arrangement.loop!;
+        engine.focusLoopBrace(true);
         drag.current = {
           mode: "brace-move",
           grab: beat,
           baseStart: loop.start,
           baseEnd: loop.end,
+          moved: false,
         };
         return;
       }
-      if (e.shiftKey || (cmd(e) && e.altKey)) {
-        // Shift-drag (or ⌘⌥-drag) paints a fresh brace
+      if (e.shiftKey) {
+        // Shift-drag paints a fresh brace
         drag.current = { mode: "brace-draw", anchor: beat };
         return;
       }
+      engine.focusLoopBrace(false);
       engine.seekArrangement(beat);
       drag.current = { mode: "seek", last: beat };
       return;
@@ -207,7 +249,8 @@ export function Timeline({
     const cv = ref.current;
     if (cv && cv.style.cursor !== c) cv.style.cursor = c;
   };
-  const hoverCursor = (x: number, y: number): string => {
+  const hoverCursor = (x: number, y: number, mods?: { meta?: boolean; ctrl?: boolean; alt?: boolean }): string => {
+    if ((mods?.meta || mods?.ctrl) && mods?.alt) return "grab"; // hand tool cue
     if (y < HEAD_H) {
       const grip = hitBrace(x);
       if (grip === "start" || grip === "end") return "ew-resize";
@@ -224,6 +267,7 @@ export function Timeline({
     slip: "ew-resize",
     marquee: "crosshair",
     seek: "pointer",
+    pan: "grabbing",
     "brace-draw": "col-resize",
     "brace-edge": "ew-resize",
     "brace-move": "grabbing",
@@ -233,12 +277,18 @@ export function Timeline({
     const d = drag.current;
     if (!d) {
       const p = localXY(e);
-      setCursor(hoverCursor(p.x, p.y));
+      setCursor(hoverCursor(p.x, p.y, { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey }));
       return;
     }
     setCursor(DRAG_CURSOR[d.mode] || "default");
     const { x } = localXY(e);
     const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
+    if (d.mode === "pan") {
+      const cv = ref.current!;
+      view.current.scrollX = Math.max(0, d.baseX - (e.clientX - d.startX));
+      setScrollY(d.baseY - (e.clientY - d.startY), cv.clientHeight);
+      return;
+    }
     if (d.mode === "seek") {
       const target = Math.max(0, cmd(e) ? xToBeat(x) : scrubQuantize(xToBeat(x)));
       if (Math.abs(target - d.last) > 1e-9) {
@@ -248,7 +298,10 @@ export function Timeline({
     } else if (d.mode === "brace-draw") {
       const s = Math.min(d.anchor, beat);
       const en = Math.max(d.anchor, beat);
-      if (en > s) engine.setArrangementLoop(s, en, true);
+      if (en > s) {
+        engine.setArrangementLoop(s, en, true);
+        engine.focusLoopBrace(true);
+      }
     } else if (d.mode === "brace-edge") {
       const loop = engine.arrangement.loop;
       if (!loop) return;
@@ -263,7 +316,9 @@ export function Timeline({
       const len = d.baseEnd - d.baseStart;
       let start = d.baseStart + (beat - d.grab);
       if (start < 0) start = 0;
-      engine.setArrangementLoop(start, start + len, true);
+      // ignore sub-grid jitter so a click (Select Loop) isn't promoted to a drag
+      if (Math.abs(start - d.baseStart) > 1e-3) d.moved = true;
+      if (d.moved) engine.setArrangementLoop(start, start + len, true);
     } else if (d.mode === "move") {
       if (!d.moved) engine.pushUndo(); // snapshot ONCE at the start of the drag
       if (!d.moved && d.dup) {
@@ -349,21 +404,55 @@ export function Timeline({
       engine.setInsertBeat(Math.max(0, snapBeat(xToBeat(x), cmd(e))));
       engine.clearSelection();
     }
+    // Ableton: clicking the brace body (no drag) = Select Loop
+    if (d?.mode === "brace-move" && !d.moved) {
+      engine.selectLoopContents();
+    }
     drag.current = null;
     const p = localXY(e);
-    setCursor(hoverCursor(p.x, p.y)); // back to the hover state under the pointer
+    setCursor(hoverCursor(p.x, p.y, { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey }));
+  };
+
+  const zoomToRange = (startBeat: number, endBeat: number) => {
+    const cv = ref.current;
+    if (!cv || endBeat <= startBeat + 1e-6) return;
+    const w = cv.clientWidth;
+    const pad = 0.08; // leave a little air on each side
+    const span = endBeat - startBeat;
+    const usable = Math.max(40, w * (1 - pad * 2));
+    view.current.ppb = clamp(usable / span, MIN_PPB, MAX_PPB);
+    view.current.scrollX = Math.max(0, startBeat * view.current.ppb - w * pad);
   };
 
   const onDoubleClick = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = localXY(e);
     if (y < HEAD_H) {
-      // double-click ruler: if there's a time/clip selection → set the loop brace to
-      // it; otherwise toggle loop on/off (Ableton-ish "make this the loop")
-      if (!engine.loopFromSelection()) {
-        const l = engine.arrangement.loop;
-        if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
-        else engine.setArrangementLoop(0, engine.arrangement.beatsPerBar * 4, true);
+      // Ableton: double-click beat-time ruler → zoom to selection; nothing selected → zoom out
+      const ts = engine.timeSel;
+      if (ts && ts.end > ts.start + 1e-6) {
+        zoomToRange(ts.start, ts.end);
+        return;
       }
+      if (engine.selClips.size) {
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (const t of tracks())
+          for (const c of t.clips) {
+            if (!engine.selClips.has(c.id)) continue;
+            lo = Math.min(lo, c.startBeat);
+            hi = Math.max(hi, c.startBeat + c.lengthBeats);
+          }
+        if (hi > lo) {
+          zoomToRange(lo, hi);
+          return;
+        }
+      }
+      // zoom out to show the arrangement
+      let end = engine.arrangement.beatsPerBar * 8;
+      for (const t of tracks())
+        for (const c of t.clips)
+          end = Math.max(end, c.startBeat + c.lengthBeats);
+      zoomToRange(0, Math.max(end, engine.arrangement.beatsPerBar * 4));
       return;
     }
     const hit = hitClip(x, y);
@@ -407,6 +496,12 @@ export function Timeline({
             hint: "⌘L",
             disabled: !engine.timeSel && engine.selClips.size === 0,
             onClick: () => engine.loopFromSelection(),
+          },
+          {
+            label: "select loop contents",
+            hint: "⌘⇧L",
+            disabled: !loop || loop.end <= loop.start,
+            onClick: () => engine.selectLoopContents(),
           },
           {
             label: "loop 4 bars from here",
@@ -512,25 +607,46 @@ export function Timeline({
     if (created) { engine.selectClip(created.id); onEditClip(track.id, created.id); }
   };
 
-  // wheel: horizontal scroll; ⌘/ctrl = zoom around cursor
+  // wheel — Ableton Arrangement mapping (same as the piano roll):
+  //   plain      → vertical track scroll
+  //   Shift      → horizontal time scroll (mouse must be over the timeline)
+  //   ⌘ / Ctrl   → zoom around cursor
+  //   trackpad X → horizontal time scroll (no Shift needed)
   useEffect(() => {
     const cv = ref.current;
     if (!cv) return;
     const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
       const v = view.current;
       if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
         const rect = cv.getBoundingClientRect();
         const cx = e.clientX - rect.left;
         const beatAt = xToBeat(cx);
         v.ppb = clamp(v.ppb * (e.deltaY < 0 ? 1.1 : 1 / 1.1), MIN_PPB, MAX_PPB);
         v.scrollX = Math.max(0, beatAt * v.ppb - (cx - KEY_W));
-      } else {
-        v.scrollX = Math.max(0, v.scrollX + (e.deltaX || e.deltaY));
+        return;
+      }
+      if (e.shiftKey) {
+        e.preventDefault();
+        // Shift converts a vertical wheel into horizontal time scroll
+        v.scrollX = Math.max(0, v.scrollX + (e.deltaY || e.deltaX));
+        return;
+      }
+      // native horizontal swipe (trackpad) pans time; vertical scrolls tracks
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        e.preventDefault();
+        v.scrollX = Math.max(0, v.scrollX + e.deltaX);
+        return;
+      }
+      if (e.deltaY) {
+        e.preventDefault();
+        setScrollY(v.scrollY + e.deltaY, cv.clientHeight);
       }
     };
     cv.addEventListener("wheel", onWheel, { passive: false });
     return () => cv.removeEventListener("wheel", onWheel);
+    // setScrollY closes over stable refs; re-binding every render would thrash listeners
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // keyboard zoom (+/−, routed from the page's key handler): same math as ⌘+wheel,
@@ -547,10 +663,16 @@ export function Timeline({
         v.ppb = clamp(v.ppb * factor, MIN_PPB, MAX_PPB);
         v.scrollX = Math.max(0, beatAt * v.ppb - (cx - KEY_W));
       },
+      scrollByY: (dy: number) => {
+        const cv = ref.current;
+        if (!cv) return;
+        setScrollY(view.current.scrollY + dy, cv.clientHeight);
+      },
     };
     return () => {
       zoomApiRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomApiRef]);
 
   // ── render ──
@@ -567,6 +689,8 @@ export function Timeline({
     const g = cv.getContext("2d");
     if (!g) return;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // keep vertical scroll in range if tracks were added/removed
+    if (view.current.scrollY > maxScrollY(h)) setScrollY(view.current.scrollY, h);
     // follow-playhead: keep the playhead within a comfortable band by scrolling the view
     // (only while playing, following, and not mid-drag so it never fights a user scroll).
     if (engine.followPlayhead && engine.sequencePlaying && engine.arrangeMode && !drag.current) {
@@ -592,9 +716,16 @@ export function Timeline({
     const labelEveryBeat = beatPx >= 22;
     const showBeatLines = beatPx >= 12;
 
-    // track lane backgrounds + separators
+    // lanes + clips live under the sticky ruler — clip so scrollY never paints over it
+    g.save();
+    g.beginPath();
+    g.rect(0, HEAD_H, w, Math.max(0, h - HEAD_H));
+    g.clip();
+
+    // track lane backgrounds + separators (skip fully off-screen rows)
     tracks().forEach((_, i) => {
       const y = trackYOf(i);
+      if (y + ROW_H < HEAD_H || y > h) return;
       g.fillStyle = i % 2 === 0 ? "#101014" : "#0e0e12";
       g.fillRect(0, y, w, ROW_H);
       g.fillStyle = "rgba(255,255,255,0.05)";
@@ -625,98 +756,14 @@ export function Timeline({
       }
     }
 
-    // ruler bg + loop brace + ticks / labels
-    g.fillStyle = "#121216";
-    g.fillRect(0, 0, w, HEAD_H);
-    // subtle top edge + baseline
-    g.fillStyle = "rgba(255,255,255,0.04)";
-    g.fillRect(0, 0, w, 1);
-    g.fillStyle = "rgba(255,255,255,0.1)";
-    g.fillRect(0, HEAD_H - 1, w, 1);
-
+    // loop region shade through the lanes (ruler brace drawn later, sticky)
     const loop = engine.arrangement.loop;
     if (loop?.on) {
       const lx = beatToX(loop.start);
       const lw = Math.max(2, (loop.end - loop.start) * view.current.ppb);
-      // shade the loop region down through the lanes (reads as a real brace, not a
-      // ruler-only decoration)
       g.fillStyle = "color-mix(in srgb, " + ac + " 7%, transparent)";
       g.fillRect(lx, HEAD_H, lw, h - HEAD_H);
-      g.fillStyle = "color-mix(in srgb, " + ac + " 28%, transparent)";
-      g.fillRect(lx, 1, lw, HEAD_H - 3);
-      g.strokeStyle = ac;
-      g.globalAlpha = 0.9;
-      g.lineWidth = 1;
-      g.strokeRect(lx + 0.5, 1.5, lw - 1, HEAD_H - 4);
-      // chunky end grips (draggable — no Shift required)
-      g.globalAlpha = 1;
-      g.fillStyle = ac;
-      g.fillRect(lx, 2, 3, HEAD_H - 5);
-      g.fillRect(lx + lw - 3, 2, 3, HEAD_H - 5);
-      // little triangles so grips read as handles
-      g.beginPath();
-      g.moveTo(lx + 4, 4);
-      g.lineTo(lx + 4, HEAD_H - 5);
-      g.lineTo(lx + 9, HEAD_H / 2);
-      g.closePath();
-      g.fill();
-      g.beginPath();
-      g.moveTo(lx + lw - 4, 4);
-      g.lineTo(lx + lw - 4, HEAD_H - 5);
-      g.lineTo(lx + lw - 9, HEAD_H / 2);
-      g.closePath();
-      g.fill();
     }
-
-    // ticks + bar.beat labels (1-based)
-    g.font = "8px ui-monospace, monospace";
-    for (let b = firstBeat; b <= lastBeat; b++) {
-      const x = beatToX(b);
-      if (x < KEY_W - 1 || x > w) continue;
-      const isBar = b % bpb === 0;
-      if (!isBar && !showBeatLines) continue;
-      // tick marks from the baseline up
-      const tickH = isBar ? 8 : labelEveryBeat ? 5 : 3;
-      g.fillStyle = isBar ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.12)";
-      g.fillRect(x, HEAD_H - 1 - tickH, 1, tickH);
-      if (!isBar && !labelEveryBeat) continue;
-      const bar = Math.floor(b / bpb) + 1;
-      const beat = (b % bpb) + 1;
-      if (isBar) {
-        g.fillStyle = bar === 1 ? ac : "#8a8a96";
-        g.font = "bold 8px ui-monospace, monospace";
-        g.fillText(String(bar), x + 3, 11);
-        g.font = "8px ui-monospace, monospace";
-        if (labelEveryBeat) {
-          g.fillStyle = "#55555e";
-          g.fillText(".1", x + 3 + g.measureText(String(bar)).width, 11);
-        }
-      } else {
-        g.fillStyle = "#4a4a52";
-        g.fillText(String(beat), x + 2, 11);
-      }
-    }
-
-    // snap cue — right edge of ruler
-    const snapLab =
-      snap === 0
-        ? "free"
-        : snap >= bpb
-          ? "bar"
-          : snap === 1
-            ? "1/4"
-            : snap === 0.5
-              ? "1/8"
-              : snap === 0.25
-                ? "1/16"
-                : snap === 0.125
-                  ? "1/32"
-                  : String(snap);
-    g.font = "7px ui-monospace, monospace";
-    g.fillStyle = "rgba(255,255,255,0.28)";
-    const cue = "snap " + snapLab;
-    const cwCue = g.measureText(cue).width;
-    g.fillText(cue, w - cwCue - 6, 10);
 
     // time selection band (the marquee / drag-select highlight over its track span)
     const ts = engine.timeSel;
@@ -728,21 +775,19 @@ export function Timeline({
         if (!ts.trackIds.includes(tracks()[i].id)) continue;
         g.fillRect(tx, trackYOf(i), tw, ROW_H);
       }
-      // range edges in the ruler
+      // range edges through the lanes
       g.strokeStyle = "color-mix(in srgb, " + ac + " 60%, transparent)";
       g.lineWidth = 1;
       g.beginPath();
       g.moveTo(tx + 0.5, HEAD_H); g.lineTo(tx + 0.5, h);
       g.moveTo(tx + tw + 0.5, HEAD_H); g.lineTo(tx + tw + 0.5, h);
       g.stroke();
-      // ruler highlight for the selection span
-      g.fillStyle = "color-mix(in srgb, " + ac + " 18%, transparent)";
-      g.fillRect(tx, 1, tw, HEAD_H - 3);
     }
 
     // clips
     tracks().forEach((t, i) => {
       const y = trackYOf(i);
+      if (y + ROW_H < HEAD_H || y > h) return;
       const base = CLIP_COLOR[t.kind] || "#4a7fd4";
       t.clips.forEach((c) => {
         const x = beatToX(c.startBeat);
@@ -981,6 +1026,105 @@ export function Timeline({
       }
     }
 
+    g.restore(); // end lane clip — sticky ruler draws on top
+
+    // ── sticky beat-time ruler (Ableton: stays put while tracks scroll) ──
+    g.fillStyle = "#121216";
+    g.fillRect(0, 0, w, HEAD_H);
+    g.fillStyle = "rgba(255,255,255,0.04)";
+    g.fillRect(0, 0, w, 1);
+    g.fillStyle = "rgba(255,255,255,0.1)";
+    g.fillRect(0, HEAD_H - 1, w, 1);
+
+    if (loop?.on) {
+      const lx = beatToX(loop.start);
+      const lw = Math.max(2, (loop.end - loop.start) * view.current.ppb);
+      const focused = engine.braceFocus;
+      g.fillStyle = focused
+        ? "color-mix(in srgb, " + ac + " 42%, transparent)"
+        : "color-mix(in srgb, " + ac + " 28%, transparent)";
+      g.fillRect(lx, 1, lw, HEAD_H - 3);
+      g.strokeStyle = ac;
+      g.globalAlpha = focused ? 1 : 0.9;
+      g.lineWidth = focused ? 1.5 : 1;
+      g.strokeRect(lx + 0.5, 1.5, lw - 1, HEAD_H - 4);
+      g.globalAlpha = 1;
+      g.fillStyle = ac;
+      g.fillRect(lx, 2, 3, HEAD_H - 5);
+      g.fillRect(lx + lw - 3, 2, 3, HEAD_H - 5);
+      g.beginPath();
+      g.moveTo(lx + 4, 4);
+      g.lineTo(lx + 4, HEAD_H - 5);
+      g.lineTo(lx + 9, HEAD_H / 2);
+      g.closePath();
+      g.fill();
+      g.beginPath();
+      g.moveTo(lx + lw - 4, 4);
+      g.lineTo(lx + lw - 4, HEAD_H - 5);
+      g.lineTo(lx + lw - 9, HEAD_H / 2);
+      g.closePath();
+      g.fill();
+    }
+
+    // ticks + bar.beat labels (1-based)
+    g.font = "8px ui-monospace, monospace";
+    for (let b = firstBeat; b <= lastBeat; b++) {
+      const x = beatToX(b);
+      if (x < KEY_W - 1 || x > w) continue;
+      const isBar = b % bpb === 0;
+      if (!isBar && !showBeatLines) continue;
+      const tickH = isBar ? 8 : labelEveryBeat ? 5 : 3;
+      g.fillStyle = isBar ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.12)";
+      g.fillRect(x, HEAD_H - 1 - tickH, 1, tickH);
+      if (!isBar && !labelEveryBeat) continue;
+      const bar = Math.floor(b / bpb) + 1;
+      const beat = (b % bpb) + 1;
+      if (isBar) {
+        g.fillStyle = bar === 1 ? ac : "#8a8a96";
+        g.font = "bold 8px ui-monospace, monospace";
+        g.fillText(String(bar), x + 3, 11);
+        g.font = "8px ui-monospace, monospace";
+        if (labelEveryBeat) {
+          g.fillStyle = "#55555e";
+          g.fillText(".1", x + 3 + g.measureText(String(bar)).width, 11);
+        }
+      } else {
+        g.fillStyle = "#4a4a52";
+        g.fillText(String(beat), x + 2, 11);
+      }
+    }
+
+    // snap cue — right edge of ruler
+    {
+      const snapLab =
+        snap === 0
+          ? "free"
+          : snap >= bpb
+            ? "bar"
+            : snap === 1
+              ? "1/4"
+              : snap === 0.5
+                ? "1/8"
+                : snap === 0.25
+                  ? "1/16"
+                  : snap === 0.125
+                    ? "1/32"
+                    : String(snap);
+      g.font = "7px ui-monospace, monospace";
+      g.fillStyle = "rgba(255,255,255,0.28)";
+      const cue = "snap " + snapLab;
+      const cwCue = g.measureText(cue).width;
+      g.fillText(cue, w - cwCue - 6, 10);
+    }
+
+    // time-selection highlight in the ruler
+    if (ts) {
+      const tx = beatToX(ts.start);
+      const tw = (ts.end - ts.start) * view.current.ppb;
+      g.fillStyle = "color-mix(in srgb, " + ac + " 18%, transparent)";
+      g.fillRect(tx, 1, tw, HEAD_H - 3);
+    }
+
     // playhead
     // ── the ONE cursor (merged insert marker + playhead) ──
     // Playing → a solid white playhead. Stopped → the dotted accent EDIT cursor (where
@@ -1029,8 +1173,8 @@ export function Timeline({
   return (
     <canvas
       ref={ref}
-      className="w-full touch-none bg-inset outline-none select-none"
-      style={{ height }}
+      className="size-full touch-none bg-inset outline-none select-none"
+      style={height != null ? { height } : undefined}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

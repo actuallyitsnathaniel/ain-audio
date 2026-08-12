@@ -297,9 +297,14 @@ each other in `resolveOverlaps`; only non-selected clips under the drop get trim
 only — cross-track hops stay single-clip (or ↑↓ keys); ⌥-dup during a drag reverts to
 single-clip.
 
-**Keyboard zoom.** `+`/`−` (and ⌘+/−, intercepted from browser zoom) zoom the timeline around
-the viewport center — same math as ⌘+wheel. The Timeline publishes `{ zoom(factor) }` into a
-`zoomApiRef` prop; the page's single keyboard authority calls it (no canvas focus needed).
+**Keyboard zoom / scroll (Ableton Arrangement).** `+`/`−` (and ⌘+/−, intercepted from browser
+zoom) zoom the timeline around the viewport center — same math as ⌘+wheel. The Timeline
+publishes `{ zoom(factor), scrollByY(dy) }` into a `zoomApiRef` prop; the page's single keyboard
+authority calls zoom (no canvas focus needed), and the track-header column forwards plain-wheel
+into `scrollByY` so headers and lanes stay locked. **Wheel over the timeline canvas** matches
+Live: plain = vertical track scroll · **Shift = horizontal time scroll** (only while the pointer
+is over the timeline) · ⌘/Ctrl = zoom around cursor · trackpad δx pans time · **⌘⌥-drag** (or
+middle-mouse) is the hand-tool pan. The beat-time ruler stays sticky while tracks scroll.
 **⌘1/⌘2** step the snap grid finer/coarser, Ableton-style — **pane-aware**: with the timeline
 focused they walk the timeline ladder (bar → 1/4 → 1/8 → 1/16 → 1/32, `engine.snapBeats`);
 with the editor focused they walk the piano roll's OWN grid (`engine.rollSnapBeats`,
@@ -325,7 +330,16 @@ sorted set of every clip start/end plus 0); **Home/End** = `cursorToStart`/`curs
 (beat 0 / arrangement end). While STOPPED these move the marker; while PLAYING they route
 through `seekArrangement`, so arrow-scrub honors launch quantize below (deliberate — queued,
 Ableton clip-launch feel; confirmed by the user). With clips selected, ←/→ keep their
-nudge/resize meaning (unchanged).
+nudge/resize meaning (unchanged) — unless the **loop brace** has focus (see below).
+
+**Loop brace (Ableton Arrangement Loop).** `L` toggles the brace on/off. **⌘L** = Loop Selection
+(set brace to the time/clip selection and enable; falls back to toggle with no selection).
+**⌘⇧L** / clicking the brace body (no drag) = Select Loop (`selectLoopContents`) — time-selects
+the brace range, selects intersecting clips, and sets `braceFocus` so arrow keys edit the brace:
+←/→ nudge by the snap grid · ↑/↓ move by the brace's own length · ⌘←/→ shorten/lengthen ·
+⌘↑/↓ halve/double. Drag left/right grips to resize, drag the body to move, Shift-drag the ruler
+to paint a new brace. Double-click the ruler zooms to the selection (or zooms out) — Ableton's
+beat-time-ruler gesture; it no longer sets the loop.
 
 **Launch quantize** (`engine.launchQuant`, beats, 0 = off; separate `launch` selector in the
 playback pane, persisted `ain-launch-quant`). While PLAYING, `seekArrangement` doesn't jump

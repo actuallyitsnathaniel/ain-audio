@@ -205,7 +205,7 @@ export function PlaybackPane() {
           <button
             className={ctl + px + onOff(loopOn)}
             onClick={toggleLoop}
-            title="toggle loop (L) · drag brace grips on the ruler · Shift-drag to draw"
+            title="toggle loop (L) · drag brace grips on the ruler · Shift-drag to draw · click brace = select loop (⌘⇧L)"
           >
             loop
           </button>

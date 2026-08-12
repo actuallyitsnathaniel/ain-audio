@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build era `g2n5e-14close`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build era `g2n5i-flatslew`).
 
 Interactive companion (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx).
@@ -38,6 +38,7 @@ Interactive companion (open beside chat):
 - [x] Soften g2m9 Cher snap → cold blend 0.94 + advance floor (g2n)
 - [ ] Crossfade splice ↔ PSOLA on formant automation
 - [x] Finish ~14s toward goal ≤15 (~48%) — `ownedSustain` flat finish (g2n5e)
+- [x] Dip trim without reopening 14s — sharp-side finish off (g2n5i; 8/441→7/383)
 
 ### G3 — Sticky / DC finish
 - [x] Orphan sticky ungated (final/near-sticky/hold) + faster orphan Decay blend
@@ -54,19 +55,19 @@ Interactive companion (open beside chat):
   renamed, or isolated once formant crossfade exists and 14s/20s gaps are closed.
   Killing formant mode to “purge Lent” would be the wrong move.
 
-## Current scorecard (`g2n5e-14close`, pop = splice + soft Decay)
+## Current scorecard (`g2n5i-flatslew`, pop = splice + soft Decay)
 
-| Metric | g2n3 | **g2n5e** | goal |
+| Metric | g2n5e | **g2n5i** | goal |
 |---|---|---|---|
-| ≤15¢ | 59.8% | **63.3%** | ~54% |
-| note-disagree | 2.8% | **2.7%** | — |
-| dry✓/wet✗ | 21 | **21** | — |
-| loose runs | 7 | **4** | 2 |
-| dips | 5 / 279ms | **8 / 441ms** | — |
-| clicks wet/dry | 21/21 | **21/21** | — |
+| ≤15¢ | 63.3% | **62.7%** | ~54% |
+| note-disagree | 2.7% | **2.8%** | — |
+| dry✓/wet✗ | 21 | **23** | — |
+| loose runs | 4 | **3** | 2 |
+| dips | 8 / 441ms | **7 / 383ms** | — |
+| clicks wet/dry | 21/21 | **20/21** | — |
 | shake | 0.26 | 0.26 | — |
 
-Listen: ~20s wet≤15 **46%** (= goal). ~14s wet≤15 **51%** (goal 48%) — closed via flat `ownedSustain` (quietPark vel gate was flapping at 5–12 st/s).
+Listen: ~20s wet≤15 **46%** (= goal). ~14s wet≤15 **51%** (goal 48%) — held. Sharp-side ownedFinish was the extra lag-dips; further pin (g2n5h) hit 3/151ms but dropped 14s to 43%.
 
 Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true` (splice pe only).
 

@@ -4227,6 +4227,8 @@ class AudioEngine {
     const ts = this.timeSel;
     if (ts && ts.end > ts.start + 1e-6) {
       this.setArrangementLoop(ts.start, ts.end, true);
+      this.braceFocus = true;
+      this.emit("select");
       return true;
     }
     if (this.selClips.size) {
@@ -4241,10 +4243,86 @@ class AudioEngine {
       }
       if (hi > lo + 1e-6) {
         this.setArrangementLoop(lo, hi, true);
+        this.braceFocus = true;
+        this.emit("select");
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Ableton "Select Loop" / ⌘⇧L: time-select the brace range and select every clip
+   * that intersects it. Puts keyboard focus on the brace so ←/→/↑/↓ edit the brace
+   * (not the clips) until something else is clicked.
+   */
+  braceFocus = false;
+  focusLoopBrace(on = true) {
+    this.braceFocus = on;
+    this.emit("select");
+  }
+  selectLoopContents(): boolean {
+    const loop = this.arrangement.loop;
+    if (!loop || loop.end <= loop.start + 1e-6) return false;
+    const trackIds: string[] = [];
+    const ids: string[] = [];
+    for (const t of this.arrangement.tracks) {
+      let hit = false;
+      for (const c of t.clips) {
+        if (c.startBeat < loop.end && c.startBeat + c.lengthBeats > loop.start) {
+          ids.push(c.id);
+          hit = true;
+        }
+      }
+      if (hit) trackIds.push(t.id);
+    }
+    this.selClips = new Set(ids);
+    this._primaryClipId = ids.length ? ids[ids.length - 1] : null;
+    this.timeSel = {
+      start: loop.start,
+      end: loop.end,
+      trackIds: trackIds.length ? trackIds : this.arrangement.tracks.map((t) => t.id),
+    };
+    this.braceFocus = true;
+    this.emit("select");
+    return true;
+  }
+
+  /** Nudge the whole brace by `delta` beats (Ableton ←/→ with brace focus). */
+  nudgeLoopBrace(delta: number) {
+    const loop = this.arrangement.loop;
+    if (!loop) return;
+    const len = loop.end - loop.start;
+    const start = Math.max(0, loop.start + delta);
+    this.setArrangementLoop(start, start + len, loop.on);
+    this.braceFocus = true;
+    this.emit("select");
+  }
+
+  /** Shift the brace by ± its own length (Ableton ↑/↓ with brace focus). */
+  nudgeLoopBraceByLength(dir: -1 | 1) {
+    const loop = this.arrangement.loop;
+    if (!loop) return;
+    this.nudgeLoopBrace(dir * (loop.end - loop.start));
+  }
+
+  /** Shorten/lengthen the brace end by `delta` (Ableton ⌘←/→ with brace focus). */
+  resizeLoopBrace(delta: number) {
+    const loop = this.arrangement.loop;
+    if (!loop) return;
+    this.setArrangementLoop(loop.start, loop.end + delta, loop.on);
+    this.braceFocus = true;
+    this.emit("select");
+  }
+
+  /** Double or halve brace length from the start (Ableton ⌘↑/↓ with brace focus). */
+  scaleLoopBrace(factor: 0.5 | 2) {
+    const loop = this.arrangement.loop;
+    if (!loop) return;
+    const len = Math.max(0.25, (loop.end - loop.start) * factor);
+    this.setArrangementLoop(loop.start, loop.start + len, loop.on);
+    this.braceFocus = true;
+    this.emit("select");
   }
 
   // Voice one drum lane at `when`, into `dest`. Sample path reuses the same
@@ -5776,6 +5854,7 @@ class AudioEngine {
   // replace the selection with a single clip (a bare click); also sets the time range to
   // its span so time-ops target it (Ableton behavior). null clears the selection.
   selectClip(clipId: string | null) {
+    this.braceFocus = false;
     this.selClips = new Set(clipId ? [clipId] : []);
     this._primaryClipId = clipId;
     this.timeSel = clipId ? this._clipTimeRange(clipId) : null;
@@ -5783,6 +5862,7 @@ class AudioEngine {
     this.emit("select");
   }
   toggleClipInSel(clipId: string) {
+    this.braceFocus = false;
     if (this.selClips.has(clipId)) {
       this.selClips.delete(clipId);
       if (this._primaryClipId === clipId)
@@ -5796,12 +5876,14 @@ class AudioEngine {
   }
   // set the whole selection at once (used by the marquee)
   setSelectedClips(ids: string[]) {
+    this.braceFocus = false;
     this.selClips = new Set(ids);
     if (ids.length) this._primaryClipId = ids[ids.length - 1];
     else this._primaryClipId = null;
     this.emit("select");
   }
   clearSelection() {
+    this.braceFocus = false;
     this.selClips = new Set();
     this._primaryClipId = null;
     this._selTrackId = null;
@@ -5818,6 +5900,7 @@ class AudioEngine {
   selectTrack(trackId: string) {
     const t = this.arrangement.tracks.find((x) => x.id === trackId);
     if (!t) return;
+    this.braceFocus = false;
     this.setSelectedClips(t.clips.map((c) => c.id));
     const end = Math.max(0, ...t.clips.map((c) => c.startBeat + c.lengthBeats));
     this.timeSel = end > 0 ? { start: 0, end, trackIds: [trackId] } : null;
@@ -5830,6 +5913,7 @@ class AudioEngine {
   }
   // a time range spanning tracks (the marquee / drag-select on empty lane space)
   setTimeSel(start: number, end: number, trackIds: string[]) {
+    this.braceFocus = false;
     const s = Math.max(0, Math.min(start, end));
     const e = Math.max(start, end);
     this.timeSel = e > s ? { start: s, end: e, trackIds } : null;
