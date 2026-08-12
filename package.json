@@ -12,6 +12,7 @@
     "centinel:score": "node scripts/centinel-score.mjs",
     "centinel:render": "node scripts/centinel-render.mjs",
     "centinel:loop": "node scripts/centinel-loop.mjs",
+    "centinel:listen": "node scripts/centinel-listen.mjs",
     "lint": "eslint ."
   },
   "dependencies": {

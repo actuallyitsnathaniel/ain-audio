@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build era `p2b-soft-land`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build era `g2n5e-14close`).
 
 Interactive companion (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx).
@@ -14,7 +14,7 @@ Interactive companion (open beside chat):
 
 1. **Patent-faithful core first** — detection mode (8:1 DS + \(E/H\) search) → correction mode (narrow-band recursive \(E/H\), quadratic period) → rate convert + ±1 `Cycle_period` insert/delete.
 2. **Then refine past the patent** — Retune Speed / Humanize / Flex / Nat Vib / sticky/orphan on top. Keep what beats dry_2→AT goal.
-3. **PSOLA / Fairbanks / PV** are fallbacks or optional formant paths, not the AT-matching reference.
+3. **PSOLA / Fairbanks / PV** are fallbacks or optional formant paths, not the AT-matching reference. Do not gut Lent-adjacent code until a later cleanup audit (see G4).
 
 ## Open items ledger (for the next plan)
 
@@ -32,28 +32,41 @@ Interactive companion (open beside chat):
 - [x] Rate-convert + ±1 cycle (formant-off, `CYCLE_SPLICE`)
 - [x] Pop default `formant: 0` (render preset + chip + fx defaults)
 - [x] vs Fairbanks @ f0: note-disagree **10%→~3%**
-- [x] Center ≤15¢ **46%→51.1%** (goal ~54%) via soft Decay + tighter center chase (p2)
+- [x] Center ≤15¢ **46%→63%** (goal ~54%) via soft Decay + owned-sustain flat finish
+- [x] **Listen pass** — ~20s at goal ≤15 (46%); ~14s closed (**51%** vs AT ~48%)
+- [x] Surgical fix for ~20s (cold orphan audibleWant blend + live YIN retarget)
+- [x] Soften g2m9 Cher snap → cold blend 0.94 + advance floor (g2n)
 - [ ] Crossfade splice ↔ PSOLA on formant automation
-- [ ] Listen pass vs AT goal
-- [ ] loose_runs 7→2; dip_ms back from 0
+- [x] Finish ~14s toward goal ≤15 (~48%) — `ownedSustain` flat finish (g2n5e)
 
 ### G3 — Sticky / DC finish
-- [ ] ~6s A↔B scoop wrong-note latency (note-disagree still ~3%)
-- [ ] ~10s sharp park / DC finish (center still ~2.6 pts shy of goal)
-- [ ] Orphan/sticky timing vs modern AT
+- [x] Orphan sticky ungated (final/near-sticky/hold) + faster orphan Decay blend
+- [x] ~6s / ~9.88 A↔B wrong-note frames fixed (wet now lands on A with dry/goal)
+- [x] Center bias when hard-flex residual ~40–55¢; loose chase band widened
+- [x] Listen pass (shared with G2) — ~20s + ~14s closed vs AT
+- [x] Surgical dry-through @ ~20s (orphan snap under cold Retune floor)
 
-### G4 — Stay away
+### G4 — Stay away / later
 - [x] Do not merge Smuts phase vocoder into live Centinel
+- [ ] **Later — Lent-adjacent cleanup audit:** do **not** gut Fairbanks/PSOLA now.
+  Pop/AT path already demoted them (`CYCLE_SPLICE` + `formant:0`). Revisit whether
+  Fairbanks fallback, period-PSOLA formant lane, and related gates can be slimmed,
+  renamed, or isolated once formant crossfade exists and 14s/20s gaps are closed.
+  Killing formant mode to “purge Lent” would be the wrong move.
 
-## Current scorecard (`p2b-soft-land`, pop = splice + soft Decay)
+## Current scorecard (`g2n5e-14close`, pop = splice + soft Decay)
 
-| Metric | p1-patent-core | **p2b** | goal |
+| Metric | g2n3 | **g2n5e** | goal |
 |---|---|---|---|
-| ≤15¢ | 46.4% | **51.1%** | ~54% |
-| note-disagree | 2.5% | 3.0% | — |
-| dry✓/wet✗ | 13 | 21 | — |
-| loose runs | 11 | **7** | 2 |
-| shake | 0.21 | 0.26 | — |
+| ≤15¢ | 59.8% | **63.3%** | ~54% |
+| note-disagree | 2.8% | **2.7%** | — |
+| dry✓/wet✗ | 21 | **21** | — |
+| loose runs | 7 | **4** | 2 |
+| dips | 5 / 279ms | **8 / 441ms** | — |
+| clicks wet/dry | 21/21 | **21/21** | — |
+| shake | 0.26 | 0.26 | — |
+
+Listen: ~20s wet≤15 **46%** (= goal). ~14s wet≤15 **51%** (goal 48%) — closed via flat `ownedSustain` (quietPark vel gate was flapping at 5–12 st/s).
 
 Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true` (splice pe only).
 
