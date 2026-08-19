@@ -228,16 +228,21 @@ impartialer-detail canvas (Upheaval tab).
 1. **HPS acquire** — on the existing STFT magnitude:  
    \(P(\omega)=\prod_{r=1}^{R}|X(r\omega)|\) (R≈4). Local maxima of \(P\) → at most
    \(M\) fundamental candidates (e.g. 4). Refresh on hop, not every sample.
-   **Shipped (step 1):** `runHps` in `impartialer-processor.js`; peaks may remap only
-   if they sit near \(n\cdot F_0\) (or legacy peaks when no F0 found). Amber F0 ticks
-   on the RTA.
+   **Shipped (step 1):** `runHps` in `impartialer-processor.js`; amber F0 ticks on RTA.
 2. **Isolate** — per \(F_{0,n}\), a harmonic mask / light feedback comb  
    \(H(z)=\frac{1}{1-\alpha z^{-K}}\) (\(K\approx f_s/F_0\)) as an *enhancer*, plus
    residual \(= x - \sum\) masked tracks. A comb does **not** fully null competing
    notes; do not claim demix.
+   **Shipped (step 2):** soft spectral masks — weight \(1 - |¢|/45\) on nearest
+   \(n\cdot F_0\) ladder; one \(\beta\) per F0 applied to the owned group; leftover
+   + untracked → residual. No IIR comb yet (mask is the honest isolate).
 3. **Track** — per isolated mono ring, **US5973252A recursive E/H** (same math as
    Centinel — not block \(R(\tau)\) branded “Hildebrand”). \(\varepsilon\) gate +
    quadratic \(\tau^\*\). Latency win is continuous E/H between HPS refreshes.
+   **Shipped (step 3):** hop-rate correction-mode E/H on a shared mono analysis
+   ring, seeded by each HPS \(F_0\). Refined \(F_0\) drives mask ownership + \(\beta\).
+   Fail \(\varepsilon\) → keep HPS seed. Per-track isolated rings (true demix feed)
+   still later.
 4. **Remap + sum** — one \(\beta=2^{\Delta/12}\) per track applied to the whole
    harmonic group (snap/remap/MIDI). Phase continuity via public phase-vocoder /
    instantaneous-frequency practice (Bernsee). Do **not** implement US11079418
@@ -444,7 +449,9 @@ Impartialer
 - [x] Phase 3 remap (force nearest scale degree; polyphonic-lite / per-bin)
 - [x] Detail pass: residual + peak floor + lo/mid/hi + hits (onset duck)
 - [x] Upheaval step 1: HPS acquire + harmonic-gated peak remap + RTA F0 ticks
-- [ ] Upheaval step 2+: isolate → M× E/H track → group remap
+- [x] Upheaval step 2: soft harmonic masks + one β per F0 group + residual
+- [x] Upheaval step 3: M× E/H refine (HPS-seeded, mono ring) → drive β / masks
+- [ ] Upheaval step 4+: Bernsee phase continuity / sticky slew / per-track iso rings
   (see §4.5; canvas Upheaval / Path tabs)
 
 Speccomp

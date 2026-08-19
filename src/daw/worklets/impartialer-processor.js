@@ -1,16 +1,14 @@
 // Impartialer — spectral pitch mapper
-// Phases 1–3: global transpose / snap / remap (per-peak MIDI — interim).
-// Detail pass: residual, peak floor, lo/mid/hi, hits.
-// Upheaval step 1: HPS acquire → F0 candidates gate which peaks may remap.
-// Next: isolate → M× E/H → one-β group shift (see SPECTRAL.md §4.5).
+// Upheaval: HPS acquire → soft-mask isolate → M× Hildebrand E/H refine → per-track β.
+// Next: Bernsee phase continuity + sticky slew (see SPECTRAL.md §4.5).
 //
 // Dry/wet mixes INSIDE the worklet against a latency-aligned dry delay so strength
 // blends don't comb. Bypass still runs the delay so latency stays constant when
 // toggled (neutralize-in-place).
 //
-// Unshifted bins keep input phase (not PV). PV runs only when a bin actually moves.
-// residual = wet gain on those identity bins. floor = relative peak gate.
-// lo/mid/hi scale snap/remap (splits 250 Hz / 2.5 kHz). hits ducks mapping on flux.
+// Unshifted / untracked bins keep input phase (residual). PV only when a bin moves.
+// Soft masks: weight 1 at exact n·F0 → 0 at HPS_HARM_CENTS (not a perfect demix).
+// E/H: US5973252A correction-mode window on the mono analysis ring, seeded by HPS.
 
 const PRESETS = {
   low: { fftSize: 2048, hop: 512 },
@@ -93,6 +91,15 @@ const HPS_HARM_CENTS = 45;
 const HPS_HARM = 8;
 /** Reject a new F0 within this many cents of an already-accepted one. */
 const HPS_SEP_CENTS = 70;
+
+/**
+ * US5973252A E/H correction-mode window (Centinel-faithful).
+ * Hop-rate refine on the analysis ring, seeded by HPS F0.
+ */
+const EH_TRACK_N = 8;
+const EH_EPS = 0.25;
+const EH_EPS_LOOSE = 0.45;
+const EH_RING = 2048;
 
 /**
  * Harmonic Product Spectrum on a precomputed magnitude spectrum.
@@ -198,9 +205,14 @@ function runHps(mag, half, binHz, hps, f0Hz, f0Score) {
   return nFound;
 }
 
-/** True if hz sits near n·F0 for some accepted fundamental (n=1..HPS_HARM). */
-function nearHpsHarmonic(hz, f0Hz, nF0) {
-  if (!(hz > 20) || nF0 <= 0) return false;
+/**
+ * Nearest (trackIndex, |cents|) on any n·F0 ladder, or null if outside the gate.
+ * Exclusive ownership — competing F0s: closest cents wins (not a perfect demix).
+ */
+function nearestHarmonicTrack(hz, f0Hz, nF0) {
+  if (!(hz > 20) || nF0 <= 0 || !f0Hz) return null;
+  let bestI = -1;
+  let bestAbs = HPS_HARM_CENTS + 1;
   for (let i = 0; i < nF0; i++) {
     const f0 = f0Hz[i];
     if (!(f0 > 0)) continue;
@@ -208,11 +220,106 @@ function nearHpsHarmonic(hz, f0Hz, nF0) {
       const target = f0 * n;
       if (target > hz * 1.15) break;
       if (target < hz * 0.85) continue;
-      const cents = (1200 * Math.log(hz / target)) / Math.LN2;
-      if (Math.abs(cents) <= HPS_HARM_CENTS) return true;
+      const cents = Math.abs((1200 * Math.log(hz / target)) / Math.LN2);
+      if (cents < bestAbs) {
+        bestAbs = cents;
+        bestI = i;
+      }
     }
   }
-  return false;
+  if (bestI < 0 || bestAbs > HPS_HARM_CENTS) return null;
+  return { i: bestI, cents: bestAbs };
+}
+
+function bandAmtForHz(hz, loAmt, midAmt, hiAmt, duck) {
+  let a = hz < SPLIT_LO_HZ ? loAmt : hz < SPLIT_HI_HZ ? midAmt : hiAmt;
+  return a * (1 - duck);
+}
+
+/** Read mono from analysis ring (length EH_RING). */
+function ehRingAt(ring, wr, at) {
+  const j = ((wr - at) % EH_RING + EH_RING) % EH_RING;
+  return ring[j];
+}
+
+/**
+ * Snapshot E(L), H(L) over last 2L samples (US5973252A).
+ * Writes into outE/outH scalars via return — no alloc beyond locals.
+ */
+function ehSnapshot(ring, wr, L) {
+  let E = 0;
+  let H = 0;
+  for (let j = 0; j < 2 * L; j++) {
+    const x = ehRingAt(ring, wr, j);
+    E += x * x;
+  }
+  for (let j = 0; j < L; j++) {
+    H += ehRingAt(ring, wr, j) * ehRingAt(ring, wr, j + L);
+  }
+  return { E, H };
+}
+
+/**
+ * Correction-mode E/H refine around HPS seed F0.
+ * Prealloc scratchE/scratchH length EH_TRACK_N.
+ * Returns refined Hz, or 0 if ε gate fails (caller keeps HPS).
+ *
+ * τ* via quadratic on E−2H trough (patent FIGS 5A–5C / Gemini parabola).
+ */
+function refineF0Eh(ring, wr, f0Guess, sr, scratchE, scratchH) {
+  if (!(f0Guess >= HPS_FMIN && f0Guess <= HPS_FMAX)) return 0;
+  const peMin = Math.max(16, Math.floor(sr / HPS_FMAX));
+  const peMax = Math.min((EH_RING >> 1) - 4, Math.floor(sr / HPS_FMIN));
+  let pe = sr / f0Guess;
+  if (!(pe >= peMin && pe <= peMax)) return 0;
+  pe = Math.max(peMin, Math.min(peMax, pe));
+  const L0 = Math.round(pe);
+  const half = EH_TRACK_N >> 1;
+  let off = L0 - half;
+  if (off < peMin) off = peMin;
+  if (off + EH_TRACK_N - 1 > peMax) off = Math.max(peMin, peMax - EH_TRACK_N + 1);
+
+  let bestK = -1;
+  let bestCost = Infinity;
+  let bestE = 0;
+  for (let k = 0; k < EH_TRACK_N; k++) {
+    const L = off + k;
+    const { E, H } = ehSnapshot(ring, wr, L);
+    scratchE[k] = E;
+    scratchH[k] = H;
+    if (!(E > 1e-12)) continue;
+    const cost = E - 2 * H;
+    if (cost < bestCost) {
+      bestCost = cost;
+      bestK = k;
+      bestE = E;
+    }
+  }
+  if (bestK < 0) return 0;
+  // ε gate — not periodic enough → keep HPS
+  if (bestCost > EH_EPS_LOOSE * bestE) return 0;
+  if (bestCost > EH_EPS * bestE && bestCost > 0.08 * bestE) {
+    // soft accept only if clearly the trough
+  }
+
+  let L = off + bestK;
+  if (bestK > 0 && bestK < EH_TRACK_N - 1) {
+    const c0 = scratchE[bestK - 1] - 2 * scratchH[bestK - 1];
+    const c1 = bestCost;
+    const c2 = scratchE[bestK + 1] - 2 * scratchH[bestK + 1];
+    const denom = 2 * (2 * c1 - c2 - c0);
+    if (Math.abs(denom) > 1e-18) {
+      const delta = (c2 - c0) / denom;
+      if (delta > -1.25 && delta < 1.25) L += delta;
+    }
+  }
+  if (!(L >= peMin && L <= peMax)) return 0;
+  const hz = sr / L;
+  if (!(hz >= HPS_FMIN && hz <= HPS_FMAX)) return 0;
+  // Reject wild jumps from HPS seed (> ±3 semitones) — isolation not perfect yet
+  const cents = Math.abs((1200 * Math.log(hz / f0Guess)) / Math.LN2);
+  if (cents > 300) return 0;
+  return hz;
 }
 
 function createChannel(fftSize, hop) {
@@ -308,9 +415,12 @@ function mapSemitones(midi, key, scalePcs, maxShift, force) {
 }
 
 /**
- * Analyze frame → optional per-bin snap/remap + global transpose → synthesize OLA.
- * Unshifted bins keep input phase (residual). PV only when a bin actually moves.
+ * Analyze frame → HPS F0s → harmonic soft-masks → per-track β → OLA.
+ * Untracked bins keep input phase (residual). PV only when a bin actually moves.
  * `mapMode`: "off" | "snap" | "remap"
+ *
+ * Upheaval §1–2: HPS acquire + spectral harmonic isolate (soft mask, not demix).
+ * E/H precision track is next — F0s are still HPS guesses.
  */
 function processFrame(ch, window, fftSize, hop, opts) {
   const half = fftSize / 2;
@@ -392,8 +502,7 @@ function processFrame(ch, window, fftSize, hop, opts) {
   const midAmt = Math.min(1, Math.max(0, bandMid));
   const hiAmt = Math.min(1, Math.max(0, bandHi));
 
-  // Upheaval §1 — HPS acquire (Noll). Gates which peaks may remap when F0s found.
-  // Only the analysis channel (L) recomputes; R reuses the last F0 list.
+  // §1 HPS acquire — L recomputes; R reuses F0 list
   let nF0 = 0;
   if (opts.runHps && opts.hps && opts.f0Hz && opts.f0Score) {
     nF0 = runHps(mag, half, binHz, opts.hps, opts.f0Hz, opts.f0Score);
@@ -402,43 +511,129 @@ function processFrame(ch, window, fftSize, hop, opts) {
     nF0 = opts.f0N[0] | 0;
   }
   const f0Hz = opts.f0Hz;
+  const trackRatio = opts.trackRatio;
 
-  for (let k = 0; k <= half; k++) {
-    const m = mag[k];
-    if (m < 1e-12) continue;
-
-    const hz = k * binHz;
-    let bandAmt = hz < SPLIT_LO_HZ ? loAmt : hz < SPLIT_HI_HZ ? midAmt : hiAmt;
-    bandAmt *= 1 - duck;
-
-    const isPeak =
-      k > 0 &&
-      k < half &&
-      m >= mag[k - 1] &&
-      m >= mag[k + 1] &&
-      m >= floorAbs;
-
-    // When HPS has F0s, only remap peaks that sit on a harmonic ladder.
-    // No F0s → legacy peak remap (silence / noise / below HPS band).
-    const hpsOk = nF0 <= 0 || nearHpsHarmonic(hz, f0Hz, nF0);
-
-    let ratio = pitchRatio;
-    if (mapOn && isPeak && hpsOk && bandAmt > 0.001) {
-      let fHz = (freq[k] * sampleRate) / fftSize;
-      if (!(fHz > 20 && fHz < sampleRate * 0.45)) fHz = hz;
-      const midi = 69 + (12 * Math.log(fHz / 440)) / Math.LN2;
-      const shift = mapSemitones(midi, key, scalePcs, maxShift, force);
-      if (shift !== 0) ratio *= Math.pow(2, (shift * bandAmt) / 12);
+  // §3 M× Hildebrand E/H — refine each HPS seed on the mono analysis ring
+  if (
+    opts.runHps &&
+    nF0 > 0 &&
+    f0Hz &&
+    opts.ehRing &&
+    opts.ehScratchE &&
+    opts.ehScratchH &&
+    typeof opts.ehWr === "number"
+  ) {
+    for (let i = 0; i < nF0; i++) {
+      const seed = f0Hz[i];
+      if (!(seed > 0)) continue;
+      const refined = refineF0Eh(
+        opts.ehRing,
+        opts.ehWr,
+        seed,
+        sampleRate,
+        opts.ehScratchE,
+        opts.ehScratchH,
+      );
+      if (refined > 0) f0Hz[i] = refined;
     }
+  }
 
-    const moved = Math.abs(ratio - 1) > 0.001;
-    if (moved || doGlobal) {
-      const dest = (k * ratio + 0.5) | 0;
-      if (dest < 0 || dest > half) continue;
-      synMag[dest] += m;
-      synFreq[dest] = freq[k] * ratio;
-    } else {
-      residualMag[k] = m;
+  // §2 Isolate — one β per (E/H-refined) F0 track
+  if (trackRatio && f0Hz && nF0 > 0) {
+    for (let i = 0; i < HPS_MAX_F0; i++) trackRatio[i] = pitchRatio;
+    if (mapOn) {
+      for (let i = 0; i < nF0; i++) {
+        const f0 = f0Hz[i];
+        if (!(f0 > 0)) continue;
+        const amt = bandAmtForHz(f0, loAmt, midAmt, hiAmt, duck);
+        if (amt < 0.001) {
+          trackRatio[i] = pitchRatio;
+          continue;
+        }
+        const midi = 69 + (12 * Math.log(f0 / 440)) / Math.LN2;
+        const shift = mapSemitones(midi, key, scalePcs, maxShift, force);
+        trackRatio[i] =
+          shift !== 0
+            ? pitchRatio * Math.pow(2, (shift * amt) / 12)
+            : pitchRatio;
+      }
+    }
+  }
+
+  if (nF0 > 0 && f0Hz && trackRatio) {
+    // Soft harmonic masks: owned bins take the track β; weight → residual
+    for (let k = 0; k <= half; k++) {
+      const m = mag[k];
+      if (m < 1e-12) continue;
+      const hz = k * binHz;
+      const own = nearestHarmonicTrack(hz, f0Hz, nF0);
+      if (!own) {
+        // untracked → residual (or global transpose only)
+        if (doGlobal) {
+          const dest = (k * pitchRatio + 0.5) | 0;
+          if (dest >= 0 && dest <= half) {
+            synMag[dest] += m;
+            synFreq[dest] = freq[k] * pitchRatio;
+          }
+        } else {
+          residualMag[k] = m;
+        }
+        continue;
+      }
+
+      // Soft mask weight: 1 at exact harmonic, 0 at HPS_HARM_CENTS
+      const w = 1 - own.cents / HPS_HARM_CENTS;
+      const ratio = trackRatio[own.i];
+      const moved = Math.abs(ratio - 1) > 0.001;
+      const tracked = m * w;
+      const leftover = m - tracked;
+
+      if ((moved || doGlobal) && tracked > 1e-12) {
+        const dest = (k * ratio + 0.5) | 0;
+        if (dest >= 0 && dest <= half) {
+          synMag[dest] += tracked;
+          synFreq[dest] = freq[k] * ratio;
+        }
+      } else if (tracked > 1e-12) {
+        // Tracked but unshifted — keep analysis phase (part of residual mix)
+        residualMag[k] += tracked;
+      }
+      if (leftover > 1e-12) residualMag[k] += leftover;
+    }
+  } else {
+    // No F0s — legacy peak remap (detail-pass path)
+    for (let k = 0; k <= half; k++) {
+      const m = mag[k];
+      if (m < 1e-12) continue;
+
+      const hz = k * binHz;
+      let bandAmt = bandAmtForHz(hz, loAmt, midAmt, hiAmt, duck);
+
+      const isPeak =
+        k > 0 &&
+        k < half &&
+        m >= mag[k - 1] &&
+        m >= mag[k + 1] &&
+        m >= floorAbs;
+
+      let ratio = pitchRatio;
+      if (mapOn && isPeak && bandAmt > 0.001) {
+        let fHz = (freq[k] * sampleRate) / fftSize;
+        if (!(fHz > 20 && fHz < sampleRate * 0.45)) fHz = hz;
+        const midi = 69 + (12 * Math.log(fHz / 440)) / Math.LN2;
+        const shift = mapSemitones(midi, key, scalePcs, maxShift, force);
+        if (shift !== 0) ratio *= Math.pow(2, (shift * bandAmt) / 12);
+      }
+
+      const moved = Math.abs(ratio - 1) > 0.001;
+      if (moved || doGlobal) {
+        const dest = (k * ratio + 0.5) | 0;
+        if (dest < 0 || dest > half) continue;
+        synMag[dest] += m;
+        synFreq[dest] = freq[k] * ratio;
+      } else {
+        residualMag[k] = m;
+      }
     }
   }
 
@@ -581,6 +776,11 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     this._f0Score = new Float32Array(HPS_MAX_F0);
     this._f0Log = new Float32Array(HPS_MAX_F0);
     this._f0N = new Int32Array(1);
+    this._trackRatio = new Float32Array(HPS_MAX_F0);
+    this._ehRing = new Float32Array(EH_RING);
+    this._ehWr = 0;
+    this._ehScratchE = new Float32Array(EH_TRACK_N);
+    this._ehScratchH = new Float32Array(EH_TRACK_N);
     this.port.onmessage = (ev) => {
       const d = ev.data || {};
       if (d.type !== "config") return;
@@ -685,6 +885,13 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     ch.inFifo[ch.fill] = x;
     ch.fill++;
 
+    // Mono analysis ring for M× E/H (L only — avoid double-write in stereo)
+    if (emitViz) {
+      this._ehRing[this._ehWr] = x;
+      this._ehWr++;
+      if (this._ehWr >= EH_RING) this._ehWr = 0;
+    }
+
     if (ch.fill >= fftSize) {
       const mapMode = this._mode === "off" ? "off" : this._mode;
       const snapOn = mapMode === "snap" || mapMode === "remap";
@@ -711,6 +918,11 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
           f0Hz: this._f0Hz,
           f0Score: this._f0Score,
           f0N: this._f0N,
+          trackRatio: this._trackRatio,
+          ehRing: this._ehRing,
+          ehWr: this._ehWr,
+          ehScratchE: this._ehScratchE,
+          ehScratchH: this._ehScratchH,
         });
         if (emitViz && this._viz) {
           this._vizCountdown--;

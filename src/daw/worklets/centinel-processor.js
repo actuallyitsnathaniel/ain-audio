@@ -1,12 +1,16 @@
 // Centinel — US5973252A (expired) pitch corrector.
 // Detect: 8:1 DS + recursive E/H. Correct: Cycle_period → rate + ±1 cycle.
 // Decay = Retune Speed. Desired = nearest scale / MIDI-follow.
-// formant 0–1: cepstral-smoothed LPC envelope copy onto splice (not PSOLA).
+// formant 0–1: cepstral LPC envelope copy after splice (settled |R*| only).
 // PSOLA remains for CYCLE_SPLICE=false only — not the AT reference.
-// Product: G3 sticky hold on committed scale note. Humanize / Flex / Nat Vib parked.
+// Product: G3 sticky + Humanize / Flex / Nat Vib / DC finish on the E/H core.
+// Untracked (consonant / reverb smear): rate=1, keep sticky. Tracking knob = ε.
+// E/H analysis is HP'd + 2L body preference so room delays don't own Cycle_period.
+// Splice still reads the wet take (not a dereverb). Insert/delete phase-aligns ±pe.
+// Splice re-arm: exit onset unity on ONSET_SPLICE_MS even when formant≥0.5 (LPC is a post, not a path).
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-12g2d-cep";
+const CENTINEL_BUILD = "2026-08-19g4a-env";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -42,6 +46,12 @@ const LPC_PRE = 0.97;
 const LPC_KMAX = 0.995;
 /** Pole shrink after Levinson — kills F0-ripple peaks that chew. */
 const LPC_BW = 0.96;
+/** Apply envelope copy only once |R*| exceeds this (cents) — else identity. */
+const FORMANT_SHIFT_MIN_CENTS = 8;
+/** |wantTgt − audibleWant| must be under this (cents) — no copy mid-glide. */
+const FORMANT_SETTLE_CENTS = 8;
+/** Fade the preserve amount so the settled gate doesn't click. */
+const FORMANT_XFADE_MS = 12;
 /** Per-sample E/H detect/track → `_periodSamp`. */
 const EH_LIVE = true;
 /** Splice Cycle_period uses E/H `_periodSamp`. */
@@ -114,7 +124,7 @@ const PSOLA_PE_STABLE_NEED = 3;
 const PSOLA_PE_KEEP_REL = 0.35;
 /** Fairbanks-only: min unity settle before allowing R* (ms). */
 const ONSET_UNITY_MS = 40;
-/** Cycle-splice (formant-off): no Fairbanks PE settle — exit unity sooner after re-arm. */
+/** Cycle-splice: no Fairbanks/PSOLA PE settle — exit unity after this (formant knob is LPC, parked). */
 const ONSET_SPLICE_MS = 18;
 /** Failsafe: never hold R=1 longer than this after arm (ms). */
 const ONSET_UNITY_MAX_MS = 260;
@@ -191,6 +201,9 @@ const HUMANIZE_SUSTAIN_MS = 100;
 const HUMANIZE_RAMP_MS = 120;
 /** Extra Retune Speed (ms) at humanize=1 once fully sustained. */
 const HUMANIZE_EXTRA_MS = 190;
+/** After a sticky flip, chase faster so the new note lands (20s E→F#). */
+const COMMIT_FAST_MS = 40;
+const COMMIT_FAST_SPEED_MS = 8;
 /** Skip humanize stretch while |audibleWant − tgt| exceeds this (cents).
  * 20¢ was still mid-glide — Humanize slowed the finish → pitchy 15–35¢ parks.
  * Gate to near-center so Retune Speed owns the last cents, then breathe. */
@@ -313,6 +326,26 @@ const INPUT_HZ = {
   instrument: { fMin: 80, fMax: 1000 },
   bassInst: { fMin: 45, fMax: 250 },
 };
+
+/**
+ * Flex-Tune island. 0 = always pull (pop). Higher = smaller radius around
+ * the sticky note; scoops outside the island pass through.
+ */
+function flexCorrectionStrength(absErrSemi, flexCents) {
+  const f = Math.max(0, Math.min(100, flexCents));
+  if (f < 0.5) return 1;
+  const u = f / 100;
+  const radius = 0.5 * (1 - 0.8 * u);
+  if (absErrSemi >= radius) return 0;
+  const x = absErrSemi / Math.max(1e-6, radius);
+  return (1 - x) * (1 - x);
+}
+
+function pullToward(det, tgt, amount, flexCents) {
+  const err = tgt - det;
+  const amt = Math.max(0, Math.min(1, amount));
+  return det + err * amt * flexCorrectionStrength(Math.abs(err), flexCents);
+}
 
 function scalePcsOf(scale, customPcs) {
   if (scale === "custom") {
@@ -595,6 +628,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._dsAcc = 0;
     this._dsLpf = 0;
     this._dsLpfCoeff = Math.exp((-2 * Math.PI * (0.45 * sampleRate) / EH_DS) / sampleRate);
+    /** Analysis-only DC block (~120 Hz). Splice still reads raw cbi. */
+    this._ehHp = 0;
+    this._ehHpPrev = 0;
+    this._ehHpBuf = new Float32Array(N);
     this._trackE = new Float32Array(EH_TRACK_N);
     this._trackH = new Float32Array(EH_TRACK_N);
     this._ehOffset = 0;
@@ -680,6 +717,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._lpcPreYR = 0;
     this._lpcHave = false;
     this._lpcKAlpha = 1 - Math.exp(-1 / Math.max(1, 0.006 * sampleRate));
+    this._formantAmt = 0;
     /** Prefer fresh PSOLA grain after note commit (single buffer — no slap). */
     this._commitRecapture = false;
     this._commitRecaptureMs = 0;
@@ -758,8 +796,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._edgeQuiet = false;
     this._edgeQuietMs = 0;
     this._speedMs = 0;
-    /** Speed after Humanize sustain stretch — drives ratio chase. */
+    /** Speed after Humanize / DC finish — drives ratio chase. */
     this._effSpeedMs = 0;
+    this._humanize = 0;
+    this._flexCents = 0;
     this._vibrato = 0;
     /** ms since last note commit (Humanize sustain gate). */
     this._noteAgeMs = 0;
@@ -955,6 +995,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._dsN = 0;
     this._dsAcc = 0;
     this._dsLpf = 0;
+    this._ehHp = 0;
+    this._ehHpPrev = 0;
+    this._ehHpBuf.fill(0);
   }
 
   _resetCycleSplice() {
@@ -987,6 +1030,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._lpcPreYL = 0;
     this._lpcPreYR = 0;
     this._lpcHave = false;
+    this._formantAmt = 0;
   }
 
   /** True when patent cycle-splice owns the wet path. formant = envelope preserve. */
@@ -1013,6 +1057,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   _dsMono(at) {
     const j = ((at % EH_DS_BUF) + EH_DS_BUF) % EH_DS_BUF;
     return this._dsBuf[j];
+  }
+
+  /** HP'd analysis ring — E/H only. Splice still uses cbi. */
+  _ehMono(at) {
+    const j = ((at % N) + N) % N;
+    return this._ehHpBuf[j];
   }
 
   /** Snapshot E(L), H(L) over last 2L samples ending at wr. */
@@ -1044,7 +1094,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const wr = this.cbiwr;
     for (let k = 0; k < EH_TRACK_N; k++) {
       const L = this._ehOffset + k;
-      const { E, H } = this._ehSnapshot(L, wr, this._ringMono);
+      const { E, H } = this._ehSnapshot(L, wr, this._ehMono);
       this._trackE[k] = E;
       this._trackH[k] = H;
     }
@@ -1086,6 +1136,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._periodSamp = 0;
     this._ehClarity *= 0.5;
     this._ehFail = 0;
+    // Patent: fail → re-detect, rate = 1. Do not keep shifting on a stale R*.
+    this.phincfact = 1;
+    this._phincSlew = 1;
+    this._rStar = 1;
   }
 
   /**
@@ -1102,7 +1156,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     if (lDsMax <= lDsMin + 1) return;
 
     let bestL = 0;
-    let bestScore = Infinity;
+    let bestNrm = Infinity;
+    let bestBody = -1;
     for (let L = lDsMin; L <= lDsMax; L++) {
       const E = this._ed[L];
       if (!(E > 1e-8)) continue;
@@ -1110,8 +1165,22 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (cost > eps * E) continue;
       const c0 = L > lDsMin ? this._ed[L - 1] - 2 * this._hd[L - 1] : Infinity;
       const c2 = L < lDsMax ? this._ed[L + 1] - 2 * this._hd[L + 1] : Infinity;
-      if (cost <= c0 && cost <= c2 && cost < bestScore) {
-        bestScore = cost;
+      if (!(cost <= c0 && cost <= c2)) continue;
+      const nrm = cost / E;
+      // Well-bodied f0: 2L still meets ε. A room-delay trough usually doesn't.
+      // Prefer that class, then lowest normalized cost. Output is still the wet take.
+      let body = 0;
+      const L2 = L * 2;
+      if (L2 <= lDsMax) {
+        const E2 = this._ed[L2];
+        if (E2 > 1e-8) {
+          const n2 = (E2 - 2 * this._hd[L2]) / E2;
+          if (n2 <= EH_EPS_LOOSE) body = 1;
+        }
+      }
+      if (body > bestBody || (body === bestBody && nrm < bestNrm)) {
+        bestBody = body;
+        bestNrm = nrm;
         bestL = L;
       }
     }
@@ -1195,7 +1264,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const hz = sampleRate / pe;
     const hz2 = sampleRate / pe2;
     if (hz > 450 && pe2 >= peMin && pe2 <= peMax && hz2 >= 140) {
-      const b = this._ehSnapshot(pe2, this.cbiwr, this._ringMono);
+      const b = this._ehSnapshot(pe2, this.cbiwr, this._ehMono);
       const cb = b.E > 1e-12 ? (b.E - 2 * b.H) / b.E : Infinity;
       if (cb <= EH_EPS_LOOSE || hz > 520) {
         this._ehEnterCorrection(pe2);
@@ -1215,7 +1284,14 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
    * Call after writing cbi[cbiwr].
    */
   _ehOnSample() {
-    const x = this._ringMono(this.cbiwr);
+    const xRaw = this._ringMono(this.cbiwr);
+    // Analysis HP (~120 Hz): drop LF room so E/H locks the glottal/body cycle.
+    // Splice still interpolates raw cbi — this is not a dereverb.
+    const R = this._hpCoeff;
+    const x = R * (this._ehHp + xRaw - this._ehHpPrev);
+    this._ehHp = x;
+    this._ehHpPrev = xRaw;
+    this._ehHpBuf[this.cbiwr] = x;
     // Anti-alias (one-pole) + 8:1 downsample for detection mode.
     const a = this._dsLpfCoeff;
     this._dsLpf = a * this._dsLpf + (1 - a) * x;
@@ -1253,8 +1329,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const xi2 = xi * xi;
     for (let k = 0; k < EH_TRACK_N; k++) {
       const L = this._ehOffset + k;
-      const xiL = this._ringMono(this.cbiwr - L);
-      const xi2L = this._ringMono(this.cbiwr - 2 * L);
+      const xiL = this._ehMono(this.cbiwr - L);
+      const xi2L = this._ehMono(this.cbiwr - 2 * L);
       let E = this._trackE[k] + xi2 - xi2L * xi2L;
       let H = this._trackH[k] + xi * xiL - xiL * xi2L;
       if (E < 0) E = 0;
@@ -1293,9 +1369,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const minD = Math.max(pe * 0.35, N2 - pe);
     const maxD = Math.min(N - pe - 4, N2 + pe);
     const before = this._spliceDelay;
-    // Patent: ± exactly one Cycle_period per sample (not a burst of jumps).
-    if (this._spliceDelay < minD) this._spliceDelay += pe;
-    else if (this._spliceDelay > maxD) this._spliceDelay -= pe;
+    // Patent: ± one Cycle_period per sample. Align the join to the current
+    // tap so insert/delete isn't a random phase of that cycle (chew).
+    if (this._spliceDelay < minD)
+      this._spliceDelay += this._alignedPe(this._spliceDelay, pe, 1);
+    else if (this._spliceDelay > maxD)
+      this._spliceDelay -= this._alignedPe(this._spliceDelay, pe, -1);
     if (this._spliceDelay < 4) this._spliceDelay = 4;
     if (this._spliceDelay > N - 4) this._spliceDelay = N - 4;
 
@@ -1317,6 +1396,34 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (this._spliceXf < 0) this._spliceXf = 0;
     }
     return [l, rS];
+  }
+
+  /**
+   * Distance along ±Cycle_period that best matches the current delay tap.
+   * Still one cycle — a few-sample phase hunt, not a second period estimate.
+   */
+  _alignedPe(delay, pe, dir) {
+    const span = Math.max(2, Math.min(14, (pe * 0.12) | 0));
+    const nW = Math.max(8, Math.min(20, (pe * 0.18) | 0));
+    const wr = this.cbiwr;
+    let best = pe;
+    let bestErr = Infinity;
+    for (let k = -span; k <= span; k++) {
+      const cand = pe + k;
+      if (cand < 8 || cand > N2 - 4) continue;
+      let err = 0;
+      for (let i = 0; i < nW; i++) {
+        const a = this._ringMono(wr - delay - i);
+        const b = this._ringMono(wr - (delay + dir * cand) - i);
+        const d = a - b;
+        err += d * d;
+      }
+      if (err < bestErr) {
+        bestErr = err;
+        best = cand;
+      }
+    }
+    return best;
   }
 
   /**
@@ -1375,8 +1482,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Copy dry cepstral envelope onto spliced wet (source-filter). Amount = formant * R*-gate.
-   * Inverse-filter wet (shifted formants) → residual; resynthesize with dry poles.
+   * Copy dry cepstral envelope onto spliced wet (source-filter).
+   * Amount = formant knob after settled-|R*| gate. IIR always runs once
+   * poles exist so opening the gate does not start from a cold filter.
    */
   _formantRestore(sL, sR, amt) {
     this._lpcWetL[this._lpcWetWr] = sL;
@@ -1397,7 +1505,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._lpcHave = dryOk && wetOk;
     }
 
-    if (!this._lpcHave || amt < 0.001) return [sL, sR];
+    if (!this._lpcHave) return [sL, sR];
 
     const ka = this._lpcKAlpha;
     for (let i = 0; i < LPC_P; i++) {
@@ -1421,7 +1529,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       LPC_PRE * this._lpcPreYR;
     this._lpcPreYR = yR;
 
-    return [sL + (yL - sL) * amt, sR + (yR - sR) * amt];
+    const a = amt < 0.001 ? 0 : amt;
+    return [sL + (yL - sL) * a, sR + (yR - sR) * a];
   }
 
   /** Fold octave errors into the selected input-type band. */
@@ -1511,9 +1620,46 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     return this._softRatioChase();
   }
 
-  /** Decay = Retune Speed. Product Humanize stretch is parked. */
-  _effectiveSpeed(speedMs) {
-    return Math.max(0, speedMs);
+  /**
+   * Decay = Retune Speed, then product:
+   * DC finish speeds a stationary loose park; Humanize stretches after
+   * the note is on-center. Neither runs on a scoop.
+   */
+  _effectiveSpeed(speedMs, humanize) {
+    let spd = Math.max(0, speedMs);
+    if (this._noteAgeMs < COMMIT_FAST_MS && spd > COMMIT_FAST_SPEED_MS) {
+      spd = COMMIT_FAST_SPEED_MS;
+    }
+    const scooping =
+      this._pitchVel >= SCOOP_VEL_ST_S ||
+      Math.abs(this._signedPitchVel) >= RETARGET_RAW_VEL_ST_S;
+    if (
+      !scooping &&
+      this._stablePitchMs >= STABLE_PITCH_MS &&
+      this._noteAgeMs >= CENTER_LOCK_AGE_MS
+    ) {
+      const errC = Math.abs(this._audibleWant - this._committedTgt) * 100;
+      const settleC = Math.abs(this._wantTgt - this._audibleWant) * 100;
+      if (
+        errC >= LOOSE_HOLD_LO_CENTS &&
+        errC <= LOOSE_HOLD_HI_CENTS &&
+        settleC <= CENTER_LOCK_SETTLE_CENTS &&
+        spd > LOOSE_HOLD_SPEED_MS
+      ) {
+        spd = LOOSE_HOLD_SPEED_MS;
+      }
+    }
+    const h = Math.max(0, Math.min(1, humanize));
+    if (h < 0.001 || this._noteAgeMs <= HUMANIZE_SUSTAIN_MS) return spd;
+    if (scooping) return spd;
+    const centerErrCents =
+      Math.abs(this._audibleWant - this._committedTgt) * 100;
+    if (centerErrCents > HUMANIZE_OFF_CENTER_CENTS) return spd;
+    const sustain = Math.min(
+      1,
+      (this._noteAgeMs - HUMANIZE_SUSTAIN_MS) / HUMANIZE_RAMP_MS,
+    );
+    return spd + h * sustain * HUMANIZE_EXTRA_MS;
   }
 
   /** Mark note-commit: refresh grain in-place ASAP (never dual-place). */
@@ -1542,8 +1688,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
 
   _commitWant(det, amount, transpose) {
     const tgt = this._nearestTgt(det, transpose);
-    const amt = Math.max(0, Math.min(1, amount));
-    const want = det + (tgt - det) * amt;
+    const want = pullToward(det, tgt, amount, this._flexCents);
     this._committedWant = want;
     this._committedTgt = tgt;
     this._tgtMidi = tgt;
@@ -1564,6 +1709,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     if (toward !== 0 && side !== 0 && toward !== side) return sticky;
     const dS = Math.abs(det - sticky);
     const dF = Math.abs(det - fresh);
+    // Directed scoop past the midpoint: flip now. Hyst stays for stationary
+    // vibrato so A↔B doesn't chatter (g3b). This is the ~20s E→F# leftover.
+    const scoopToward =
+      toward !== 0 &&
+      this._signedPitchVel * toward >= RETARGET_RAW_VEL_ST_S;
+    if (scoopToward && dF < dS) return fresh;
     if (dF + STICKY_HYST_SEMI < dS) return fresh;
     return sticky;
   }
@@ -1594,13 +1745,31 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Desired = sticky scale note from E/H midi. Decay slews audibleWant in process().
+   * Desired = sticky scale note from E/H midi. Flex / Nat Vib sit on want.
+   * Decay slews audibleWant in process().
    */
   _applyCorrection(rawMidi, amount, transpose) {
     const dtMs = this._detectDt * 1000;
+    if (!this._haveRawVel) {
+      this._prevRawVel = rawMidi;
+      this._haveRawVel = true;
+      this._pitchVel = 0;
+      this._signedPitchVel = 0;
+      this._stablePitchMs = 0;
+    } else {
+      const dSt = (rawMidi - this._prevRawVel) / Math.max(1e-4, this._detectDt);
+      this._signedPitchVel += (dSt - this._signedPitchVel) * 0.4;
+      this._pitchVel += (Math.abs(dSt) - this._pitchVel) * 0.4;
+      this._prevRawVel = rawMidi;
+      if (this._pitchVel < STABLE_VEL_ST_S) this._stablePitchMs += dtMs;
+      else this._stablePitchMs = 0;
+    }
+
     this._lockedDet = rawMidi;
     const det = this._lockedDet;
     this._detMidi = det;
+    const vibA = 1 - Math.exp(-dtMs / VIB_CENTER_MS);
+    this._vibCenter += (det - this._vibCenter) * vibA;
 
     const fresh = this._nearestTgt(det, transpose);
     let tgt = this._committedTgt;
@@ -1610,8 +1779,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     } else {
       tgt = fresh;
     }
-    const amt = Math.max(0, Math.min(1, amount));
-    const want = det + (tgt - det) * amt;
+    let want = pullToward(det, tgt, amount, this._flexCents);
+    const v = this._vibrato;
+    if (Math.abs(v) >= 0.001) {
+      let resid = det - this._vibCenter;
+      if (resid > VIB_RESID_MAX_SEMI) resid = VIB_RESID_MAX_SEMI;
+      else if (resid < -VIB_RESID_MAX_SEMI) resid = -VIB_RESID_MAX_SEMI;
+      if (v > 0) want += resid * v;
+      else want += (tgt - want) * -v;
+    }
     this._committedTgt = tgt;
     this._committedWant = want;
     this._tgtMidi = tgt;
@@ -1699,8 +1875,15 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           // E/H period octave — follow. Do not snap back via octaveLock/MAX_JUMP.
           this._stable++;
         } else if (jump > MAX_JUMP_SEMI) {
-          this._stable = Math.max(0, this._stable - 2);
-          midi = prev;
+          // Loop wrap / phrase cut: old MAX_JUMP pin kept the previous note and
+          // R* retuned the new period onto it (very wrong note on pass 2).
+          // Notes follow period; sticky recommits.
+          this._lockedDet = midi;
+          this._detMidi = midi;
+          this._commitWant(midi, amount, transpose);
+          this._audibleWant = midi;
+          this._wantTgt = midi;
+          this._stable = STABLE_NEED;
         } else {
           this._stable++;
           midi = prev + (midi - prev) * 0.55;
@@ -1735,7 +1918,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this.phasein = 0;
           this.phaseout = 0;
           this.fragsize = 0;
-          this._resetCycleSplice();
           this._onsetUnity = true;
           this._onsetUnityMs = 0;
           this._psolaOnsetMs = 0;
@@ -1790,24 +1972,28 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         out = midi;
       }
     } else if (loudEnough && this._armed && this._havePitch) {
-      // Still energy but weak clarity: hold last lock — do not unvoice (R*→1 clicked).
-      this._voiced = true;
-      this._unvoicedN = Math.max(0, this._unvoicedN - 1);
-      this._psolaOnsetMs += this._detectDt * 1000;
-      const midi = this._lockedDet;
-      const c = this._applyCorrection(midi, amount, transpose);
-      det = c.det;
-      tgt = c.tgt;
-      out = c.out;
+      // Energy but no period (consonant / baked-reverb smear): identity.
+      // Keep sticky so the next vowel resumes. Do not retune noise with the
+      // last lock (that chewed transitions). spliceRate is 1 while !_trackOk.
+      this._voiced = false;
+      this._unvoicedN++;
+      if (this._unvoicedN >= UNVOICED_DROP) {
+        this._resetCorrectionState(false);
+      }
+      det = this._lockedDet;
+      tgt = this._committedTgt;
+      out = det;
     } else {
       this._voiced = false;
       this._unvoicedN++;
       this._clarity *= 0.9;
       this._stable = Math.max(0, this._stable - 1);
-      this.phincfact += (1 - this.phincfact) * 0.04;
-      this._phincSlew += (this.phincfact - this._phincSlew) * 0.04;
-      this.outphinc =
-        this.inphinc * Math.max(FACT_MIN, Math.min(FACT_MAX, this.phincfact));
+      // Phrase gap: rate=1 now (patent fail). The 0.04 ease still shifted
+      // consonants/tails. Splice identity is the same tap — no click.
+      this.phincfact = 1;
+      this._phincSlew = 1;
+      this._rStar = 1;
+      this.outphinc = this.inphinc;
       if (this._unvoicedN >= UNVOICED_DROP) {
         // Phrase gap: clear note lock, keep ring + DS E/H (re-detect, not cold).
         this._resetCorrectionState(false);
@@ -2105,11 +2291,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const tracking = parameters.tracking[0];
     const transpose = parameters.transpose[0];
     this._speedMs = Math.max(0, speed);
-    // Flex / Humanize / Nat Vib parked until E/H core is solid (still k-rate params).
+    this._flexCents = parameters.flex[0];
+    this._humanize = parameters.humanize[0];
     this._vibrato = parameters.vibrato[0];
-    void parameters.flex[0];
-    void parameters.humanize[0];
-    this._effSpeedMs = this._effectiveSpeed(this._speedMs);
+    this._effSpeedMs = this._effectiveSpeed(this._speedMs, this._humanize);
     this._formant = parameters.formant[0];
     if (this._formant < 0.5) this._psolaWant = false;
 
@@ -2144,6 +2329,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     })();
     const wetXfadeAlpha =
       1 - Math.exp(-1 / Math.max(1, (wetXfadeMs / 1000) * sampleRate));
+    const formantAlpha =
+      1 - Math.exp(-1 / Math.max(1, (FORMANT_XFADE_MS / 1000) * sampleRate));
     const softPsola = this._softRatioChase();
     // Patent Decay: Retune Speed is the only chase tau.
     const wantChaseMs = spd;
@@ -2214,7 +2401,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         // Soft-land brake + wantTgt clamp handle overshoot — never hard-assign
         // audibleWant (that tore PSOLA at ~12 ms and read as muted clicks).
         // When E/H track is ok, denominator follows continuous period (not hop YIN).
-        if (softPsola && !this._onsetUnity) {
+        // Untracked: don't chase want off a dead period (consonant / reverb).
+        if (softPsola && !this._onsetUnity && this._trackOk) {
           this._audibleWant += (this._wantTgt - this._audibleWant) * wantAlpha;
           const inHzA = Math.max(1e-12, this.inphinc * sampleRate);
           let rA = midiToHz(this._audibleWant) / inHzA;
@@ -2230,8 +2418,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this.outphinc = this.inphinc;
           // Splice: keep want/audible from note logic during unity — forcing them
           // to lagged lockedDet wiped post-gap land snaps (dry_2 @ ~20s E→F#).
-          // PSOLA still pins to lockedDet (grain capture expects a stable want).
-          if (this._formant >= 0.5) {
+          // PSOLA (Fairbanks path only) still pins to lockedDet for grain capture.
+          // formant≥0.5 is LPC amount on splice, not a path switch — do not pin.
+          if (this._formant >= 0.5 && !this._useCycleSplice()) {
             this._audibleWant = this._lockedDet;
             this._wantTgt = this._lockedDet;
           }
@@ -2240,13 +2429,13 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           const formantOn = this._formant >= 0.5;
           const psolaReady =
             formantOn &&
+            !this._useCycleSplice() &&
             this._psolaGate >= ONSET_PSOLA_READY &&
             this._psolaHalf >= 8;
-          // Splice path never runs _onAnalysisPeriod → peStable stays 0, so the
-          // old Fairbanks gate waited 80ms of forced rate=1 after every re-arm
-          // (dry_2 silence→20s). Exit on a short timer instead.
+          // Splice never runs _onAnalysisPeriod → peStable stays 0. Pop formant
+          // is 0.85 (LPC parked) so !formantOn never fired and we sat on rate=1
+          // until ONSET_UNITY_MAX_MS (~260ms) — dry_2 @ ~20s wet≈dry.
           const spliceReady =
-            !formantOn &&
             this._useCycleSplice() &&
             this._onsetUnityMs >= ONSET_SPLICE_MS;
           const fairbanksReady =
@@ -2264,11 +2453,13 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
             if (r < FACT_MIN) r = FACT_MIN;
             if (r > FACT_MAX) r = FACT_MAX;
             this._rStar = r;
-            // Soft+PSOLA: always ease from unity (never dump R* on a cold entrance).
-            // Soft+splice: seed toward committed want — easing from 1 under a
-            // stale sticky left R*≈1 for the whole cold window (@ ~20s).
-            // Robot / Fairbanks: snap. Chase may run under dry until cold wet opens.
-            if (formantOn && softPsola) {
+            // Splice owns wet: seed R* now. formant≥0.5 is LPC (parked), not PSOLA —
+            // the old formantOn&&softPsola branch left phincfact=1 after every re-arm.
+            if (this._useCycleSplice()) {
+              this.phincfact = r;
+              this._phincSlew = r;
+              this._clearCommitRecapture();
+            } else if (formantOn && softPsola) {
               this.phincfact = 1;
               this._phincSlew = 1;
               this._beginCommitRecapture();
@@ -2276,10 +2467,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
               this.phincfact = 1;
               this._phincSlew = 1;
               this._beginCommitRecapture();
-            } else if (softPsola && this._useCycleSplice()) {
-              this.phincfact = r;
-              this._phincSlew = r;
-              this._clearCommitRecapture();
             } else {
               this.phincfact = r;
               this._phincSlew = r;
@@ -2288,12 +2475,16 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         } else if (
           this._commitRecapture &&
           this._formant >= 0.5 &&
+          !this._useCycleSplice() &&
           !(this._coldStart && this._speedMs >= 0.5)
         ) {
           // Stale grain still up — hold unity (pitching it caused the slap/delay).
           // Skip during cold soft chase: we stay on dry while R* eases in.
           this.phincfact = 1;
           this._phincSlew = 1;
+          this.outphinc = this.inphinc;
+        } else if (!this._trackOk) {
+          // Consonant / reverb smear: freeze R*. spliceRate is already 1.
           this.outphinc = this.inphinc;
         } else {
           const cur = Math.max(1e-6, this.phincfact);
@@ -2335,13 +2526,13 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this.outphinc = this.inphinc;
         }
 
-        // Corrected wet only after onset unity ends — slew, never hard-cut.
-        // Cold soft+PSOLA: keep latency-dry until chase is close so bare riffs
-        // don't audition the detect-rate staircase into the first note.
-        // Conf: hysteretic open/closed only — continuous conf gain comb-filtered.
-        // Edge quiet: close wet before UNVOICED_DROP so OLA doesn't ring past dry.
+        // Patent: the delay-line read is the output. rate=1 is dry. Never
+        // crossfade a parallel latency-dry against an already-shifted wet
+        // (that was the cold-start double-pitch). PSOLA still ducks via _wetMix.
         let wantWet = 0;
-        if (
+        if (this._useCycleSplice()) {
+          wantWet = 1;
+        } else if (
           this._armed &&
           this._everLocked &&
           !this._onsetUnity &&
@@ -2349,9 +2540,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           !this._edgeQuiet
         ) {
           wantWet = 1;
-          // Cold wet duck is for soft+PSOLA staircase into the first note.
-          // Cycle-splice has no grain staircase — ducking kept phrase re-entry
-          // on latency-dry while sticky lagged (listen wet≈dry @ ~20s).
           if (
             this._coldStart &&
             this._softRatioChase() &&
@@ -2455,20 +2643,37 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (this._on && this._useCycleSplice()) {
         // rate=1 while unity / unarmed → wet ≈ latency-dry (delay stays ~N2)
         const spliceRate =
-          !this._armed || this._onsetUnity ? 1 : this._phincSlew;
+          !this._armed ||
+          this._onsetUnity ||
+          this._edgeQuiet ||
+          !this._trackOk
+            ? 1
+            : this._phincSlew;
         const pair = this._cycleSpliceSample(spliceRate);
         let sL = pair[0];
         let sR = pair[1];
-        if (this._armed && !this._onsetUnity) {
-          const r = Math.max(1e-6, this._phincSlew);
-          const oct = Math.abs(Math.log(r) / Math.LN2);
-          const gate = oct <= 0.02 ? 0 : oct >= 0.12 ? 1 : (oct - 0.02) / 0.1;
-          const f = this._formantRestore(sL, sR, this._formant * gate);
-          sL = f[0];
-          sR = f[1];
-        }
-        wetL = sL;
-        wetR = sR;
+        // Envelope copy after splice. Gate: voiced + settled |R*| — mid-glide
+        // copy chewed (g2f). amt=0 still runs the LPC hop so the IIR stays warm.
+        const shiftCents =
+          spliceRate > 1e-12
+            ? Math.abs((1200 * Math.log(spliceRate)) / Math.LN2)
+            : 0;
+        const settled =
+          Math.abs(this._wantTgt - this._audibleWant) * 100 <
+          FORMANT_SETTLE_CENTS;
+        const allow =
+          this._trackOk &&
+          this._armed &&
+          !this._onsetUnity &&
+          !this._edgeQuiet &&
+          shiftCents >= FORMANT_SHIFT_MIN_CENTS &&
+          settled;
+        const tgtAmt = allow ? this._formant : 0;
+        this._formantAmt += (tgtAmt - this._formantAmt) * formantAlpha;
+        if (this._formantAmt < 1e-4) this._formantAmt = 0;
+        const env = this._formantRestore(sL, sR, this._formantAmt);
+        wetL = env[0];
+        wetR = env[1];
         this.cboL[this.cbord] = 0;
         this.cboR[this.cbord] = 0;
       } else {
@@ -2484,8 +2689,10 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       if (wetR > lim) wetR = lim;
       else if (wetR < -lim) wetR = -lim;
 
-      // Soft dry↔wet: _wetMix is the anti-click layer; olaGain covers first-lock fade.
-      const wm = this._wetMix * this._olaGain;
+      // Splice: one path. rate=1 ≡ dry (same N2 tap). Parallel dry+wet is two
+      // pitches — AT never does that. Mix knob below is the only blend.
+      const useSpliceOut = this._on && this._useCycleSplice();
+      const wm = useSpliceOut ? 1 : this._wetMix * this._olaGain;
       let shiftedL;
       let shiftedR;
       if (wm < 0.001) {
