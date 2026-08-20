@@ -50,7 +50,7 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
 | `reverb` | Convolver + predelay + tone         | Ableton-style hall: decay / size / damping / diffusion / predelay / lo·hi cut / mix. Synth IR via `makeReverbIR`. |
 | `eq` | Native biquad cascade | Pro-Q–style parametric EQ: up to 12 bands, shapes (bell/LS/HS/LC/HC/notch/BP/tilt), drag/Q editor, solo, per-band **dyn**, accurate response curve (incl. live dyn), input RTA, **ST/M/S**. Shared `BandCurveEditor` with speccomp. |
-| `impartialer` | AudioWorklet (STFT) | Phase 1–3 + detail pass: transpose / snap / remap, peak mapping with musical gate (out-of-key never identity-passes), residual = aperiodic texture, lo/mid/hi + hits on in-key pull. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
+| `impartialer` | AudioWorklet (STFT) | Phase 1–3 + detail pass: transpose / snap / remap, musical gate, residual = aperiodic, **<100 Hz always collapsed to one partial** (clean sub; mix takes that band from wet). See [SPECTRAL.md](SPECTRAL.md). |
 | `centinel` | AudioWorklet (E/H + cycle splice) | Expired US5973252A: recursive E/H period → rate convert + ±1 `Cycle_period` + Decay. **Input type** sets E/H fMin–fMax. LPC formant preserve after splice (settled `|R*|`). Presets: **pop** · nat · soft · robot. |
 | `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
@@ -64,9 +64,13 @@ closer by 0.4 st, same-side; scoop-toward past-mid flips now. Decay = Retune Spe
 pull / pop). **Natural Vibrato** (−1…+1) scales AC residual around a slow det center
 **after** Decay: 0 = leave (`VIB_LEAVE_SCALE` of residual) · − = flatten · + = amplify.
 Formant knob is LPC preserve amount after splice, not a PSOLA path switch.
+Preserve is gain-matched to the splice bed. Once open it stays through the
+park (close on glide / phrase edge), with a 40ms fade — amt=1 was snapping
+off every land and on failed LPC hops.
 `rate=1` on the splice tap is dry. Mix knob is the only parallel blend.
 Do-no-harm clamp keeps corrected MIDI on the det↔want segment.
 Splice joins one at a time (wait out the seam before the next ±cycle).
+Commit-fast is a fraction of Retune Speed after a hop (pop ~14ms isolated / ~17ms on a run), not a hard 8ms Cher land.
 
 **Cold start** (re-arm after silence): splice exits onset unity at 18 ms (even when
 formant ≥ 0.5). Untracked (consonant / smear): rate=1, keep sticky. Detector
@@ -333,6 +337,21 @@ the brace range, selects intersecting clips, and sets `braceFocus` so arrow keys
 to paint a new brace. Double-click the ruler zooms to the selection (or zooms out) — Ableton's
 beat-time-ruler gesture; it no longer sets the loop.
 
+**Loop brace mid-playback (transport integrity).** The arrangement clock is absolute; with the
+brace on, `currentBeat()` folds it back into `[start, end)`. Two distinct handoffs keep that
+honest when the brace changes while playing:
+
+- **Engage / disengage** → `reseatTransport(shown)`: re-anchor onto the beat that was showing
+  without flushing the lookahead (same wrap period; only the fold mapping flips). Audio sources
+  hand over at `_scheduledThrough` so the old brace-edge hard-stops don't ring under the new
+  mapping — that was the "two playheads" bug when toggling L.
+- **Geometry change** (drag start/end/body, nudge, scale) → `rematerializeTransport(shown)`:
+  hard-cut voices + audio, re-anchor onto the shown beat (folded into the new brace if the
+  playhead would land outside), re-schedule from now. Soft reseat is wrong here — queued wrap
+  iterations and hard-stops were built for the *old* length/phase, so leaving them while the
+  scheduler emits for the *new* period multiplies playback. Snapped brace edits mean this fires
+  once per grid step, not per pixel. No-ops when the snapped brace didn't actually move.
+
 **Launch quantize** (`engine.launchQuant`, beats, 0 = off; separate `launch` selector in the
 playback pane, persisted `ain-launch-quant`). While PLAYING, `seekArrangement` doesn't jump
 immediately — it QUEUES a `_pendingLaunch = { target, atBeat }` and lets the playhead keep
@@ -451,6 +470,9 @@ before the anchor, pushing `_seqAnchorTime` forward. **MIDI record** (first slic
   `AudioBuffer` immediately; persistence is async via `putAudioBuffer` → IndexedDB
   (`ain-audio` / `imports`): **Opus in WebM** when WebCodecs can encode (Mediabunny
   mux), else float WAV. Dropped files keep their original encoded bytes + mime.
+  The **Library** panel lists every row; clip delete and File → New project do **not**
+  prune or wipe it. `.ain` Open replaces the arrangement and merges pack assets into
+  the library. Preview auditions through `n.sum` (not the mix↔master `startSources` pair).
 
 ### `.ain` — AIN project format
 
@@ -501,7 +523,7 @@ bounce runs it owns the transport: `toggleArrangement` / `seekArrangement` /
 Trailer (`AIN1` + `audioLen` + `zipLen` + reserved, little-endian). Download MIME:
 `audio/wav`. Built-in catalog samples (URL / `loopId` refs) are **not** duplicated.
 Engine: `exportAin` / `importAin` / `packAin` in [ain-pack.ts](ain-pack.ts) +
-[engine.ts](engine.ts). Open replaces the studio (same wipe as New project).
+[engine.ts](engine.ts). Open replaces the arrangement; the user audio library stays.
 
 macOS Finder icon / Quick Look still need a UTI registration (tiny native helper
 or desktop shell) — see [docs/AIN-MACOS.md](../../docs/AIN-MACOS.md).
@@ -708,6 +730,9 @@ stops oscs + sub + noise + **sampleSrc** + all LFOs. A voice is ≤ ~14 nodes (b
   the played note), `start`/`end` (0..1 playback window into the buffer), `loopStart`/`loopEnd` (0..1,
   default to the window). Zone pitch comes from the picked zone's root via `playbackRate`; the window is
   applied through `s.start(t, offset, duration)` (one-shot) or `s.start(t, offset)` + `s.loop` (sustain).
+  **One-shot (sample-only, `loop: false`)** matches Ableton Simpler **1-Shot**: amp is scheduled
+  to the bounce end (`scheduleAmpOneShot`) and `releaseVoice` ignores note-off (clip length /
+  key-up must not cut the file). Retrigger / panic still steal. **Loop** stays gated ADSR.
   Buffers cached by **preset id** (`_sampleBufs[id]`), so instruments sharing a preset share one decode.
 - **Filter ON/OFF** — `filter.on` (omitted = enabled). Bypass swaps the biquad to `allpass` (flat
   magnitude, path shape unchanged); the cutoff envelope + cutoff-LFO are skipped.

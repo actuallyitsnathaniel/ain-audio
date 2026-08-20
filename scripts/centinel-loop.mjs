@@ -7,13 +7,16 @@
  *
  * Needs `npm run dev` (Vite) so the worklet can be addModule'd.
  * Writes `.tmp_centinel/render.wav` + `.tmp_centinel/score.json`.
+ * Prunes that folder to the current bounce + score so named `--out=` wavs
+ * do not accumulate.
  */
 
 import { spawnSync } from "node:child_process";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scoreCentinel } from "./centinel-score.mjs";
+import { TMP_DIR, ensureTmp, isInsideTmp, pruneTmp } from "./centinel-tmp.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const home = process.env.HOME || "";
@@ -56,7 +59,11 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  mkdirSync(resolve(root, ".tmp_centinel"), { recursive: true });
+  ensureTmp();
+  const scorePath = resolve(TMP_DIR, "score.json");
+  pruneTmp(
+    args.scoreOnly && isInsideTmp(args.scoreOnly) ? [args.scoreOnly] : [],
+  );
 
   let wetPath = args.scoreOnly;
   let build = null;
@@ -100,8 +107,10 @@ function main() {
   score.build = build;
   score.wetPath = wetPath;
 
-  const scorePath = resolve(root, ".tmp_centinel/score.json");
   writeFileSync(scorePath, JSON.stringify(score, null, 2));
+  const keep = [scorePath];
+  if (isInsideTmp(wetPath)) keep.push(wetPath);
+  pruneTmp(keep);
 
   // Compact agent-facing card
   const card = {

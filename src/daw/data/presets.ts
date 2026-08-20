@@ -132,7 +132,12 @@ const PRESET_OVERRIDES: Record<string, PresetOverride> = {
   // real bounced preset — has subtle per-voice detune, so a touch of humanize
   // restores the "alive" feel a single bounce flattens. start conservative.
   // bpmHint used because the exported .mid carries no tempo (Ableton clip-export).
-  "losing-hearts-pluck": { humanize: 5, bpmHint: 143 },
+  "losing-hearts-pluck": {
+    humanize: 5,
+    bpmHint: 143,
+    // bounced pluck already has its decay; keep amp open so 1-Shot can play through
+    env: { a: 0.003, d: 0.02, s: 1, r: 0.08 },
+  },
 };
 
 // fallback phrase for any preset that ships no defaultPhrase override

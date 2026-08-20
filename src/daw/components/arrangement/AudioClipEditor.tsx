@@ -1,13 +1,19 @@
 // ── AUDIO CLIP EDITOR — import a file, trim it, set its level ──────────────────
 // Empty state: drop an audio file (or click to pick). Loaded: the imported waveform
-// with draggable A/B trim handles + a gain knob. Import is session-only (engine holds
-// the decoded buffer by bufId); the clip stores the bufId + name + a/b + gain.
+// with draggable A/B trim handles + a gain knob. Files land in the user library
+// (IndexedDB); the clip stores the bufId + name + a/b + gain.
 
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { engine } from "../../engine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { Knob } from "../Knob";
+import { libraryBufIdFromDrag } from "../../library-drag";
+import {
+  filesFromDataTransfer,
+  pickAudioFiles,
+  type ImportSource,
+} from "../../file-source";
 import {
   warpModeOf,
   type ClipContent,
@@ -27,13 +33,12 @@ export function AudioClipEditor({
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const hasBuf = !!content.bufId && engine.hasImport(content.bufId);
 
-  const doImport = async (file: File) => {
+  const doImport = async (file: File, source?: ImportSource) => {
     setBusy(true);
     setErr(null);
-    const res = await engine.importAudio(file);
+    const res = await engine.importAudio(file, source);
     setBusy(false);
     if (!res) {
       setErr("couldn't decode that file — try wav / mp3 / m4a / ogg");
@@ -55,28 +60,38 @@ export function AudioClipEditor({
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
-          const f = e.dataTransfer.files?.[0];
-          if (f) void doImport(f);
+          const libId = libraryBufIdFromDrag(e.dataTransfer);
+          if (libId) {
+            const meta = engine.importMeta(libId);
+            if (!meta) return;
+            onCommit({
+              ...content,
+              bufId: meta.bufId,
+              name: meta.name,
+              a: 0,
+              b: 1,
+              gain: content.gain ?? 1,
+            });
+            return;
+          }
+          void filesFromDataTransfer(e.dataTransfer).then((got) => {
+            const one = got[0];
+            if (one) void doImport(one.file, one);
+          });
         }}
-        onClick={() => fileRef.current?.click()}
+        onClick={() => {
+          void pickAudioFiles(false).then((got) => {
+            const one = got[0];
+            if (one) void doImport(one.file, one);
+          });
+        }}
         className="flex h-30 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-sm border border-dashed border-line2 bg-[#0c0c10] text-center transition-colors hover:border-accent"
       >
-        <input
-          ref={fileRef}
-          type="file"
-          accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.aac"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void doImport(f);
-            e.target.value = "";
-          }}
-        />
         <span className="font-mono text-[11px] tracking-[0.05em] text-dim">
           {busy ? "decoding…" : "⤓ drop an audio file, or click to pick"}
         </span>
         <span className="font-mono text-[9px] text-faint">
-          wav · mp3 · m4a · ogg · flac — imported for this session
+          wav · mp3 · m4a · ogg · flac — added to the library
         </span>
         {err && (
           <span className="font-mono text-[9px] text-[#e98c79]">{err}</span>

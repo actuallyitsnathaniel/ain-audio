@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useAinFileLaunch } from "../../hooks/useAinFileLaunch";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Knob } from "../Knob";
 import { FxRack } from "../audio-lab/FxRack";
 import { FxChainRack } from "../FxChainRack";
@@ -23,6 +24,7 @@ import { ShortcutsHelp } from "./ShortcutsHelp";
 import { TrackFader } from "./TrackFader";
 import { AudioAcceptSheet } from "./AudioAcceptSheet";
 import { BounceCancelConfirm } from "./BounceCancelConfirm";
+import { LibraryPanel } from "./LibraryPanel";
 import { openContextMenu } from "../context-menu-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
@@ -305,6 +307,27 @@ export function ArrangementPage() {
   // and a stale "yes" can't greet the next one.
   const [confirmBounceId, setConfirmBounceId] = useState<number | null>(null);
   const askCancelBounce = eng.bouncing && confirmBounceId === eng.bounceId;
+  const mobile = useMediaQuery("(max-width: 767px)");
+  const [libOpen, setLibOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem("ain-library-open");
+      if (v === "0") return false;
+      if (v === "1") return true;
+    } catch {
+      /* private mode */
+    }
+    return typeof window !== "undefined"
+      ? !window.matchMedia("(max-width: 767px)").matches
+      : true;
+  });
+  const setLibraryOpen = (open: boolean) => {
+    setLibOpen(open);
+    try {
+      localStorage.setItem("ain-library-open", open ? "1" : "0");
+    } catch {
+      /* fine */
+    }
+  };
   const acceptContinue = useRef<(() => void) | null>(null);
   const requestAccept = (after: () => void) => {
     acceptContinue.current = after;
@@ -335,6 +358,7 @@ export function ArrangementPage() {
   const zoomApiRef = useRef<{
     zoom: (factor: number) => void;
     scrollByY: (dy: number) => void;
+    revealBeat: (beat: number, trackIndex: number) => void;
   } | null>(null);
   const headerTracksRef = useRef<HTMLDivElement>(null);
   const onTimelineScrollY = (scrollY: number) => {
@@ -691,7 +715,7 @@ export function ArrangementPage() {
               onNewProject={() => {
                 if (
                   window.confirm(
-                    "New project — this clears the entire studio AND all imported audio (from local storage). This can't be undone. Continue?",
+                    "New project — this clears the arrangement (tracks, clips, undo). Your audio library stays in this browser. Continue?",
                   )
                 ) {
                   void engine.newProject();
@@ -724,6 +748,21 @@ export function ArrangementPage() {
             >
               audio
             </button>
+            <span className="mx-0.5 hidden h-4 w-px bg-line sm:block" aria-hidden />
+            <button
+              type="button"
+              className={
+                "flex h-7 items-center rounded-sm border px-2 font-mono text-[10px] transition-colors " +
+                (libOpen
+                  ? "border-accent text-accent"
+                  : "border-line2 text-dim hover:border-accent hover:text-accent")
+              }
+              aria-pressed={libOpen}
+              onClick={() => setLibraryOpen(!libOpen)}
+              title="User audio library"
+            >
+              library
+            </button>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <ShortcutsHelp />
@@ -749,14 +788,44 @@ export function ArrangementPage() {
             />
           </div>
 
-          {/* track headers (left) + timeline (right), MASTER pinned below.
+          {/* library (left) + track headers + timeline, MASTER pinned below.
               Timeline owns vertical scroll (Ableton plain-wheel); headers follow via onScrollY. */}
           <div
             className={
-              "mx-2 mb-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-sm border border-line" +
+              "relative mx-2 mb-2 flex min-h-0 flex-1 overflow-hidden rounded-sm border border-line" +
               (editorOpen && paneShown === "timeline" ? focusRing : "")
             }
           >
+            {libOpen && !mobile && (
+              <LibraryPanel
+                onReveal={(hit) => {
+                  setEditSel({ trackId: hit.trackId, clipId: hit.clipId });
+                  focusPane("timeline");
+                  zoomApiRef.current?.revealBeat(hit.startBeat, hit.trackIndex);
+                }}
+                onClose={() => setLibraryOpen(false)}
+              />
+            )}
+            {libOpen && mobile && (
+              <div className="absolute inset-0 z-20 flex bg-[#0c0c10]/80">
+                <LibraryPanel
+                  onReveal={(hit) => {
+                    setEditSel({ trackId: hit.trackId, clipId: hit.clipId });
+                    focusPane("timeline");
+                    zoomApiRef.current?.revealBeat(hit.startBeat, hit.trackIndex);
+                    setLibraryOpen(false);
+                  }}
+                  onClose={() => setLibraryOpen(false)}
+                />
+                <button
+                  type="button"
+                  className="min-w-0 flex-1"
+                  aria-label="Close library"
+                  onClick={() => setLibraryOpen(false)}
+                />
+              </div>
+            )}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <div
                 className="flex w-60 shrink-0 flex-col overflow-hidden border-r border-line bg-[#0e0e12]"
@@ -820,6 +889,7 @@ export function ArrangementPage() {
                   sum bus · all tracks → master fx → out
                 </span>
               </div>
+            </div>
             </div>
           </div>
 

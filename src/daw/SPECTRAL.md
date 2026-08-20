@@ -254,6 +254,10 @@ impartialer-detail canvas (Upheaval tab).
 original pitch. Snap still leaves *in-key* color; remap pulls everything to the
 grid. `residual` is not a dry mix.
 
+**Clean sub (< 100 Hz, always):** all bins below 100 Hz collapse to a single
+partial (lowest strong peak, then lock/transpose). Residual / hits / lo / mapping-off
+cannot leak competing lows. While the device is on, the mix takes sub from wet only.
+
 **Keep from detail pass:** strength, residual (now noise-only), hits, lo/mid/hi (as F0-range gates for in-key),
 viz, FxChain hosting (`ain-impartialer` only — no greenfield PitchMapperNode).
 
@@ -458,6 +462,7 @@ Impartialer
 - [x] Upheaval step 2: soft harmonic masks + one β per F0 group + residual
 - [x] Upheaval step 3: M× E/H refine (HPS-seeded, mono ring) → drive β / masks
 - [x] Musical gate: out-of-key never identity-passes; residual = aperiodic only
+- [x] Clean sub: <100 Hz always one partial; mix takes that band from wet
 - [ ] Upheaval step 4+: Bernsee phase continuity / sticky slew / per-track iso rings
   (see §4.5; canvas Upheaval / Path tabs)
 

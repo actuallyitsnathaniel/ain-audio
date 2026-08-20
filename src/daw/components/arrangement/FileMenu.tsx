@@ -130,7 +130,7 @@ export function FileMenu({
     if (busy) return;
     if (
       !window.confirm(
-        `Open “${file.name}”? This replaces the current studio and imported audio (same as New project). Continue?`,
+        `Open “${file.name}”? This replaces the current arrangement. Your audio library stays (this project's files are added to it). Continue?`,
       )
     ) {
       if (fileRef.current) fileRef.current.value = "";

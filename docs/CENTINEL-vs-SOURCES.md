@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build `g6a-join`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build `g4c-lpc`; hop freeze `g6e-edge`).
 
 Interactive companions (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx)
@@ -42,7 +42,13 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 - [x] **Body vs room** (`g2h-body`) — analysis HP + 2L preference so reflection delays don't own `Cycle_period`. Splice still reads the wet take (not a dereverb).
 - [x] **Join align** (`g2i-join`) — ±1 cycle, phase-aligned to the current tap.
 - [x] **Seam no-overlap** (`g6a-join`) — don't start another ±cycle until the current join fade finishes; raised-cosine mix. Overlapping xfades were warbling note runs. ¢ unchanged vs g5b (not the pass bar).
+- [x] **Run land** (`g6b-land`) — commit-fast 8ms after a hold (keeps ~20s). Previous note < 160ms → 16ms land, not 8ms Cher on every hop. Skip-entirely (220ms) cost ~2pts ≤15; soften instead.
+- [x] **Period hold** (`g6c-pe`) — mid-run E/H miss re-detects without dropping rate to 1 (24ms). Period slews on a run. Identity-flash at hops was the leftover warble.
+- [x] **Hop land vs Cher** (`g6d-hop`) — commit-fast is a fraction of Retune Speed (pop isolated 14ms / run 17ms), not a hard 8ms on every held-note hop. That 8ms was the robotic pop transition.
+- [x] **Phrase edges** (`g6e-edge`) — g6c period-hold does not run on cold start or while RMS is falling. Commit-fast skipped during cold start. Holding lock into the tail was the weirder hard stop.
 - [x] **Envelope post** (`g4a-env`) — LPC preserve after splice; settled `|R*|` + voiced only. Knob is amount. IIR stays warm at amt=0.
+- [x] **LPC level + gate** (`g4b-lpc`) — formant=100% was 0↔1 snaps (12ms xfade on an 8¢ chatter) plus all-pole drain (no gain match). Hysteresis + 40ms xfade + RMS match to splice.
+- [x] **LPC latch** (`g4c-lpc`) — stay open through the park (8¢ off was every land). Failed hop kept last poles (identity flash). Slower k/gain, hop 512. Ears, not ¢.
 - [ ] Optional formant *shift* (raise/lower independently) — later
 
 ### G3 — Sticky / DC finish (on G1 core, not the old YIN stack)
@@ -59,24 +65,21 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 
 ### G4 — Formant post / stay away
 - [x] Do not merge Smuts phase vocoder into live Centinel
-- [x] **LPC preserve** (`g4a-env`) — after splice, settled `|R*|` only. Not a second shifter.
+- [x] **LPC preserve** (`g4a-env` → `g4c-lpc`) — after splice, settled `|R*|` only. Not a second shifter. g4c latches through parks and keeps last poles so amt=1 doesn't snap/fade.
 - [ ] Optional formant *shift* (`1/R` pole warp / throat) — after preserve does not chew
 - [ ] **Later — Lent-adjacent cleanup audit:** do **not** gut Fairbanks/PSOLA now.
   Pop/AT path already demoted them (`CYCLE_SPLICE`). Revisit whether Fairbanks
   fallback and period-PSOLA can be slimmed once 14s/20s ears are done.
 
-## Current scorecard (`g6a-join`; leave freeze `g5b-vib`)
+## Current scorecard (`g6e-edge`; hop freeze `g6d-hop`)
 
-| Metric | g6a | g5b | Goal |
+| Metric | g6e | g6d | Goal |
 |---|---|---|---|
-| ≤15¢ of scale | **52.4%** | 52.4% | 53.7% |
-| loose holds (15–35¢ ≥80ms) | **2** | 2 | 2 |
-| listen ~10s ≤15 | **51%** | 51% | 51% |
-| listen ~14s ≤15 | **59%** | 59% | 47% |
-| listen ~20s ≤15 | **39%** | 39% | 46% |
-| clicks wet/dry | 20 / 21 | 20 / 21 | — |
+| ≤15¢ of scale | **54.2%** | 54.6% | 53.6% |
+| loose holds (15–35¢ ≥80ms) | **0** | 0 | 2 |
+| clicks wet/dry | 20 / 21 | 19 / 21 | — |
 
-Splice seam only (no overlapping ±cycle xfades). ¢ matches g5b — warble on runs is ears, not this table. Next if runs still warble: commit-fast (item 2). Do not chase 20s ¢.
+Phrase-edge hold off. ¢ ~g6d. Ears on cold starts / hard stops — I did not audition.
 
 Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true`.
 
@@ -87,7 +90,7 @@ Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true`.
 | `EH_LIVE` / `EH_DRIVE` | ON |
 | E/H sole acquire | ON — `yinPitch` deleted |
 | `inphinc` from E/H | ON — `1/periodSamp` in `process()` |
-| Product pitch-law | G3 knobs live; Nat Vib after Decay (`g5b`). Splice seam no-overlap (`g6a-join`). Orphan parked |
+| Product pitch-law | G3 knobs live; Nat Vib after Decay (`g5b`). Splice seam (`g6a`) + run land (`g6b`). Orphan parked |
 
 `npm run centinel:eh-validate` → `.tmp_centinel/eh-validate.json`
 

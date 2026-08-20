@@ -16,7 +16,7 @@ export interface OscSpec {
 // A sample source — a sampled preset's multisample used like an oscillator: it
 // runs through the SAME filter + filter-env + amp-env + LFO as the oscillators.
 // `presetId` points at a SampledPreset (its zones are decoded by preset id). loop
-// off = one-shot; loop on = sustains via loopStart/loopEnd (0..1 of the buffer).
+// off = one-shot (play bounce through, ignore note-off); loop on = sustain via loopStart/loopEnd (0..1 of the buffer).
 export interface SampleSource {
   presetId: string;
   level: number; // 0..1 (0 = silent)

@@ -14,6 +14,11 @@ import { useRafLoop } from "../../hooks/useRafLoop";
 import { findKit, type SequenceClip } from "../../data/kits";
 import type { NoteClip } from "../../data/clips";
 import { stepDiscrepancy } from "../../data/drum-midi";
+import {
+  dragHasAudioIntake,
+  libraryBufIdFromDrag,
+} from "../../library-drag";
+import { filesFromDataTransfer } from "../../file-source";
 
 const BAR_STEPS = 16;
 const STEP_BEATS = 0.25;
@@ -44,12 +49,18 @@ export function DrumClipGrid({
     laneId: string,
     e: React.DragEvent<HTMLDivElement>,
   ) => {
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
     e.preventDefault();
     e.stopPropagation();
     onSelectLane(laneId);
-    const ok = await engine.setKitLaneSample(kit.id, laneId, file);
+    const libId = libraryBufIdFromDrag(e.dataTransfer);
+    if (libId) {
+      if (!engine.setKitLaneBuf(kit.id, laneId, libId))
+        window.alert("Couldn't load that sample for this lane");
+      return;
+    }
+    const got = (await filesFromDataTransfer(e.dataTransfer))[0];
+    if (!got) return;
+    const ok = await engine.setKitLaneSample(kit.id, laneId, got.file, got);
     if (!ok) window.alert("Couldn't load that sample for this lane");
   };
 
@@ -287,7 +298,7 @@ function SampleWell({
         }
       }}
       onDragOver={(e) => {
-        if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
+        if (dragHasAudioIntake(e.dataTransfer)) e.preventDefault();
       }}
       onDrop={onDrop}
       title={

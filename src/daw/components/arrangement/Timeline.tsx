@@ -19,6 +19,11 @@ import { openContextMenu } from "../context-menu-bus";
 import { clipBeats } from "../../data/clips";
 import { DRUM_BASE } from "../../data/drum-midi";
 import { type ArrClip, type ArrTrack, slippedLocals } from "../../data/arrangement";
+import {
+  dragHasAudioIntake,
+  libraryBufIdFromDrag,
+} from "../../library-drag";
+import { filesFromDataTransfer } from "../../file-source";
 
 const HEAD_H = 30; // ruler height (must match ArrangementPage) — tall enough for brace grips
 const ROW_H = 64; // track lane height (must match ArrangementPage ROW_H)
@@ -66,6 +71,7 @@ export function Timeline({
   zoomApiRef?: MutableRefObject<{
     zoom: (factor: number) => void;
     scrollByY: (dy: number) => void;
+    revealBeat: (beat: number, trackIndex: number) => void;
   } | null>;
   /** Fires when vertical track-scroll changes so the header column can stay locked. */
   onScrollY?: (scrollY: number) => void;
@@ -551,22 +557,32 @@ export function Timeline({
   // drop an audio file onto an audio-track lane → create a clip there + import it.
   // preventDefault on dragover is REQUIRED or the browser navigates to the file.
   const onDragOver = (e: React.DragEvent<HTMLCanvasElement>) => {
-    if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
+    if (dragHasAudioIntake(e.dataTransfer)) e.preventDefault();
   };
   const onDrop = async (e: React.DragEvent<HTMLCanvasElement>) => {
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
     e.preventDefault();
     const r = ref.current!.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
     const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
+    const hit = y >= HEAD_H ? hitClip(x, y) : null;
+    const rowTrack = y >= HEAD_H ? tracks()[yToTrackIndex(y)] : undefined;
+
+    const libId = libraryBufIdFromDrag(e.dataTransfer);
+    if (libId) {
+      const trackId = !hit && rowTrack?.kind === "audio" ? rowTrack.id : undefined;
+      const placed = engine.placeLibraryClip(libId, { beat, trackId });
+      if (placed) onEditClip(placed.trackId, placed.clipId);
+      return;
+    }
+
+    const fileDrop = await filesFromDataTransfer(e.dataTransfer);
+    const file = fileDrop[0]?.file;
+    if (!file) return;
     const lower = file.name.toLowerCase();
 
     // Standard MIDI File → midi clip (tempo/CC/bend preserved in NoteClip.autos)
     if (lower.endsWith(".mid") || lower.endsWith(".midi")) {
-      const hit = y >= HEAD_H ? hitClip(x, y) : null;
-      const rowTrack = y >= HEAD_H ? tracks()[yToTrackIndex(y)] : undefined;
       const prefer =
         !hit && rowTrack?.kind === "midi" ? rowTrack.id : undefined;
       const res = await engine.importMidiFile(file, beat, prefer);
@@ -574,37 +590,12 @@ export function Timeline({
       return;
     }
 
-    const res = await engine.importAudio(file);
+    const origin = fileDrop[0]!;
+    const res = await engine.importAudio(file, origin);
     if (!res) return; // undecodable
-    // clip length FOLLOWS THE SAMPLE: its actual duration in beats at the current tempo
-    // (¼-beat granularity). Dragging the clip longer later auto-loops; shorter cuts.
-    const secPerBeat = 60 / engine.arrangement.bpm;
-    const lengthBeats = Math.max(0.25, Math.round((res.seconds / secPerBeat) * 4) / 4);
-    const audioContent = {
-      kind: "audio" as const,
-      bufId: res.bufId,
-      name: res.name,
-      a: 0,
-      b: 1,
-      gain: 1,
-      cents: 0,
-      semi: 0,
-      snap: true,
-      norm: true, // new imports auto-normalize (deferral #7)
-      rootBpm: res.bpm, // detected native tempo (drives grid-sync / warp)
-      bars: res.bars,
-      key: res.key,
-    };
-
-    engine.pushUndo();
-    // empty space in an AUDIO track's lane → place the clip THERE. A drop ON an
-    // existing clip never replaces it — that space is taken, so the file gets a NEW
-    // track (as does a drop on a midi/drum row or below the tracks).
-    const hit = y >= HEAD_H ? hitClip(x, y) : null;
-    const rowTrack = y >= HEAD_H ? tracks()[yToTrackIndex(y)] : undefined;
-    const track = !hit && rowTrack?.kind === "audio" ? rowTrack : engine.addTrack("audio");
-    const created = engine.addClip(track.id, { startBeat: beat, lengthBeats, loop: false, content: { ...audioContent } });
-    if (created) { engine.selectClip(created.id); onEditClip(track.id, created.id); }
+    const trackId = !hit && rowTrack?.kind === "audio" ? rowTrack.id : undefined;
+    const placed = engine.placeLibraryClip(res.bufId, { beat, trackId });
+    if (placed) onEditClip(placed.trackId, placed.clipId);
   };
 
   // wheel — Ableton Arrangement mapping (same as the piano roll):
@@ -667,6 +658,15 @@ export function Timeline({
         const cv = ref.current;
         if (!cv) return;
         setScrollY(view.current.scrollY + dy, cv.clientHeight);
+      },
+      revealBeat: (beat: number, trackIndex: number) => {
+        const cv = ref.current;
+        if (!cv) return;
+        const v = view.current;
+        const w = cv.clientWidth;
+        const h = cv.clientHeight;
+        v.scrollX = Math.max(0, beat * v.ppb - w * 0.28);
+        setScrollY(trackIndex * ROW_H - Math.max(0, (h - HEAD_H) * 0.25), h);
       },
     };
     return () => {

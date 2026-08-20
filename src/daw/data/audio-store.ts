@@ -18,13 +18,29 @@ const STORE = "imports";
 
 export type PersistMime = "audio/webm;codecs=opus" | "audio/wav" | string;
 
+/** How the bytes got into the user library (best-effort; inferred for legacy rows). */
+export type LibraryKind = "drop" | "take" | "bounce";
+
 export type StoredAudio = {
   bufId: string;
   bytes: ArrayBuffer;
   name: string;
   /** Present on new writes; legacy rows may omit (decode via sniff). */
   mime: PersistMime;
+  kind?: LibraryKind;
+  /** Original import location when the browser exposes it (else basename). */
+  sourcePath?: string;
+  /** Chromium File System Access handle — re-read original file. */
+  sourceHandle?: FileSystemFileHandle;
 };
+
+export function inferLibraryKind(bufId: string, name: string): LibraryKind {
+  if (bufId.startsWith("rec")) return "take";
+  const stem = name.replace(/\.[^.]+$/, "").toLowerCase();
+  if (stem === "take" || stem.startsWith("take ")) return "take";
+  if (stem === "bounce" || stem.startsWith("bounce")) return "bounce";
+  return "drop";
+}
 
 /** Last successful buffer→disk codec (for System / capability UI). */
 let _lastPersistCodec: "opus" | "wav" | null = null;
@@ -66,22 +82,54 @@ function open(): Promise<IDBDatabase | null> {
   });
 }
 
-/** Store raw bytes (+ optional mime) under bufId. */
+/** Store raw bytes (+ optional mime/kind/source) under bufId. Returns false if IDB is unavailable. */
 export async function putAudio(
   bufId: string,
   bytes: ArrayBuffer,
   name: string,
   mime: PersistMime = "application/octet-stream",
-): Promise<void> {
+  kind?: LibraryKind,
+  source?: { sourcePath?: string; sourceHandle?: FileSystemFileHandle },
+): Promise<boolean> {
   const db = await open();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put({ bytes, name, mime }, bufId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+  if (!db) return false;
+  const kindResolved = kind ?? inferLibraryKind(bufId, name);
+  const record: {
+    bytes: ArrayBuffer;
+    name: string;
+    mime: PersistMime;
+    kind: LibraryKind;
+    sourcePath?: string;
+    sourceHandle?: FileSystemFileHandle;
+  } = {
+    bytes,
+    name,
+    mime,
+    kind: kindResolved,
+  };
+  if (source?.sourcePath) record.sourcePath = source.sourcePath;
+  if (source?.sourceHandle) record.sourceHandle = source.sourceHandle;
+
+  const write = (value: typeof record) =>
+    new Promise<boolean>((resolve) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).put(value, bufId);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+
+  let ok = await write(record);
+  if (!ok && record.sourceHandle) {
+    ok = await write({
+      bytes: record.bytes,
+      name: record.name,
+      mime: record.mime,
+      kind: record.kind,
+      sourcePath: record.sourcePath,
+    });
+  }
   db.close();
+  return ok;
 }
 
 /**
@@ -93,13 +141,15 @@ export async function putAudioBuffer(
   bufId: string,
   buf: AudioBuffer,
   name: string,
-): Promise<PersistMime> {
+  kind?: LibraryKind,
+): Promise<{ mime: PersistMime; ok: boolean }> {
   const { bytes, mime } = await encodePersistable(buf);
   const base = name.replace(/\.(wav|webm|ogg|opus)$/i, "");
   const fileName =
     mime.startsWith("audio/webm") ? `${base}.webm` : `${base}.wav`;
-  await putAudio(bufId, bytes, fileName, mime);
-  return mime;
+  const resolved = kind ?? inferLibraryKind(bufId, name);
+  const ok = await putAudio(bufId, bytes, fileName, mime, resolved);
+  return { mime, ok };
 }
 
 export async function encodePersistable(
@@ -152,14 +202,26 @@ export async function allAudio(): Promise<StoredAudio[]> {
         bytes: ArrayBuffer;
         name: string;
         mime?: string;
+        kind?: LibraryKind;
+        sourcePath?: string;
+        sourceHandle?: FileSystemFileHandle;
       }[];
       resolve(
-        keys.map((k, i) => ({
-          bufId: String(k),
-          bytes: vals[i]!.bytes,
-          name: vals[i]!.name,
-          mime: vals[i]!.mime || sniffMime(vals[i]!.bytes, vals[i]!.name),
-        })),
+        keys.map((k, i) => {
+          const bufId = String(k);
+          const name = vals[i]!.name;
+          const kind = vals[i]!.kind || inferLibraryKind(bufId, name);
+          return {
+            bufId,
+            bytes: vals[i]!.bytes,
+            name,
+            mime: vals[i]!.mime || sniffMime(vals[i]!.bytes, name),
+            kind,
+            sourcePath:
+              vals[i]!.sourcePath || (kind === "drop" ? name : undefined),
+            sourceHandle: vals[i]!.sourceHandle,
+          };
+        }),
       );
     };
     tx.onerror = () => resolve([]);
@@ -201,7 +263,67 @@ export function sniffMime(bytes: ArrayBuffer, name: string): PersistMime {
   return "application/octet-stream";
 }
 
-// wipe ALL stored imports (new-project / clear-db)
+/** Drop one library row. Returns false if IDB is unavailable. */
+export async function deleteAudio(bufId: string): Promise<boolean> {
+  const db = await open();
+  if (!db) return false;
+  const ok = await new Promise<boolean>((resolve) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).delete(bufId);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+  db.close();
+  return ok;
+}
+
+/** Rename (or retag) a stored row without rewriting bytes. */
+export async function patchAudio(
+  bufId: string,
+  patch: {
+    name?: string;
+    kind?: LibraryKind;
+    sourcePath?: string;
+    sourceHandle?: FileSystemFileHandle;
+  },
+): Promise<boolean> {
+  const db = await open();
+  if (!db) return false;
+  const ok = await new Promise<boolean>((resolve) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    const req = store.get(bufId);
+    req.onsuccess = () => {
+      const cur = req.result as
+        | {
+            bytes: ArrayBuffer;
+            name: string;
+            mime?: string;
+            kind?: LibraryKind;
+            sourcePath?: string;
+            sourceHandle?: FileSystemFileHandle;
+          }
+        | undefined;
+      if (!cur) return;
+      store.put(
+        {
+          ...cur,
+          name: patch.name ?? cur.name,
+          kind: patch.kind ?? cur.kind,
+          sourcePath: patch.sourcePath ?? cur.sourcePath,
+          sourceHandle: patch.sourceHandle ?? cur.sourceHandle,
+        },
+        bufId,
+      );
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+  db.close();
+  return ok;
+}
+
+// wipe ALL stored imports (legacy; New project no longer calls this)
 export async function clearAudio(): Promise<void> {
   const db = await open();
   if (!db) return;

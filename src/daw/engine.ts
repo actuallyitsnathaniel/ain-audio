@@ -41,14 +41,22 @@ import {
   putAudio,
   putAudioBuffer,
   allAudio,
-  pruneAudio,
-  clearAudio,
+  deleteAudio,
+  patchAudio,
   canPersistOpus,
   encodePersistable,
   encodeWavPcm16,
   lastPersistCodec,
   sniffMime,
+  inferLibraryKind,
+  type LibraryKind,
 } from "./data/audio-store";
+import {
+  fileSourcePath,
+  importSourceFromFile,
+  readHandleFile,
+  type ImportSource,
+} from "./file-source";
 import {
   downloadBlob,
   packAin,
@@ -95,6 +103,7 @@ import {
   DEFAULT_KIT,
   defaultSequence,
   findKit,
+  allKits,
   upsertUserKit,
   cloneKitAsUser,
   parseLoopMeta,
@@ -206,6 +215,19 @@ type EngineEvent =
   | "arrange"
   | "select";
 
+export type LibraryEntry = {
+  bufId: string;
+  name: string;
+  kind: LibraryKind;
+  seconds: number;
+  persistOk: boolean;
+  used: boolean;
+  /** Where the file was imported from (OS path, relative drop, or basename). */
+  sourcePath?: string;
+  /** True when a Chromium file handle can re-read the original. */
+  hasSourceHandle: boolean;
+};
+
 export interface Levels {
   rms: number;
   peak: number;
@@ -263,6 +285,8 @@ type VoiceHandle = {
   noiseSrc?: AudioBufferSourceNode;
   sampleSrc?: AudioBufferSourceNode;
   lfos?: OscillatorNode[]; // vibrato + patch LFOs, stopped with the voice
+  /** Sample-only `loop: false`: amp is scheduled to the bounce end; ignore note-off. */
+  oneShot?: boolean;
 };
 
 // A resolved voice selection — the fully-resolved SynthPatch to voice (which may
@@ -546,10 +570,27 @@ class AudioEngine {
   sequence: SequenceClip = defaultSequence(DEFAULT_KIT);
   private _drumBufs: Record<string, AudioBuffer | null> = {}; // `${kitId}:${laneId}` → decoded one-shot (null = failed / synth)
   private _noiseBufs: Partial<Record<"white" | "pink", AudioBuffer>> = {}; // synth noise sources, built once
-  // imported audio-clip buffers (session-only; bufId → decoded buffer + its peak cache)
+  // imported audio-clip buffers (user library; bufId → decoded buffer + its peak cache)
   private _importBufs: Record<string, AudioBuffer> = {};
   private _importPeaks: Record<string, Float32Array> = {};
   private _importSeq = 0;
+  private _libMeta: Record<
+    string,
+    {
+      name: string;
+      kind: LibraryKind;
+      persistOk: boolean;
+      sourcePath?: string;
+      sourceHandle?: FileSystemFileHandle;
+    }
+  > = {};
+  private _libPreview: {
+    bufId: string;
+    src: AudioBufferSourceNode;
+    gain: GainNode;
+  } | null = null;
+  /** True after any IndexedDB write failed (private mode / quota). */
+  private _libraryPersistFailed = false;
   // audio clips are long one-shots (not per-note events) — track which have been started
   // this playback pass so the lookahead scheduler doesn't retrigger them every tick.
   // `synced` clips re-rate live when the tempo changes (the tape-warble effect):
@@ -1761,6 +1802,7 @@ class AudioEngine {
     // ride src.detune (cents), same as an osc. loop = sustain via loopStart/End.
     let sampleSrc: AudioBufferSourceNode | undefined;
     let sampleReady = false;
+    let samplePlayDur = 0;
     if (p.sample && p.sample.level > 0) {
       const preset = this.samplePresets.find(
         (pr) => pr.id === p.sample!.presetId,
@@ -1772,7 +1814,8 @@ class AudioEngine {
         const s = c.createBufferSource();
         // varispeed: note pitch × independent transpose (semi + cents), speed-coupled
         const vari = (p.sample.semi ?? 0) / 12 + (p.sample.cents ?? 0) / 1200;
-        s.playbackRate.value = Math.pow(2, (midi - zone.rootMidi) / 12 + vari);
+        const rate = Math.pow(2, (midi - zone.rootMidi) / 12 + vari);
+        s.playbackRate.value = rate;
         // per-note ±cents jitter — only when global voiceHumanize is on
         if (
           this.audioPrefs.voiceHumanize &&
@@ -1784,6 +1827,8 @@ class AudioEngine {
         const dur = zone.buf.duration;
         const a = Math.min(0.999, Math.max(0, p.sample.start ?? 0));
         const b = Math.min(1, Math.max(a + 0.001, p.sample.end ?? 1));
+        const nativeDur = (b - a) * dur;
+        samplePlayDur = nativeDur / Math.max(1e-4, rate);
         if (p.sample.loop) {
           let ls = p.sample.loopStart ?? a;
           let le = p.sample.loopEnd ?? b;
@@ -1817,7 +1862,7 @@ class AudioEngine {
         sg.connect(vf);
         // one-shot: play only the window. loop: start at the window, loop sustains.
         if (p.sample.loop) s.start(t, a * dur);
-        else s.start(t, a * dur, (b - a) * dur);
+        else s.start(t, a * dur, nativeDur);
         sampleSrc = s;
       }
     }
@@ -1826,10 +1871,40 @@ class AudioEngine {
     if (p.sample && p.sample.level > 0 && !sampleReady && p.osc1.level <= 0)
       addOsc("sawtooth", 0, 0, 0.7);
 
-    // amp envelope
+    // amp envelope. Sample-only one-shot (Ableton Simpler 1-Shot): play the bounce
+    // through — note-off must not cut it. Clip 1/16s still ring the full pluck.
+    const sampleOnlyOneShot = !!(
+      sampleSrc &&
+      p.sample &&
+      !p.sample.loop &&
+      p.osc1.level <= 0 &&
+      (!p.osc2On || p.osc2.level <= 0) &&
+      p.sub.level <= 0 &&
+      p.noise.level <= 0
+    );
     const ae = p.ampEnv;
     const peak = p.vol * vel;
-    scheduleAmpAttack(vg.gain, t, ae, peak);
+    if (sampleOnlyOneShot && sampleSrc) {
+      const releaseAt =
+        t + Math.max(0.02, samplePlayDur - Math.max(0.02, ae.r));
+      const ampEnd = scheduleAmpOneShot(vg.gain, t, ae, peak, releaseAt);
+      const stopAt = Math.max(t + samplePlayDur, ampEnd) + 0.05;
+      try {
+        sampleSrc.stop(stopAt);
+      } catch {
+        /* start(duration) already bounds the buffer */
+      }
+      sampleSrc.onended = () => {
+        try {
+          vg.disconnect();
+          vf.disconnect();
+        } catch {
+          /* fine */
+        }
+      };
+    } else {
+      scheduleAmpAttack(vg.gain, t, ae, peak);
+    }
 
     // pitch-modulation targets = every pitched source's detune (oscs + the sample)
     const pitchTargets = oscs.map((o) => o.detune);
@@ -1864,6 +1939,7 @@ class AudioEngine {
       noiseSrc,
       sampleSrc,
       lfos,
+      oneShot: sampleOnlyOneShot,
     };
     if (p.voices?.mode === "mono") this._monoVoices.set(dest, handle);
     return handle;
@@ -1881,6 +1957,10 @@ class AudioEngine {
   // stopped only once the exponential tail is well below audibility (~5 time
   // constants), so the tail rings out instead of being cut.
   releaseVoice(h: VoiceHandle, when: number, instant?: boolean) {
+    // one-shot sample: amp + buffer are already scheduled to the bounce end.
+    // Key-up / clip note-off must not cut it (Ableton 1-Shot). Retrigger / panic
+    // pass instant and still steal the voice.
+    if (h.oneShot && !instant) return;
     const c = this.ctx!;
     const t = when;
     const r = Math.max(0.015, instant ? 0.03 : h.r);
@@ -3435,12 +3515,15 @@ class AudioEngine {
     }
     const bufId = "rec" + ++this._importSeq + Date.now().toString(36);
     this._importBufs[bufId] = buf;
-    void putAudioBuffer(bufId, buf, "take");
     const name =
       "take " +
       (Math.floor(startBeat / this.arrangement.beatsPerBar) + 1) +
       "." +
       (Math.floor(startBeat % this.arrangement.beatsPerBar) + 1);
+    this.rememberLibrary(bufId, { name, kind: "take", persistOk: true });
+    void putAudioBuffer(bufId, buf, name, "take").then(({ ok }) => {
+      this.rememberLibrary(bufId, { name, kind: "take", persistOk: ok });
+    });
     const created = this.addClip(trackId, {
       startBeat: place,
       lengthBeats: lenBeats,
@@ -4321,14 +4404,46 @@ class AudioEngine {
   setArrangementLoop(start: number, end: number, on: boolean) {
     const a = Math.max(0, Math.min(start, end));
     const b = Math.max(a + 0.25, Math.max(start, end));
+    const prev = this.arrangement.loop;
+    // pointermove fires every frame — bail before touching the transport if the
+    // snapped brace didn't actually move
+    if (
+      prev &&
+      Math.abs(prev.start - a) < 1e-9 &&
+      Math.abs(prev.end - b) < 1e-9 &&
+      prev.on === on &&
+      this.loopOn === on
+    ) {
+      return;
+    }
     const wasBrace = !!this.activeBrace();
-    const shown = this.currentBeat(); // read under the OLD brace mapping
+    // read under the OLD mapping before we rewrite the brace
+    const shown =
+      this.sequencePlaying && this.arrangeMode ? this.currentBeat() : 0;
+    const prevStart = prev?.start ?? a;
+    const prevEnd = prev?.end ?? b;
     this.arrangement.loop = { start: a, end: b, on };
     this.loopOn = on;
     this.saveArr();
-    // engaging / disengaging mid-playback re-maps the clock (dragging the brace
-    // bounds while it stays on doesn't) — carry the playhead across the switch
-    if (!!this.activeBrace() !== wasBrace) this.reseatTransport(shown);
+    if (!(this.sequencePlaying && this.arrangeMode)) return;
+    const nowBrace = !!this.activeBrace();
+    // engage / disengage re-maps absolute ↔ folded without changing wrap period —
+    // soft reseat keeps the already-correct lookahead and only hands audio over.
+    if (nowBrace !== wasBrace) {
+      this.reseatTransport(shown);
+      return;
+    }
+    // dragging start/end (or moving the body) changes the wrap period / phase while
+    // the brace stays on. Already-queued MIDI wraps and audio hard-stops were built
+    // for the OLD geometry — leaving them in the graph is what multiplies playback.
+    // Rematerialize from the beat that was showing (folded into the new brace).
+    // Brace edits are snap-quantized, so this fires once per grid step — not per pixel.
+    if (
+      nowBrace &&
+      (Math.abs(prevStart - a) > 1e-9 || Math.abs(prevEnd - b) > 1e-9)
+    ) {
+      this.rematerializeTransport(shown);
+    }
   }
 
   /** Turn the loop brace on spanning the time selection, or the selected clips. */
@@ -4803,11 +4918,13 @@ class AudioEngine {
     return clipLenSec > contentSec + 0.01;
   }
 
-  // ── imported audio clips (session-only file import) ──
-  // Decode a user-picked File into a session buffer; returns its bufId + the filename-
-  // detected meta (bpm/key/bars, same parser LoopLanes use), so a dropped clip auto-fills.
+  // ── imported audio (user library) ──
+  // Decode a user-picked File into the library; returns bufId + filename meta
+  // (bpm/key/bars, same parser LoopLanes use). Timeline drop places a clip that
+  // references this bufId — the file is NOT a clip attachment.
   async importAudio(
     file: File,
+    source?: ImportSource,
   ): Promise<{
     bufId: string;
     name: string;
@@ -4824,13 +4941,22 @@ class AudioEngine {
       const buf = await c.decodeAudioData(ab);
       const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
       this._importBufs[bufId] = buf;
-      void putAudio(
+      const origin = source ?? importSourceFromFile(file);
+      const persistOk = await putAudio(
         bufId,
         raw,
         file.name,
         file.type || "application/octet-stream",
-      ); // persist original bytes for reload (best-effort)
-      this.emit("arrange");
+        "drop",
+        origin,
+      );
+      this.rememberLibrary(bufId, {
+        name: file.name,
+        kind: "drop",
+        persistOk,
+        sourcePath: origin.sourcePath,
+        sourceHandle: origin.sourceHandle,
+      });
       const stem = file.name.replace(/\.[^.]+$/, ""); // drop the extension
       const meta = parseLoopMeta(stem);
       return {
@@ -4894,9 +5020,16 @@ class AudioEngine {
     kitId: string,
     laneId: string,
     file: File,
+    source?: ImportSource,
   ): Promise<boolean> {
-    const res = await this.importAudio(file);
+    const res = await this.importAudio(file, source);
     if (!res) return false;
+    return this.setKitLaneBuf(kitId, laneId, res.bufId);
+  }
+
+  /** Point a kit lane at an existing library buffer (no re-decode). */
+  setKitLaneBuf(kitId: string, laneId: string, bufId: string): boolean {
+    if (!this._importBufs[bufId]) return false;
     let kit = findKit(kitId);
     const wasBuiltin = !kit.user;
     const prevId = kit.id;
@@ -4906,7 +5039,7 @@ class AudioEngine {
       l.id === laneId
         ? {
             ...l,
-            bufId: res.bufId,
+            bufId,
             url: undefined,
             a: 0,
             b: 1,
@@ -4920,8 +5053,7 @@ class AudioEngine {
     const next: DrumKit = { ...kit, lanes, user: true };
     upsertUserKit(next);
     this.kit = next;
-    if (this._importBufs[res.bufId])
-      this._drumBufs[next.id + ":" + laneId] = this._importBufs[res.bufId]!;
+    this._drumBufs[next.id + ":" + laneId] = this._importBufs[bufId]!;
     void this.loadKit(next);
     // remount drum clips that pointed at the old builtin kit id
     if (wasBuiltin) {
@@ -4959,9 +5091,8 @@ class AudioEngine {
     this.emit("arrange");
     return next;
   }
-  // New project: wipe the arrangement + all imported audio (localStorage + IndexedDB, in
-  // sync so no clip is left with a dangling bufId) and reset to a blank studio. Stops
-  // playback and clears selection/undo/clipboard.
+  // New project: wipe the arrangement (tracks, clips, undo) but keep the user
+  // audio library in IndexedDB + memory so imports can be dropped back in.
   async newProject(): Promise<void> {
     await this.wipeStudioSession();
     this.arrangement = emptyArrangement();
@@ -4972,16 +5103,16 @@ class AudioEngine {
     this.emit("transport");
   }
 
-  /** Stop playback, clear imports/caches/strips/undo — shared by new + .ain open. */
+  /** Stop playback, clear session caches/strips/undo — shared by new + .ain open.
+   * Does NOT wipe the user audio library (IDB + `_importBufs`). */
   private async wipeStudioSession(): Promise<void> {
+    this.stopLibraryPreview();
     if (this.sequencePlaying) this.stopArrangement();
     this.panicMidiNotes();
     this.armChannel(null);
     this.stopAudioClips();
-    this._importBufs = {};
     this._drumBufs = {};
     this._reverseBufs = {};
-    this._importPeaks = {};
     this._waveCache = {};
     this._warpCache.clear();
     for (const id in this._stretch) this.disposeStretch(id);
@@ -5006,7 +5137,6 @@ class AudioEngine {
     this._undo = [];
     this._redo = [];
     this._clipboard = null;
-    await clearAudio();
   }
 
   /**
@@ -5283,7 +5413,10 @@ class AudioEngine {
 
     for (const a of pack.assets) {
       const mime = sniffMime(a.bytes, a.name ?? "");
-      await putAudio(a.bufId, a.bytes, a.name || a.bufId, mime);
+      const name = a.name || a.bufId;
+      const kind = inferLibraryKind(a.bufId, name);
+      const ok = await putAudio(a.bufId, a.bytes, name, mime, kind);
+      this.rememberLibrary(a.bufId, { name, kind, persistOk: ok });
     }
 
     const c = this.ensureCtx();
@@ -5336,22 +5469,31 @@ class AudioEngine {
     return pack.manifest.name || "project";
   }
 
-  // Re-hydrate persisted imports on boot: decode each stored file into _importBufs, then
-  // prune any that no clip references. Called once from the arrangement page on mount.
+  // Re-hydrate the user library on boot: decode each stored file into _importBufs.
+  // Library rows are not pruned when unused by the arrangement.
   async loadPersistedAudio(): Promise<void> {
     void this.probePersistCodec();
     const c = this.ensureCtx();
     const stored = await allAudio();
-    for (const { bufId, bytes } of stored) {
+    for (const { bufId, bytes, name, kind, sourcePath, sourceHandle } of stored) {
+      this.rememberLibrary(
+        bufId,
+        {
+          name,
+          kind: kind ?? inferLibraryKind(bufId, name),
+          persistOk: true,
+          sourcePath,
+          sourceHandle,
+        },
+        true,
+      );
       if (this._importBufs[bufId]) continue;
       try {
         this._importBufs[bufId] = await c.decodeAudioData(bytes.slice(0));
       } catch {
-        /* corrupt entry — skip */
+        /* corrupt entry — keep the library row so Replace file… can recover */
       }
     }
-    // prune imports no arrangement clip or kit lane points at
-    void pruneAudio(referencedImportIds(this.arrangement));
     // warm the live stretch nodes for restored COMPLEX clips (first play = no fallback)
     for (const t of this.arrangement.tracks)
       for (const cl of t.clips)
@@ -5385,6 +5527,299 @@ class AudioEngine {
   importSeconds(bufId: string): number {
     return this._importBufs[bufId]?.duration ?? 0;
   }
+
+  /** Same shape as importAudio() — for placing an existing library buffer. */
+  importMeta(bufId: string): {
+    bufId: string;
+    name: string;
+    seconds: number;
+    bpm?: number;
+    bars?: number;
+    key?: string;
+  } | null {
+    const buf = this._importBufs[bufId];
+    const meta = this._libMeta[bufId];
+    if (!buf || !meta) return null;
+    const stem = meta.name.replace(/\.[^.]+$/, "");
+    const parsed = parseLoopMeta(stem);
+    return {
+      bufId,
+      name: parsed.name || meta.name,
+      seconds: buf.duration,
+      bpm: parsed.bpm,
+      bars: parsed.bars,
+      key: parsed.key,
+    };
+  }
+
+  /** Place a library buffer as an audio clip. Omitting trackId adds a new audio track. */
+  placeLibraryClip(
+    bufId: string,
+    opts?: { beat?: number; trackId?: string },
+  ): { trackId: string; clipId: string } | null {
+    const meta = this.importMeta(bufId);
+    if (!meta) return null;
+    this.pushUndo();
+    const beat = Math.max(0, opts?.beat ?? this.insertBeat);
+    const secPerBeat = 60 / this.arrangement.bpm;
+    const lengthBeats = Math.max(
+      0.25,
+      Math.round((meta.seconds / secPerBeat) * 4) / 4,
+    );
+    let t = opts?.trackId ? this.findTrack(opts.trackId) : undefined;
+    if (!t || t.kind !== "audio") t = this.addTrack("audio");
+    const created = this.addClip(t.id, {
+      startBeat: beat,
+      lengthBeats,
+      loop: false,
+      content: {
+        kind: "audio",
+        bufId: meta.bufId,
+        name: meta.name,
+        a: 0,
+        b: 1,
+        gain: 1,
+        cents: 0,
+        semi: 0,
+        snap: true,
+        norm: true,
+        rootBpm: meta.bpm,
+        bars: meta.bars,
+        key: meta.key,
+      },
+    });
+    if (!created) return null;
+    this.selectClip(created.id);
+    this.emit("arrange");
+    return { trackId: t.id, clipId: created.id };
+  }
+
+  private rememberLibrary(
+    bufId: string,
+    meta: {
+      name: string;
+      kind: LibraryKind;
+      persistOk: boolean;
+      sourcePath?: string;
+      sourceHandle?: FileSystemFileHandle;
+    },
+    silent = false,
+  ) {
+    this._libMeta[bufId] = meta;
+    if (!meta.persistOk) this._libraryPersistFailed = true;
+    if (!silent) this.emit("arrange");
+  }
+
+  listLibrary(): LibraryEntry[] {
+    const used = referencedImportIds(this.arrangement);
+    const ids = Object.keys(this._libMeta);
+    ids.sort((a, b) =>
+      this._libMeta[a]!.name.localeCompare(this._libMeta[b]!.name, undefined, {
+        sensitivity: "base",
+      }),
+    );
+    return ids.map((bufId) => {
+      const m = this._libMeta[bufId]!;
+      return {
+        bufId,
+        name: m.name,
+        kind: m.kind,
+        seconds: this._importBufs[bufId]?.duration ?? 0,
+        persistOk: m.persistOk,
+        used: used.has(bufId),
+        sourcePath: m.sourcePath,
+        hasSourceHandle: !!m.sourceHandle,
+      };
+    });
+  }
+
+  libraryPersistFailed(): boolean {
+    return this._libraryPersistFailed;
+  }
+
+  libraryPreviewing(): string | null {
+    return this._libPreview?.bufId ?? null;
+  }
+
+  previewLibrary(bufId: string) {
+    if (this._libPreview?.bufId === bufId) {
+      this.stopLibraryPreview();
+      return;
+    }
+    this.stopLibraryPreview();
+    const buf = this._importBufs[bufId];
+    const c = this.ensureCtx();
+    void c.resume();
+    const n = this.nodes;
+    if (!buf || !n) return;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    const g = c.createGain();
+    g.gain.value = 0.85;
+    src.connect(g);
+    g.connect(n.sum);
+    src.onended = () => {
+      if (this._libPreview?.src === src) {
+        this._libPreview = null;
+        try {
+          g.disconnect();
+        } catch {
+          /* fine */
+        }
+        this.emit("arrange");
+      }
+    };
+    src.start();
+    this._libPreview = { bufId, src, gain: g };
+    this.emit("arrange");
+  }
+
+  stopLibraryPreview() {
+    const p = this._libPreview;
+    if (!p) return;
+    this._libPreview = null;
+    try {
+      p.src.onended = null;
+      p.src.stop();
+    } catch {
+      /* already stopped */
+    }
+    try {
+      p.src.disconnect();
+      p.gain.disconnect();
+    } catch {
+      /* fine */
+    }
+    this.emit("arrange");
+  }
+
+  libraryUsages(
+    bufId: string,
+  ): { trackId: string; clipId: string; startBeat: number; trackIndex: number }[] {
+    const out: {
+      trackId: string;
+      clipId: string;
+      startBeat: number;
+      trackIndex: number;
+    }[] = [];
+    this.arrangement.tracks.forEach((t, trackIndex) => {
+      for (const cl of t.clips) {
+        if (cl.content.kind === "audio" && cl.content.bufId === bufId)
+          out.push({
+            trackId: t.id,
+            clipId: cl.id,
+            startBeat: cl.startBeat,
+            trackIndex,
+          });
+      }
+    });
+    return out;
+  }
+
+  revealLibraryInProject(bufId: string): {
+    trackId: string;
+    clipId: string;
+    startBeat: number;
+    trackIndex: number;
+  } | null {
+    const hit = this.libraryUsages(bufId)[0];
+    if (!hit) return null;
+    this.selectClip(hit.clipId);
+    return hit;
+  }
+
+  async renameLibraryItem(bufId: string, name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (!trimmed || !this._libMeta[bufId]) return;
+    const meta = this._libMeta[bufId]!;
+    this.rememberLibrary(bufId, {
+      name: trimmed,
+      kind: meta.kind,
+      persistOk: meta.persistOk,
+      sourcePath: meta.sourcePath,
+      sourceHandle: meta.sourceHandle,
+    });
+    void patchAudio(bufId, { name: trimmed });
+  }
+
+  async deleteLibraryItem(bufId: string): Promise<void> {
+    this.stopLibraryPreview();
+    this.invalidateImport(bufId);
+    delete this._libMeta[bufId];
+    delete this._importBufs[bufId];
+    void deleteAudio(bufId);
+    this.emit("arrange");
+  }
+
+  /**
+   * Replace bytes under an existing bufId (clips / kit lanes keep their refs).
+   * This is the “re-index / relink” action — pick a new file, same slot.
+   */
+  async replaceLibraryFile(
+    bufId: string,
+    file: File,
+    source?: ImportSource,
+  ): Promise<boolean> {
+    const c = this.ensureCtx();
+    try {
+      const ab = await file.arrayBuffer();
+      const raw = ab.slice(0);
+      const buf = await c.decodeAudioData(ab);
+      this._importBufs[bufId] = buf;
+      this.invalidateImport(bufId);
+      const origin = source ?? importSourceFromFile(file);
+      const persistOk = await putAudio(
+        bufId,
+        raw,
+        file.name,
+        file.type || "application/octet-stream",
+        this._libMeta[bufId]?.kind ?? inferLibraryKind(bufId, file.name),
+        origin,
+      );
+      this.rememberLibrary(bufId, {
+        name: file.name,
+        kind: this._libMeta[bufId]?.kind ?? "drop",
+        persistOk,
+        sourcePath: origin.sourcePath,
+        sourceHandle: origin.sourceHandle,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Re-read the original file from a stored File System Access handle. */
+  async reindexLibraryFile(bufId: string): Promise<boolean> {
+    const handle = this._libMeta[bufId]?.sourceHandle;
+    if (!handle) return false;
+    const file = await readHandleFile(handle);
+    if (!file) return false;
+    return this.replaceLibraryFile(bufId, file, {
+      sourcePath: fileSourcePath(file),
+      sourceHandle: handle,
+    });
+  }
+
+  private invalidateImport(bufId: string) {
+    delete this._reverseBufs[bufId];
+    for (const key of Object.keys(this._importPeaks))
+      if (key.startsWith("imp:" + bufId)) delete this._importPeaks[key];
+    for (const key of [...this._warpCache.keys()])
+      if (key.includes("|" + bufId + "|")) this._warpCache.delete(key);
+    for (const kit of allKits())
+      for (const lane of kit.lanes)
+        if (lane.bufId === bufId && this._importBufs[bufId])
+          this._drumBufs[kit.id + ":" + lane.id] = this._importBufs[bufId]!;
+    for (const t of this.arrangement.tracks)
+      for (const cl of t.clips)
+        if (cl.content.kind === "audio" && cl.content.bufId === bufId) {
+          delete this._waveCache[cl.id];
+          this.stopAudioForClip(cl.id);
+          this.disposeStretch(cl.id);
+        }
+  }
+
   // waveform peaks for an imported buffer (same idiom as loopPeaks)
   importPeaks(bufId: string, bins: number): Float32Array | null {
     const buf = this._importBufs[bufId];
@@ -5809,6 +6244,7 @@ class AudioEngine {
     }
   }
   playArrangement(fromBeat = 0) {
+    this.stopLibraryPreview();
     this.arrangeMode = true;
     this.bpm = this.arrangement.bpm;
     this.loopOn = !!this.arrangement.loop?.on;
@@ -6502,7 +6938,21 @@ class AudioEngine {
           // a REAL bounce: new buffer in the import store (Opus/WebM or WAV → IndexedDB)
           const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
           this._importBufs[bufId] = rendered;
-          void putAudioBuffer(bufId, rendered, sel[0].name || "bounce");
+          const bounceName = sel[0].name || "bounce";
+          this.rememberLibrary(bufId, {
+            name: bounceName,
+            kind: "bounce",
+            persistOk: true,
+          });
+          void putAudioBuffer(bufId, rendered, bounceName, "bounce").then(
+            ({ ok }) => {
+              this.rememberLibrary(bufId, {
+                name: bounceName,
+                kind: "bounce",
+                persistOk: ok,
+              });
+            },
+          );
           merged = {
             id: newClipId(),
             startBeat: start,
@@ -6700,6 +7150,28 @@ class AudioEngine {
     return this.loopOn && l?.on && l.end > l.start ? l : null;
   }
 
+  /** Fold a shown beat into the active brace (Ableton: shrink past the playhead → wrap). */
+  private foldIntoActiveBrace(beat: number): number {
+    const br = this.activeBrace();
+    if (!br) return Math.max(0, beat);
+    if (beat < br.start) return br.start;
+    const len = br.end - br.start;
+    if (len <= 1e-9) return br.start;
+    if (beat >= br.end)
+      return br.start + ((((beat - br.start) % len) + len) % len);
+    return beat;
+  }
+
+  /**
+   * Hard cut + re-anchor + re-schedule from `shownBeat`. Used when the loop brace
+   * GEOMETRY changes mid-playback: the absolute↔folded mapping and every queued
+   * wrap/hard-stop are stale, so a soft reseat (which keeps the lookahead) would
+   * leave the old pass sounding under the new one — multiplied playback.
+   */
+  private rematerializeTransport(shownBeat: number) {
+    this._doSeek(this.foldIntoActiveBrace(shownBeat));
+  }
+
   // Re-seat the running transport onto `shownBeat` WITHOUT flushing what's already
   // scheduled. The clock is absolute: with the brace on it runs past `loop.end` and
   // `currentBeat()` folds it back inside, so switching the brace on/off changes what
@@ -6714,6 +7186,8 @@ class AudioEngine {
   // were built for the old mapping (a clip cut at the brace edge would stop there) —
   // so they hand over at the edge of the queued window: the old source stops exactly
   // where the next tick starts the new one.
+  //
+  // ONLY for engage/disengage. Geometry changes go through `rematerializeTransport`.
   private reseatTransport(shownBeat: number) {
     const c = this.ctx;
     if (!c || !this.sequencePlaying || !this.arrangeMode) return;

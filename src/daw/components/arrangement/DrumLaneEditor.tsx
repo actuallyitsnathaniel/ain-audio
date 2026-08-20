@@ -3,11 +3,16 @@
 // Waveform + EnvGraph + FilterGraph mirror the Instrument sample/filter/amp tabs.
 
 import { useEffect, useRef } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent, DragEvent as ReactDragEvent } from "react";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
 import { useRafLoop } from "../../hooks/useRafLoop";
 import { findKit } from "../../data/kits";
+import {
+  dragHasAudioIntake,
+  libraryBufIdFromDrag,
+} from "../../library-drag";
+import { filesFromDataTransfer } from "../../file-source";
 import {
   DEFAULT_DRUM_AMP,
   DEFAULT_DRUM_FILT,
@@ -83,6 +88,22 @@ export function DrumLaneEditor({
   const loadFile = async (file: File) => {
     const ok = await engine.setKitLaneSample(kit.id, lane.id, file);
     if (!ok) window.alert("Couldn't load that sample for this lane");
+  };
+
+  const loadDrop = (e: ReactDragEvent) => {
+    e.preventDefault();
+    const libId = libraryBufIdFromDrag(e.dataTransfer);
+    if (libId) {
+      if (!engine.setKitLaneBuf(kit.id, lane.id, libId))
+        window.alert("Couldn't load that sample for this lane");
+      return;
+    }
+    void filesFromDataTransfer(e.dataTransfer).then((got) => {
+      const one = got[0];
+      if (one) void engine.setKitLaneSample(kit.id, lane.id, one.file, one).then((ok) => {
+        if (!ok) window.alert("Couldn't load that sample for this lane");
+      });
+    });
   };
 
   const secs = hasSample ? engine.drumLaneSeconds(lane.id, kit.id) : 0;
@@ -423,14 +444,9 @@ export function DrumLaneEditor({
 
           <div
             onDragOver={(e) => {
-              if (Array.from(e.dataTransfer.types).includes("Files"))
-                e.preventDefault();
+              if (dragHasAudioIntake(e.dataTransfer)) e.preventDefault();
             }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const f = e.dataTransfer.files?.[0];
-              if (f) void loadFile(f);
-            }}
+            onDrop={loadDrop}
             onClick={() => fileRef.current?.click()}
             className="flex cursor-pointer items-center justify-center gap-2 rounded-sm border border-dashed border-line2 px-2 py-1.5 text-center transition-colors hover:border-accent"
           >

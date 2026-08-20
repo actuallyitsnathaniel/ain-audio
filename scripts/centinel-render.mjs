@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { chromium } from "playwright";
+import { isInsideTmp, pruneTmp } from "./centinel-tmp.mjs";
 
 const PRESETS = {
   pop: {
@@ -288,9 +289,9 @@ async function main() {
 
   writeWavStereo(args.out, result.left, result.right, result.sampleRate);
   let ehSummary = null;
+  const jsonPath = resolve(dirname(args.out), "eh-validate.json");
   if (args.ehValidate) {
     ehSummary = summarizeEhVal(result.ehval || []);
-    const jsonPath = resolve(dirname(args.out), "eh-validate.json");
     writeFileSync(
       jsonPath,
       JSON.stringify({ build: result.build, summary: ehSummary, frames: result.ehval }, null, 2),
@@ -312,6 +313,9 @@ async function main() {
       `  ~20s n=${s.loose20s.n} med=${s.loose20s.med.toFixed(1)} p90=${s.loose20s.p90.toFixed(1)} oct=${s.loose20s.octPct.toFixed(1)}%`,
     );
     console.error(`  wrote ${jsonPath}`);
+  }
+  if (isInsideTmp(args.out)) {
+    pruneTmp(args.ehValidate ? [args.out, jsonPath] : [args.out]);
   }
   console.log(
     JSON.stringify(

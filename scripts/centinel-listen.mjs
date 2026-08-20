@@ -6,12 +6,14 @@
  *
  * Writes `.tmp_centinel/listen/<label>/{dry,wet,goal,ab}.wav` and `report.json`.
  * `ab.wav` is stereo: L = wet, R = goal (phase-aligned) for headphone A/B.
+ * Replaces `listen/` each run and prunes other `.tmp_centinel` leftovers.
  */
 
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { TMP_DIR, ensureTmp, isInsideTmp, pruneTmp } from "./centinel-tmp.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const home = process.env.HOME || "";
@@ -31,7 +33,7 @@ function parseArgs(argv) {
   const out = {
     dry: resolve(home, "Downloads/dry_2.wav"),
     goal: resolve(home, "Downloads/output_goal.wav"),
-    wet: resolve(root, ".tmp_centinel/g2k-loose-finish.wav"),
+    wet: resolve(root, ".tmp_centinel/render.wav"),
     outDir: resolve(root, ".tmp_centinel/listen"),
     latencySamp: 1024,
     goalLagSamp: -4864,
@@ -310,6 +312,13 @@ function slice(mono, sr, t0, t1) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  ensureTmp();
+  const keepStart = [];
+  if (isInsideTmp(args.wet)) keepStart.push(args.wet);
+  keepStart.push(resolve(TMP_DIR, "score.json"));
+  pruneTmp(keepStart);
+  if (isInsideTmp(args.outDir))
+    rmSync(args.outDir, { recursive: true, force: true });
   mkdirSync(args.outDir, { recursive: true });
 
   const dry = readWav(args.dry);
@@ -368,6 +377,12 @@ function main() {
 
   const reportPath = resolve(args.outDir, "report.json");
   writeFileSync(reportPath, JSON.stringify(report, null, 2));
+  const keep = [];
+  if (isInsideTmp(args.wet)) keep.push(args.wet);
+  if (isInsideTmp(args.outDir)) keep.push(args.outDir);
+  const scorePath = resolve(TMP_DIR, "score.json");
+  keep.push(scorePath);
+  pruneTmp(keep);
   console.log(`\n[centinel:listen] wrote ${reportPath}`);
   console.log(
     "A/B tip: afplay .tmp_centinel/listen/<id>/ab.wav  (L=wet R=goal)",

@@ -8,6 +8,7 @@
 //
 // Musical gate: out-of-key pitched energy is always locked onto the scale (or
 // muted). Residual is aperiodic texture only — never a dry-pitch bleed.
+// Sub law: everything < 100 Hz collapses to one fundamental (clean sub), always.
 // Soft masks: weight 1 at exact n·F0 → 0 at HPS_HARM_CENTS (not a perfect demix).
 // E/H: US5973252A correction-mode window on the mono analysis ring, seeded by HPS.
 
@@ -79,6 +80,8 @@ function fft(re, im, inverse) {
 const VIZ_BINS = 96;
 const SPLIT_LO_HZ = 250;
 const SPLIT_HI_HZ = 2500;
+/** Hard ceiling for the clean-sub collapse. Not a knob. */
+const SUB_HZ = 100;
 
 /** HPS (Noll): P(k)=∏_{r=1..R} |X(r·k)| — multi-F0 acquire. */
 const HPS_R = 4;
@@ -347,6 +350,11 @@ function createChannel(fftSize, hop) {
     identityMag: new Float32Array(half + 1),
     lastMag: new Float32Array(half + 1),
     onsetEnv: 0,
+    // 2-pole complementary LP states for "sub always from wet"
+    subW1: 0,
+    subW2: 0,
+    subD1: 0,
+    subD2: 0,
   };
 }
 
@@ -423,6 +431,65 @@ function pcInKey(midi, key, scalePcs) {
 
 function hzToMidi(hz) {
   return 69 + (12 * Math.log(hz / 440)) / Math.LN2;
+}
+
+/** Lowest strong partial below SUB_HZ — not the 2nd harmonic of a quieter F0. */
+function pickSubHz(mag, kMax, binHz) {
+  let peak = 0;
+  for (let k = 1; k <= kMax; k++) {
+    if (mag[k] > peak) peak = mag[k];
+  }
+  if (peak < 1e-12) return 0;
+  const thresh = peak * 0.12;
+  for (let k = 1; k <= kMax; k++) {
+    const m = mag[k];
+    if (m < thresh) continue;
+    const loOk = k === 1 || m >= mag[k - 1];
+    const hiOk = k === kMax || m >= mag[k + 1];
+    if (loOk && hiOk) return k * binHz;
+  }
+  return 0;
+}
+
+/** Map the detected sub F0 (lock/transpose). May leave the sub band. */
+function lockSubHz(hz, pitchRatio, mapOn, force, key, scalePcs) {
+  if (!(hz > 0)) return 0;
+  if (mapOn) {
+    const lock = lockRatio(hz, pitchRatio, key, scalePcs, 12, force, 1);
+    return hz * lock.ratio;
+  }
+  return hz * pitchRatio;
+}
+
+/**
+ * Collapse every bin below SUB_HZ to a single sine-like partial.
+ * Ignores residual / hits / lo / floor / mapping-off. Always.
+ * destHz may sit above SUB_HZ (global transpose); the old sub band stays empty then.
+ */
+function simplifySubBand(
+  synMag,
+  synFreq,
+  identityMag,
+  residualMag,
+  mag,
+  binHz,
+  half,
+  destHz,
+) {
+  const kMax = Math.max(1, Math.floor((SUB_HZ - 1e-6) / binHz));
+  let energy = 0;
+  for (let k = 0; k <= kMax; k++) {
+    if (k > 0) energy += mag[k];
+    synMag[k] = 0;
+    identityMag[k] = 0;
+    residualMag[k] = 0;
+  }
+  if (!(destHz > 0) || energy < 1e-12) return;
+  let winK = (destHz / binHz + 0.5) | 0;
+  if (winK < 1) winK = 1;
+  if (winK > half) winK = half;
+  synMag[winK] += energy;
+  synFreq[winK] = destHz / binHz;
 }
 
 function depositShift(synMag, synFreq, freq, k, m, ratio, half) {
@@ -608,6 +675,7 @@ function processFrame(ch, window, fftSize, hop, opts) {
       const m = mag[k];
       if (m < 1e-12) continue;
       const hz = k * binHz;
+      if (hz < SUB_HZ) continue; // owned by simplifySubBand
       const own = nearestHarmonicTrack(hz, f0Hz, nF0);
       if (own) {
         // Entire owned bin takes the track β — leftover must not identity-pass.
@@ -659,6 +727,7 @@ function processFrame(ch, window, fftSize, hop, opts) {
       if (m < 1e-12) continue;
 
       const hz = k * binHz;
+      if (hz < SUB_HZ) continue; // owned by simplifySubBand
       const isPeak =
         k > 0 &&
         k < half &&
@@ -696,6 +765,20 @@ function processFrame(ch, window, fftSize, hop, opts) {
       }
     }
   }
+
+  const kSub = Math.max(1, Math.floor((SUB_HZ - 1e-6) / binHz));
+  const srcHz = pickSubHz(mag, kSub, binHz);
+  const destHz = lockSubHz(srcHz, pitchRatio, mapOn, force, key, scalePcs);
+  simplifySubBand(
+    synMag,
+    synFreq,
+    identityMag,
+    residualMag,
+    mag,
+    binHz,
+    half,
+    destHz,
+  );
 
   for (let k = 0; k <= half; k++) {
     let rr = 0;
@@ -924,6 +1007,10 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
       ch.outRead = 0;
       ch.lastMag.fill(0);
       ch.onsetEnv = 0;
+      ch.subW1 = 0;
+      ch.subW2 = 0;
+      ch.subD1 = 0;
+      ch.subD2 = 0;
       // keep inFifo / dryDelay so we don't click the input stream
     }
   }
@@ -935,7 +1022,7 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
 
   _step(ch, x, frameOpts, emitViz) {
     const { fftSize, hop, olaGain } = this;
-    const { pitchRatio, strength, doShift, maxShift } = frameOpts;
+    const { pitchRatio, strength, maxShift } = frameOpts;
 
     const dry = ch.dryDelay[ch.dryIdx];
     ch.dryDelay[ch.dryIdx] = x;
@@ -961,10 +1048,8 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
 
     if (ch.fill >= fftSize) {
       const mapMode = this._mode === "off" ? "off" : this._mode;
-      const snapOn = mapMode === "snap" || mapMode === "remap";
-      // Residual / peak split still needs processFrame when mapping is on,
-      // even at unity transpose — identity OLA would skip the residual path.
-      const needPv = doShift || snapOn;
+      // Always STFT while engaged — sub-clean must run even with mapping off.
+      const needPv = this._on;
 
       if (needPv) {
         processFrame(ch, this.window, fftSize, hop, {
@@ -1032,8 +1117,18 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
       ch.fill = fftSize - hop;
     }
 
-    if (strength < 0.0001) return dry;
-    return dry * (1 - strength) + wet * strength;
+    if (!this._on) return dry;
+
+    // Complementary 2-pole LP @ 100 Hz: sub is always wet (clean), rest follows strength.
+    const a = Math.exp((-2 * Math.PI * SUB_HZ) / sampleRate);
+    ch.subW1 = a * ch.subW1 + (1 - a) * wet;
+    ch.subW2 = a * ch.subW2 + (1 - a) * ch.subW1;
+    ch.subD1 = a * ch.subD1 + (1 - a) * dry;
+    ch.subD2 = a * ch.subD2 + (1 - a) * ch.subD1;
+    const lpWet = ch.subW2;
+    const hpWet = wet - ch.subW2;
+    const hpDry = dry - ch.subD2;
+    return lpWet + hpDry * (1 - strength) + hpWet * strength;
   }
 
   process(inputs, outputs, parameters) {

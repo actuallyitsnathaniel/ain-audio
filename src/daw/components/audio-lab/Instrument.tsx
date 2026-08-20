@@ -288,7 +288,9 @@ export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boo
                 </select>
                 <span className="pointer-events-none absolute right-1.25 text-[7px] text-faint">▼</span>
               </span>
-              <Seg value={p.sample?.loop ? "loop" : "one-shot"} options={["one-shot", "loop"] as const} onChange={(m) => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: p.sample?.level ?? 1, loop: m === "loop" } })} />
+              <span title="one-shot = play the bounce through (ignores note-off, like Ableton 1-Shot). loop = sustain until key up.">
+                <Seg value={p.sample?.loop ? "loop" : "one-shot"} options={["one-shot", "loop"] as const} onChange={(m) => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: p.sample?.level ?? 1, loop: m === "loop" } })} />
+              </span>
               <Knob size={34} label="level" value={p.sample?.level ?? 0} min={0} max={4} defaultValue={0} onChange={(v) => u({ sample: { presetId: p.sample?.presetId || firstPreset, level: v, loop: p.sample?.loop ?? false } })} fmt={(v) => (v <= 0 ? "-∞" : (20 * Math.log10(v)).toFixed(1) + "dB")} />
               {sampleOn && p.sample?.loop && (
                 <>
