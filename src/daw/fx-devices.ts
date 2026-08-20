@@ -200,17 +200,17 @@ export interface FxParams {
     transpose: number;
     maxShift: number;
     quality: SpectralQuality;
-    /** Wet gain on unmapped / identity bins (original phase). */
+    /** Wet gain on aperiodic / non-peak texture. Never a dry-pitch bleed. */
     residual: number;
     /** Relative peak floor (0–1 of frame peak). Only local maxima above this may snap/remap. */
     floor: number;
-    /** Snap/remap amount below 250 Hz. */
+    /** In-key pull below 250 Hz. Out-of-key still locks. */
     lo: number;
-    /** Snap/remap amount 250 Hz–2.5 kHz. */
+    /** In-key pull 250 Hz–2.5 kHz. Out-of-key still locks. */
     mid: number;
-    /** Snap/remap amount above 2.5 kHz. */
+    /** In-key pull above 2.5 kHz. Out-of-key still locks. */
     hi: number;
-    /** Onset flux duck — attacks skip mapping. */
+    /** Onset flux duck on in-key pull. Out-of-key still locks. */
     hits: number;
     /** Toggleable spectral assistant. */
     viz: boolean;
@@ -258,12 +258,11 @@ export interface FxParams {
      */
     midiFollow: boolean;
     /**
-     * Auto-Tune–style input type — YIN fMin/fMax band (default alto/tenor).
+     * Auto-Tune–style input type — E/H fMin/fMax band (default alto/tenor).
      */
     inputType: CentinelInputType;
     /**
-     * Within-note (Fairbanks) or full (PSOLA) exponential chase of pitch ratio (ms).
-     * 0 = always snap. With formant≥0.5, soft chases across note commits too.
+     * Retune Speed (ms) = patent Decay. 0 = always snap.
      */
     speed: number;
     /** 0..1 how far to pull toward the target. */
@@ -277,7 +276,7 @@ export interface FxParams {
     humanize: number;
     /**
      * Natural Vibrato (−1..1): scale vibrato already in the performance.
-     * 0 = leave · negative = flatten · positive = amplify.
+     * 0 = leave (partial AC residual) · negative = flatten · positive = amplify.
      */
     vibrato: number;
     /** 0..1 pitch tracking (1 = grabby / commercial “100%”; 0 = picky gate). */

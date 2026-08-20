@@ -3,14 +3,14 @@
 // Decay = Retune Speed. Desired = nearest scale / MIDI-follow.
 // formant 0–1: cepstral LPC envelope copy after splice (settled |R*| only).
 // PSOLA remains for CYCLE_SPLICE=false only — not the AT reference.
-// Product: G3 sticky + Humanize / Flex / Nat Vib / DC finish on the E/H core.
+// Product: G3 sticky + Humanize / Flex / DC finish; G5 Nat Vib after Decay.
 // Untracked (consonant / reverb smear): rate=1, keep sticky. Tracking knob = ε.
 // E/H analysis is HP'd + 2L body preference so room delays don't own Cycle_period.
 // Splice still reads the wet take (not a dereverb). Insert/delete phase-aligns ±pe.
 // Splice re-arm: exit onset unity on ONSET_SPLICE_MS even when formant≥0.5 (LPC is a post, not a path).
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-19g4a-env";
+const CENTINEL_BUILD = "2026-08-19g5b-vib";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -124,7 +124,7 @@ const PSOLA_PE_STABLE_NEED = 3;
 const PSOLA_PE_KEEP_REL = 0.35;
 /** Fairbanks-only: min unity settle before allowing R* (ms). */
 const ONSET_UNITY_MS = 40;
-/** Cycle-splice: no Fairbanks/PSOLA PE settle — exit unity after this (formant knob is LPC, parked). */
+/** Cycle-splice: no Fairbanks/PSOLA PE settle — exit unity after this (formant knob is LPC post). */
 const ONSET_SPLICE_MS = 18;
 /** Failsafe: never hold R=1 longer than this after arm (ms). */
 const ONSET_UNITY_MAX_MS = 260;
@@ -166,11 +166,19 @@ const COMMIT_SOFT_STABLE_DECAY = 2.2;
 const ROBOT_LATCH_MAX_SPEED_MS = 8;
 /**
  * Natural Vibrato at knob=0 ("leave"): fraction of AC residual re-added.
- * 1.0 (c2) shook from YIN; 0 (pre-c2) ceramic. Partial leave + slew = life.
+ * g3d skipped |v|<0.001 → ceramic at the documented leave detent.
+ * g5a put leave on wantTgt — Decay/Humanize low-passed it (lagged 10s park).
+ * g5b: offset rides after Decay. Center park and vibrato are separate.
  */
 const VIB_LEAVE_SCALE = 0.5;
 /** Clamp |det − vibCenter| before leave (st) — larger = scoop, not vibrato. */
 const VIB_RESID_MAX_SEMI = 0.38;
+/** Smooth hop-to-hop residual so E/H refine jitter isn't injected as vibrato. */
+const VIB_RESID_SLEW_MS = 18;
+/** |resid|/max below this → full leave gate; fade to 0 at the clamp. */
+const VIB_GATE_FULL = 0.55;
+/** Leave-gate slew (ms). */
+const VIB_GATE_SLEW_MS = 14;
 /** Cold wet fade — slower than normal so the dry→tuned handoff isn't a step. */
 const COLD_WET_XFADE_MS = 28;
 // Detector confidence (reverb / multipitch).
@@ -805,10 +813,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._noteAgeMs = 0;
     /** Slow det center for Natural Vibrato residual. */
     this._vibCenter = 60;
-    /** Slewed vibrato residual (anti-shake from YIN hop noise). */
+    /** Slewed vibrato residual (anti-shake from hop-rate E/H jitter). */
     this._vibSemiSlew = 0;
     /** Slewed leave-gate 0..1 (no hard motion on/off). */
     this._vibGateSlew = 0;
+    /** AC residual (st) added after Decay — not on wantTgt. */
+    this._vibOffset = 0;
     /** |d pitch / dt| (st/s), smoothed — portamento vs stationary. */
     this._pitchVel = 0;
     /** Signed pitch velocity (st/s) — direction of scoops. */
@@ -831,7 +841,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
      * Robot snaps. Avoids R*-jump + fact-chase double staircase.
      */
     this._audibleWant = 60;
-    /** Target for audible want (committedWant + natural-vibrato offset). */
+    /** Target for audible want (committedWant only — Nat Vib is after Decay). */
     this._wantTgt = 60;
     /** Parked on sticky center — hold want at tgt until scoop/commit (anti-click). */
     this._centerLatched = false;
@@ -962,6 +972,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._vibCenter = 60;
     this._vibSemiSlew = 0;
     this._vibGateSlew = 0;
+    this._vibOffset = 0;
     if (clearRing) {
       this._stopPeriodTrack();
       this._wetMix = 0;
@@ -1720,6 +1731,39 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
+   * Nat Vib AC residual (st). Knob 0 = leave. + amplify · − fade residual.
+   * Does not write wantTgt — Decay would low-pass it (g5a 10s lag).
+   */
+  _updateNaturalVibrato(det, dtMs) {
+    let resid = det - this._vibCenter;
+    if (resid > VIB_RESID_MAX_SEMI) resid = VIB_RESID_MAX_SEMI;
+    else if (resid < -VIB_RESID_MAX_SEMI) resid = -VIB_RESID_MAX_SEMI;
+    const slewA = 1 - Math.exp(-dtMs / VIB_RESID_SLEW_MS);
+    this._vibSemiSlew += (resid - this._vibSemiSlew) * slewA;
+    resid = this._vibSemiSlew;
+    const span = Math.max(1e-6, VIB_RESID_MAX_SEMI);
+    const u = Math.abs(resid) / span;
+    const gateTgt =
+      u <= VIB_GATE_FULL
+        ? 1
+        : Math.max(0, 1 - (u - VIB_GATE_FULL) / (1 - VIB_GATE_FULL));
+    const gateA = 1 - Math.exp(-dtMs / VIB_GATE_SLEW_MS);
+    this._vibGateSlew += (gateTgt - this._vibGateSlew) * gateA;
+    resid *= this._vibGateSlew;
+
+    const v = this._vibrato;
+    const leave = VIB_LEAVE_SCALE;
+    const scale =
+      v >= 0 ? leave + v * (1 - leave) : leave * (1 + v);
+    this._vibOffset = resid * scale;
+  }
+
+  /** Parked want + Nat Vib residual. R* / viz use this; Decay chases wantTgt. */
+  _soundingWant() {
+    return this._audibleWant + this._vibOffset;
+  }
+
+  /**
    * Do-no-harm: stay on the det↔want segment; never farther from the natural
    * scale note than dry. Safety rail, not a second detector.
    */
@@ -1745,8 +1789,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   /**
-   * Desired = sticky scale note from E/H midi. Flex / Nat Vib sit on want.
-   * Decay slews audibleWant in process().
+   * Desired = sticky scale note from E/H midi. Flex sits on want.
+   * Nat Vib residual is after Decay (`_soundingWant`). Decay slews
+   * audibleWant in process().
    */
   _applyCorrection(rawMidi, amount, transpose) {
     const dtMs = this._detectDt * 1000;
@@ -1781,13 +1826,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     }
     let want = pullToward(det, tgt, amount, this._flexCents);
     const v = this._vibrato;
-    if (Math.abs(v) >= 0.001) {
-      let resid = det - this._vibCenter;
-      if (resid > VIB_RESID_MAX_SEMI) resid = VIB_RESID_MAX_SEMI;
-      else if (resid < -VIB_RESID_MAX_SEMI) resid = -VIB_RESID_MAX_SEMI;
-      if (v > 0) want += resid * v;
-      else want += (tgt - want) * -v;
-    }
+    if (v < -0.001) want += (tgt - want) * -v;
+    this._updateNaturalVibrato(det, dtMs);
     this._committedTgt = tgt;
     this._committedWant = want;
     this._tgtMidi = tgt;
@@ -1803,7 +1843,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._trackOk && this._periodSamp > 1
         ? sampleRate / this._periodSamp
         : midiToHz(det);
-    const outHz = midiToHz(this._audibleWant);
+    const sounding = this._soundingWant();
+    const outHz = midiToHz(sounding);
     let rStar = outHz / Math.max(1e-12, inHz);
     if (rStar < FACT_MIN) rStar = FACT_MIN;
     if (rStar > FACT_MAX) rStar = FACT_MAX;
@@ -1813,7 +1854,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this.inphinc = this._inphincTgt;
     const outMidi = hzToMidi(inHz * this.phincfact);
     this._outMidi = outMidi;
-    this._corrMidi = this._audibleWant;
+    this._corrMidi = sounding;
     return { det, tgt, out: outMidi };
   }
 
@@ -1935,6 +1976,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._beginCommitRecapture();
           this._noteAgeMs = 0;
           this._vibCenter = midi;
+          this._vibSemiSlew = 0;
+          this._vibGateSlew = 0;
+          this._vibOffset = 0;
           this._audibleWant = midi;
           this._wantTgt = midi;
           this._wantBaseSlew = midi;
@@ -2405,11 +2449,11 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         if (softPsola && !this._onsetUnity && this._trackOk) {
           this._audibleWant += (this._wantTgt - this._audibleWant) * wantAlpha;
           const inHzA = Math.max(1e-12, this.inphinc * sampleRate);
-          let rA = midiToHz(this._audibleWant) / inHzA;
+          let rA = midiToHz(this._soundingWant()) / inHzA;
           if (rA < FACT_MIN) rA = FACT_MIN;
           if (rA > FACT_MAX) rA = FACT_MAX;
           this._rStar = rA;
-          this._corrMidi = this._audibleWant;
+          this._corrMidi = this._soundingWant();
         }
 
         if (this._onsetUnity) {
@@ -2433,7 +2477,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
             this._psolaGate >= ONSET_PSOLA_READY &&
             this._psolaHalf >= 8;
           // Splice never runs _onAnalysisPeriod → peStable stays 0. Pop formant
-          // is 0.85 (LPC parked) so !formantOn never fired and we sat on rate=1
+          // is 0.85 (LPC post) so !formantOn never fired and we sat on rate=1
           // until ONSET_UNITY_MAX_MS (~260ms) — dry_2 @ ~20s wet≈dry.
           const spliceReady =
             this._useCycleSplice() &&
@@ -2453,7 +2497,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
             if (r < FACT_MIN) r = FACT_MIN;
             if (r > FACT_MAX) r = FACT_MAX;
             this._rStar = r;
-            // Splice owns wet: seed R* now. formant≥0.5 is LPC (parked), not PSOLA —
+            // Splice owns wet: seed R* now. formant≥0.5 is LPC post, not PSOLA —
             // the old formantOn&&softPsola branch left phincfact=1 after every re-arm.
             if (this._useCycleSplice()) {
               this.phincfact = r;

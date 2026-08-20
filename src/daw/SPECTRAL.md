@@ -158,12 +158,12 @@ Compressor v1 can ignore this entirely.
 Real-time polyphonic **spectral pitch mapper**:
 
 - Analyze → pitch candidates / partials
-- **Snap to key** (Chroma-style): out-of-key energy → nearest in-key class, clamped by
-  `maxShift`
+- **Snap to key** (Chroma-style): out-of-key pitched energy → nearest in-key class
+  (always; `maxShift` does not identity-pass). In-key color stays.
 - **Remap to scale** (PITCHMAP-lite): force tracks into scale / chord targets
 - Blend wet with dry via `strength`
-- **Detail pass:** map only peaks; unshifted bins keep input phase (`residual`);
-  lo/mid/hi amounts; onset duck (`hits`). Not a mag-only spectral gate.
+- **Detail pass:** map peaks; in-key unshifted keeps input phase; `residual` is
+  aperiodic/non-peak only; lo/mid/hi + `hits` gate **in-key** pull. Not a mag-only spectral gate.
 - Non-goals v1: AI demix, offline mastering, ML pitch models
 
 ### 4.2. Params (`FxParams["impartialer"]`)
@@ -180,21 +180,23 @@ impartialer: {
   transpose: number; // −12…+12 post-map
   maxShift: number;  // 1 | 2 | 12
   quality: "low" | "high";
-  residual: number;  // 0–1 wet gain on identity (unshifted) bins
+  residual: number;  // 0–1 aperiodic texture in wet (not dry-pitch bleed)
   floor: number;     // 0–1 of frame peak — peak gate
-  lo: number;        // 0–1 snap/remap below 250 Hz
-  mid: number;       // 0–1 snap/remap 250 Hz–2.5 kHz
-  hi: number;        // 0–1 snap/remap above 2.5 kHz
-  hits: number;      // 0–1 onset flux duck
+  lo: number;        // 0–1 in-key pull below 250 Hz (out-of-key still locks)
+  mid: number;       // 0–1 in-key pull 250 Hz–2.5 kHz
+  hi: number;        // 0–1 in-key pull above 2.5 kHz
+  hits: number;      // 0–1 onset duck on in-key pull (out-of-key still locks)
 }
 ```
 
 Defaults: off, C major, `snap`, strength 0.7, transpose 0, maxShift 1, quality `low`,
 residual 1, floor 0.08, lo/mid 1, hi 0.4, hits 0.75.
 
-PV runs **only when a bin actually moves**. In-key / below-floor / out-of-band
-energy stays at the analysis phase and is mixed by `residual`. Global transpose
-still forces the PV path (the bin has to move).
+PV runs **only when a bin actually moves**. In-key pitched energy keeps analysis
+phase (not scaled by `residual`). Out-of-key pitched energy is always force-locked
+onto the scale when mapping is on — it never identity-passes, including through
+the residual path. `residual` mixes **aperiodic / non-peak** texture only.
+Global transpose still forces the PV path.
 
 ### 4.3. Worklet surface
 
@@ -233,9 +235,9 @@ impartialer-detail canvas (Upheaval tab).
    \(H(z)=\frac{1}{1-\alpha z^{-K}}\) (\(K\approx f_s/F_0\)) as an *enhancer*, plus
    residual \(= x - \sum\) masked tracks. A comb does **not** fully null competing
    notes; do not claim demix.
-   **Shipped (step 2):** soft spectral masks — weight \(1 - |¢|/45\) on nearest
-   \(n\cdot F_0\) ladder; one \(\beta\) per F0 applied to the owned group; leftover
-   + untracked → residual. No IIR comb yet (mask is the honest isolate).
+   **Shipped (step 2):** soft spectral masks — exclusive nearest \(n\cdot F_0\);
+   whole owned bin takes the track \(\beta\) (no leftover identity-pass).
+   Untracked pitched out-of-key is force-locked. Residual = non-peak texture.
 3. **Track** — per isolated mono ring, **US5973252A recursive E/H** (same math as
    Centinel — not block \(R(\tau)\) branded “Hildebrand”). \(\varepsilon\) gate +
    quadratic \(\tau^\*\). Latency win is continuous E/H between HPS refreshes.
@@ -246,9 +248,13 @@ impartialer-detail canvas (Upheaval tab).
 4. **Remap + sum** — one \(\beta=2^{\Delta/12}\) per track applied to the whole
    harmonic group (snap/remap/MIDI). Phase continuity via public phase-vocoder /
    instantaneous-frequency practice (Bernsee). Do **not** implement US11079418
-   (Zynaptiq, 2021) claims. Sum tracks + `residual`·untracked + outer `strength`.
+   (Zynaptiq, 2021) claims. Sum tracks + identity (in-key) + `residual`·noise + outer `strength`.
 
-**Keep from detail pass:** strength, residual, hits, lo/mid/hi (as F0-range gates),
+**Musical gate (strength 100%):** out-of-key pitched bins never come through at
+original pitch. Snap still leaves *in-key* color; remap pulls everything to the
+grid. `residual` is not a dry mix.
+
+**Keep from detail pass:** strength, residual (now noise-only), hits, lo/mid/hi (as F0-range gates for in-key),
 viz, FxChain hosting (`ain-impartialer` only — no greenfield PitchMapperNode).
 
 **Share with Centinel:** E/H helper when a second copy would drift. Centinel’s
@@ -451,6 +457,7 @@ Impartialer
 - [x] Upheaval step 1: HPS acquire + harmonic-gated peak remap + RTA F0 ticks
 - [x] Upheaval step 2: soft harmonic masks + one β per F0 group + residual
 - [x] Upheaval step 3: M× E/H refine (HPS-seeded, mono ring) → drive β / masks
+- [x] Musical gate: out-of-key never identity-passes; residual = aperiodic only
 - [ ] Upheaval step 4+: Bernsee phase continuity / sticky slew / per-track iso rings
   (see §4.5; canvas Upheaval / Path tabs)
 
@@ -489,18 +496,12 @@ shift path on the same analyze/synthesize spine.
 (archived former Centinel — **not** registered; do not confuse with live
 [`worklets/centinel-processor.js`](worklets/centinel-processor.js)).
 
-Live **centinel** is YIN + **stays_locked / hold** note commit + **ratio** control
-into Fairbanks OLA (or period **PSOLA** when `formant ≥ 0.5`). Soft **speed** under
-Fairbanks is *within-note* only; under PSOLA it chases `R*` across note changes (D6).
-Phrase onset (formant on): hold **R=1** with level up until PSOLA mix is ready, then
-chase — never Fairbanks-shift first (that was the low-formant / gate / click trap).
-Unvoiced DROP must clear `_everLocked` + phases — otherwise the prior phrase’s period
-keeps synthesizing across the gap and the next onset reads an octave low (~15–25ms)
-before snapping (see `ab_12.1_octave.wav`). Soft MIDI springs were removed — they diphthonged by lagging `out` while `in`
-tracked live det. Neural F0 (PESTO / SwiftF0) is a later detector option if YIN
-still limits quality; do not swap the shifter for that. The YIN + phase-vocoder path was the wrong latency class for
-Auto-Tune–style hard lock, but it is a solid starting point for a **spectral-time /
-smear** effect that *wants* STFT group delay and hop-rate morphing.
+Live **centinel** is US5973252A: recursive E/H detect/track → cycle splice
+(rate + ±1 `Cycle_period`) + Decay. LPC formant preserve is a post after splice.
+See [CENTINEL-vs-SOURCES.md](../../docs/CENTINEL-vs-SOURCES.md). The YIN +
+phase-vocoder path was the wrong latency class for Auto-Tune–style hard lock, but
+it is a solid starting point for a **spectral-time / smear** effect that *wants*
+STFT group delay and hop-rate morphing.
 
 ### Capabilities to carry forward
 

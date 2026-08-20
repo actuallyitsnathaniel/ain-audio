@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build `g4a-env`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build `g5b-vib`).
 
 Interactive companions (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx)
@@ -15,7 +15,7 @@ Interactive companions (open beside chat):
 
 1. **Patent-faithful core first** — detection mode (8:1 DS + \(E/H\) search) → correction mode (narrow-band recursive \(E/H\), quadratic period) → rate convert + ±1 `Cycle_period` insert/delete.
 2. **Then refine past the patent** — Retune Speed is Decay. Humanize / Flex / Nat Vib / sticky sit **on top of** the G1 core (`g1l-oct`). Do not mix them in to chase a scorecard hole; one knob at a time.
-3. **PSOLA / Fairbanks / PV** are fallbacks (`CYCLE_SPLICE=false`), not the AT-matching reference. Pop formant LPC post is **parked**. Do not gut Lent-adjacent code until a later cleanup audit (see G4).
+3. **PSOLA / Fairbanks / PV** are fallbacks (`CYCLE_SPLICE=false`), not the AT-matching reference. Pop formant is LPC preserve after splice (`g4a-env`). Do not gut Lent-adjacent code until a later cleanup audit (see G4).
 
 ## Open items ledger (for the next plan)
 
@@ -35,7 +35,7 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 
 ### G2 — Cycle insert/delete
 - [x] Rate-convert + ±1 cycle (formant-off, `CYCLE_SPLICE`)
-- [x] Pop default `formant: 0.85` — LPC post **parked** (`g2f`; chewed on transitions)
+- [x] Pop default `formant: 0.85` — LPC post **parked** in `g2f` (chewed on transitions); unparked `g4a-env`
 - [x] **Seam** (`g2a-seam`) — patent ±1 `Cycle_period` per sample (was up to 8 hard jumps) + short equal-power blend on the jump.
 - [x] **One path** (`g2e-wire`) — splice output *is* the signal. `rate=1` ≡ dry (same N2 tap). No parallel latency-dry×shifted-wet (cold-start double pitch). Mix knob is the only blend.
 - [x] **Untracked** (`g2g-untrk`) — consonant / smear: rate=1, keep sticky. No last-lock retune.
@@ -47,31 +47,35 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 ### G3 — Sticky / DC finish (on G1 core, not the old YIN stack)
 - [x] **Minimal sticky** (`g3b-hyst`) — keep committed note until live is closer by 0.4 st, same-side only. No orphan, no ownedSustain, no Flex/Humanize.
 - [x] Disagree dump: 6.4% was **not** 40¢ wobble. 24 frames / 279ms at 20.76s were octave (wet C#5, dry+AT C#4) — closed in `g1l-oct`. Leftover is 12ms 50¢-line neighbor ticks. Do **not** chase those with orphan / Flex / ownedSustain.
-- [x] **Splice re-arm** (`g3c-rearm`) — pop formant is 0.85 (LPC parked). The old `!formantOn` splice-ready gate never fired, so every post-gap re-arm sat on `rate=1` until `ONSET_UNITY_MAX_MS` (~260ms). That was the 20s dry-through (g2i wet≈dry 61%). Exit unity at 18ms whenever splice owns the path; seed R* from committed want; do not pin want to `lockedDet` on splice.
-- [x] **Product knobs** (`g3d-knobs`) — Humanize (Decay stretch on-center), Flex island (0 = always pull), Nat Vib (0 = leave), DC finish (stationary loose park). Scoop-toward past-mid sticky flip. No orphan / midzone / hold clocks.
+- [x] **Splice re-arm** (`g3c-rearm`) — pop formant is 0.85 (LPC was parked). The old `!formantOn` splice-ready gate never fired, so every post-gap re-arm sat on `rate=1` until `ONSET_UNITY_MAX_MS` (~260ms). That was the 20s dry-through (g2i wet≈dry 61%). Exit unity at 18ms whenever splice owns the path; seed R* from committed want; do not pin want to `lockedDet` on splice.
+- [x] **Product knobs** (`g3d-knobs`) — Humanize (Decay stretch on-center), Flex island (0 = always pull), Nat Vib wired, DC finish (stationary loose park). Scoop-toward past-mid sticky flip. No orphan / midzone / hold clocks. Nat Vib at knob=0 was a no-op until `g5a-vib`.
 - [x] **Commit-fast land** (`g3e-land`) — 40ms @ 8ms after sticky flip so the new note lands. Global ≤15 **beats AT** (54.2% vs 53.6%). ~20s 44% vs 46% — leave the last 2 pts. Do not chase with orphan.
+
+### G5 — Product ear-pass (one knob at a time)
+- [x] **Nat Vib leave at 0** (`g5a-vib` → `g5b-vib`) — pop `vibrato: 0` means leave. g5a re-added residual onto `wantTgt`; Decay/Humanize low-passed it (lagged ~10s park). g5b rides the residual **after** Decay. ¢ is not the pass bar.
+- [ ] **Humanize** — ear-pass on long parks (already stretches Decay on-center). Ask first; one knob.
+- [ ] **Flex island** — ear-pass (0 = always pull / pop). Ask first.
 
 ### G4 — Formant post / stay away
 - [x] Do not merge Smuts phase vocoder into live Centinel
 - [x] **LPC preserve** (`g4a-env`) — after splice, settled `|R*|` only. Not a second shifter.
 - [ ] Optional formant *shift* (`1/R` pole warp / throat) — after preserve does not chew
 - [ ] **Later — Lent-adjacent cleanup audit:** do **not** gut Fairbanks/PSOLA now.
-  Pop/AT path already demoted them (`CYCLE_SPLICE` + `formant:0`). Revisit whether
-  Fairbanks fallback, period-PSOLA formant lane, and related gates can be slimmed,
-  renamed, or isolated once formant crossfade exists and 14s/20s gaps are closed.
-  Killing formant mode to “purge Lent” would be the wrong move.
+  Pop/AT path already demoted them (`CYCLE_SPLICE`). Revisit whether Fairbanks
+  fallback and period-PSOLA can be slimmed once 14s/20s ears are done.
 
-## Current scorecard (`g4a-env`; G1 freeze was `g1l-oct`)
+## Current scorecard (`g5b-vib`; leave-on-want freeze was `g5a-vib`)
 
-| Metric | g4a | g3e | Goal |
+| Metric | g5b | g5a | Goal |
 |---|---|---|---|
-| ≤15¢ of scale | **53.8%** | 54.2% | 53.7% |
-| loose holds (15–35¢ ≥80ms) | **1** | 1 | 2 |
-| listen ~14s ≤15 | **60%** | 59% | 47% |
-| listen ~20s ≤15 | **41%** | 44% | 46% |
-| clicks wet/dry | 20 / 21 | 20 / 21 | — |
+| ≤15¢ of scale | **52.4%** | 52.9% | 53.7% |
+| loose holds (15–35¢ ≥80ms) | **2** | 2 | 2 |
+| listen ~10s ≤15 | **51%** | 50% | 51% |
+| listen ~14s ≤15 | **59%** | 59% | 47% |
+| listen ~20s ≤15 | **39%** | 41% | 46% |
+| clicks wet/dry | 20 / 21 | 19 / 21 | — |
 
-LPC preserve is gated off mid-glide; ¢ is not the pass bar. Ears on transitions. Clicks unchanged vs g3e.
+Residual after Decay. ~10s park now ties AT (g5a lagged the leave). ¢ drop vs g4a is leave, not a splice hole. Humanize next. Do not chase 20s ¢.
 
 Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true`.
 
@@ -82,7 +86,7 @@ Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true`.
 | `EH_LIVE` / `EH_DRIVE` | ON |
 | E/H sole acquire | ON — `yinPitch` deleted |
 | `inphinc` from E/H | ON — `1/periodSamp` in `process()` |
-| Product pitch-law | G3 sticky only; Flex/Humanize/orphan parked |
+| Product pitch-law | G3 knobs live; Nat Vib residual after Decay (`g5b-vib`). Orphan parked |
 
 `npm run centinel:eh-validate` → `.tmp_centinel/eh-validate.json`
 
@@ -128,7 +132,7 @@ E_i(L) - 2H_i(L) \le \varepsilon\, E_i(L)
 | Corrector | Rate + ±1 cycle | `CYCLE_SPLICE` (one path; `rate=1` ≡ dry; ±pe aligned `g2i`) |
 | Formant | Rejected Lent | LPC preserve after splice, settled `|R*|` only (`g4a-env`) |
 | Softness | Decay | Retune Speed |
-| Product | — | G3: sticky + Humanize / Flex / Nat Vib / DC finish / commit-fast land. Orphan parked |
+| Product | — | G3 knobs + G5 Nat Vib leave at 0. Orphan parked |
 
 ---
 

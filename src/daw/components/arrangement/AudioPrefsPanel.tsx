@@ -268,7 +268,7 @@ export function AudioPrefsPanel({
                 className={
                   ctl +
                   "flex-1 px-2.5 " +
-                  onOff(eng.midiStatus.indexOf("device") >= 0)
+                  onOff(eng.hasMidiInput)
                 }
                 onClick={() => requestMidiEnable()}
                 title="Connect a hardware MIDI keyboard / controller (Web MIDI)"

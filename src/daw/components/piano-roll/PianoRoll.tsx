@@ -1022,7 +1022,7 @@ export function PianoRoll({ height = 280, trackId, initialClip, onCommit, pitchL
 
     // gutter keyboard (pitch area only)
     const held = gutterKey.current;
-    const sounding = new Set(engine.activeNotes());
+    const sounding = new Set(engine.activeNotes(auditionId));
     g.save();
     g.beginPath();
     g.rect(0, 0, KEY_W, gh);

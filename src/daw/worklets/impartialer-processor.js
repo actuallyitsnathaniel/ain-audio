@@ -6,7 +6,8 @@
 // blends don't comb. Bypass still runs the delay so latency stays constant when
 // toggled (neutralize-in-place).
 //
-// Unshifted / untracked bins keep input phase (residual). PV only when a bin moves.
+// Musical gate: out-of-key pitched energy is always locked onto the scale (or
+// muted). Residual is aperiodic texture only — never a dry-pitch bleed.
 // Soft masks: weight 1 at exact n·F0 → 0 at HPS_HARM_CENTS (not a perfect demix).
 // E/H: US5973252A correction-mode window on the mono analysis ring, seeded by HPS.
 
@@ -343,6 +344,7 @@ function createChannel(fftSize, hop) {
     synFreq: new Float32Array(half + 1),
     inputPhase: new Float32Array(half + 1),
     residualMag: new Float32Array(half + 1),
+    identityMag: new Float32Array(half + 1),
     lastMag: new Float32Array(half + 1),
     onsetEnv: 0,
   };
@@ -406,21 +408,55 @@ function mapSemitones(midi, key, scalePcs, maxShift, force) {
   if (force) return best; // remap — always land on the grid
 
   // snap — leave in-key notes alone (even if slightly sharp/flat)
-  const roundedPc = ((Math.round(midi) % 12) + 12) % 12;
-  const roundedRel = (roundedPc - key + 12) % 12;
-  if (scalePcs.indexOf(roundedRel) >= 0) return 0;
+  if (pcInKey(midi, key, scalePcs)) return 0;
   const limit = Math.max(1, maxShift | 0);
   if (bestAbs > limit) return 0;
   return best;
 }
 
+/** Rounded pitch-class sits on the scale (key-relative). */
+function pcInKey(midi, key, scalePcs) {
+  const roundedPc = ((Math.round(midi) % 12) + 12) % 12;
+  const roundedRel = (roundedPc - key + 12) % 12;
+  return scalePcs.indexOf(roundedRel) >= 0;
+}
+
+function hzToMidi(hz) {
+  return 69 + (12 * Math.log(hz / 440)) / Math.LN2;
+}
+
+function depositShift(synMag, synFreq, freq, k, m, ratio, half) {
+  const dest = (k * ratio + 0.5) | 0;
+  if (dest < 0 || dest > half) return;
+  synMag[dest] += m;
+  synFreq[dest] = freq[k] * ratio;
+}
+
+/**
+ * Lock ratio for pitched energy. Out-of-key always force-quantizes (never
+ * identity-pass original pitch). In-key snap stays put. `amt` scales remap
+ * pull on in-key only.
+ */
+function lockRatio(hz, pitchRatio, key, scalePcs, maxShift, force, amt) {
+  if (!(hz > 0) || !Number.isFinite(hz)) {
+    return { ratio: pitchRatio, inKey: true };
+  }
+  // maxShift is ignored: out-of-key always force-locks (never identity-pass).
+  void maxShift;
+  const midi = hzToMidi(hz);
+  const inKey = pcInKey(midi, key, scalePcs);
+  if (inKey && !force) return { ratio: pitchRatio, inKey: true };
+  const shift = mapSemitones(midi, key, scalePcs, maxShift, true);
+  const pull = inKey ? Math.min(1, Math.max(0, amt)) : 1;
+  const ratio =
+    shift !== 0 ? pitchRatio * Math.pow(2, (shift * pull) / 12) : pitchRatio;
+  return { ratio, inKey: false };
+}
+
 /**
  * Analyze frame → HPS F0s → harmonic soft-masks → per-track β → OLA.
- * Untracked bins keep input phase (residual). PV only when a bin actually moves.
- * `mapMode`: "off" | "snap" | "remap"
- *
- * Upheaval §1–2: HPS acquire + spectral harmonic isolate (soft mask, not demix).
- * E/H precision track is next — F0s are still HPS guesses.
+ * Musical gate: out-of-key pitched energy never identity-passes when mapping is on.
+ * Residual knob scales aperiodic (non-peak) texture only.
  */
 function processFrame(ch, window, fftSize, hop, opts) {
   const half = fftSize / 2;
@@ -435,6 +471,7 @@ function processFrame(ch, window, fftSize, hop, opts) {
     synFreq,
     inputPhase,
     residualMag,
+    identityMag,
     lastMag,
   } = ch;
   const {
@@ -491,6 +528,7 @@ function processFrame(ch, window, fftSize, hop, opts) {
   synMag.fill(0);
   synFreq.fill(0);
   residualMag.fill(0);
+  identityMag.fill(0);
 
   const mapOn = mapMode === "snap" || mapMode === "remap";
   const force = mapMode === "remap";
@@ -545,69 +583,40 @@ function processFrame(ch, window, fftSize, hop, opts) {
       for (let i = 0; i < nF0; i++) {
         const f0 = f0Hz[i];
         if (!(f0 > 0)) continue;
-        const amt = bandAmtForHz(f0, loAmt, midAmt, hiAmt, duck);
-        if (amt < 0.001) {
-          trackRatio[i] = pitchRatio;
-          continue;
-        }
-        const midi = 69 + (12 * Math.log(f0 / 440)) / Math.LN2;
-        const shift = mapSemitones(midi, key, scalePcs, maxShift, force);
-        trackRatio[i] =
-          shift !== 0
-            ? pitchRatio * Math.pow(2, (shift * amt) / 12)
-            : pitchRatio;
+        const midi = hzToMidi(f0);
+        const inKey = pcInKey(midi, key, scalePcs);
+        // Out-of-key: full lock (no hits duck, no lo/mid/hi leak).
+        const amt = inKey
+          ? bandAmtForHz(f0, loAmt, midAmt, hiAmt, duck)
+          : 1;
+        const lock = lockRatio(
+          f0,
+          pitchRatio,
+          key,
+          scalePcs,
+          maxShift,
+          force,
+          amt,
+        );
+        trackRatio[i] = lock.ratio;
       }
     }
   }
 
   if (nF0 > 0 && f0Hz && trackRatio) {
-    // Soft harmonic masks: owned bins take the track β; weight → residual
     for (let k = 0; k <= half; k++) {
       const m = mag[k];
       if (m < 1e-12) continue;
       const hz = k * binHz;
       const own = nearestHarmonicTrack(hz, f0Hz, nF0);
-      if (!own) {
-        // untracked → residual (or global transpose only)
-        if (doGlobal) {
-          const dest = (k * pitchRatio + 0.5) | 0;
-          if (dest >= 0 && dest <= half) {
-            synMag[dest] += m;
-            synFreq[dest] = freq[k] * pitchRatio;
-          }
-        } else {
-          residualMag[k] = m;
-        }
+      if (own) {
+        // Entire owned bin takes the track β — leftover must not identity-pass.
+        const ratio = trackRatio[own.i];
+        const moved = Math.abs(ratio - 1) > 0.001;
+        if (moved || doGlobal) depositShift(synMag, synFreq, freq, k, m, ratio, half);
+        else identityMag[k] += m;
         continue;
       }
-
-      // Soft mask weight: 1 at exact harmonic, 0 at HPS_HARM_CENTS
-      const w = 1 - own.cents / HPS_HARM_CENTS;
-      const ratio = trackRatio[own.i];
-      const moved = Math.abs(ratio - 1) > 0.001;
-      const tracked = m * w;
-      const leftover = m - tracked;
-
-      if ((moved || doGlobal) && tracked > 1e-12) {
-        const dest = (k * ratio + 0.5) | 0;
-        if (dest >= 0 && dest <= half) {
-          synMag[dest] += tracked;
-          synFreq[dest] = freq[k] * ratio;
-        }
-      } else if (tracked > 1e-12) {
-        // Tracked but unshifted — keep analysis phase (part of residual mix)
-        residualMag[k] += tracked;
-      }
-      if (leftover > 1e-12) residualMag[k] += leftover;
-    }
-  } else {
-    // No F0s — legacy peak remap (detail-pass path)
-    for (let k = 0; k <= half; k++) {
-      const m = mag[k];
-      if (m < 1e-12) continue;
-
-      const hz = k * binHz;
-      let bandAmt = bandAmtForHz(hz, loAmt, midAmt, hiAmt, duck);
 
       const isPeak =
         k > 0 &&
@@ -616,21 +625,72 @@ function processFrame(ch, window, fftSize, hop, opts) {
         m >= mag[k + 1] &&
         m >= floorAbs;
 
-      let ratio = pitchRatio;
-      if (mapOn && isPeak && bandAmt > 0.001) {
+      if (mapOn && isPeak) {
+        // Untracked pitched: lock out-of-key onto the scale; in-key stays.
         let fHz = (freq[k] * sampleRate) / fftSize;
         if (!(fHz > 20 && fHz < sampleRate * 0.45)) fHz = hz;
-        const midi = 69 + (12 * Math.log(fHz / 440)) / Math.LN2;
-        const shift = mapSemitones(midi, key, scalePcs, maxShift, force);
-        if (shift !== 0) ratio *= Math.pow(2, (shift * bandAmt) / 12);
+        const lock = lockRatio(
+          fHz,
+          pitchRatio,
+          key,
+          scalePcs,
+          maxShift,
+          force,
+          1,
+        );
+        const moved = Math.abs(lock.ratio - 1) > 0.001;
+        if (moved || doGlobal) {
+          depositShift(synMag, synFreq, freq, k, m, lock.ratio, half);
+        } else {
+          identityMag[k] += m;
+        }
+      } else if (doGlobal) {
+        depositShift(synMag, synFreq, freq, k, m, pitchRatio, half);
+      } else if (isPeak) {
+        identityMag[k] += m;
+      } else {
+        residualMag[k] = m;
       }
+    }
+  } else {
+    // No F0s — peak remap with the same musical gate
+    for (let k = 0; k <= half; k++) {
+      const m = mag[k];
+      if (m < 1e-12) continue;
 
-      const moved = Math.abs(ratio - 1) > 0.001;
-      if (moved || doGlobal) {
-        const dest = (k * ratio + 0.5) | 0;
-        if (dest < 0 || dest > half) continue;
-        synMag[dest] += m;
-        synFreq[dest] = freq[k] * ratio;
+      const hz = k * binHz;
+      const isPeak =
+        k > 0 &&
+        k < half &&
+        m >= mag[k - 1] &&
+        m >= mag[k + 1] &&
+        m >= floorAbs;
+
+      if (mapOn && isPeak) {
+        const midi = hzToMidi(hz > 20 ? hz : k * binHz);
+        const inKey = pcInKey(midi, key, scalePcs);
+        const amt = inKey ? bandAmtForHz(hz, loAmt, midAmt, hiAmt, duck) : 1;
+        let fHz = (freq[k] * sampleRate) / fftSize;
+        if (!(fHz > 20 && fHz < sampleRate * 0.45)) fHz = hz;
+        const lock = lockRatio(
+          fHz,
+          pitchRatio,
+          key,
+          scalePcs,
+          maxShift,
+          force,
+          amt,
+        );
+        const moved = Math.abs(lock.ratio - 1) > 0.001;
+        if (moved || doGlobal) {
+          depositShift(synMag, synFreq, freq, k, m, lock.ratio, half);
+        } else {
+          identityMag[k] += m;
+        }
+      } else if (doGlobal) {
+        depositShift(synMag, synFreq, freq, k, m, pitchRatio, half);
+      } else if (isPeak) {
+        identityMag[k] += m;
       } else {
         residualMag[k] = m;
       }
@@ -647,6 +707,13 @@ function processFrame(ch, window, fftSize, hop, opts) {
       sumPhase[k] += (2 * Math.PI * synFreq[k] * hop) / fftSize;
     } else {
       sumPhase[k] += k * expect;
+    }
+    // In-key / unshifted pitched — original phase, not residual-scaled
+    if (identityMag[k] > 0) {
+      const p = inputPhase[k];
+      rr += identityMag[k] * Math.cos(p);
+      ii += identityMag[k] * Math.sin(p);
+      synMag[k] += identityMag[k];
     }
     if (residualMag[k] > 0 && resAmt > 0) {
       const p = inputPhase[k];

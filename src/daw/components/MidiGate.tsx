@@ -25,6 +25,7 @@ export function MidiGate() {
   const decline = () => {
     markMidiAsked();
     close();
+    engine.setMidiKeys(true); // skip promised computer keys — actually turn them on
   };
 
   return (

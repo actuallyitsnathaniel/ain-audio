@@ -1760,12 +1760,15 @@ class AudioEngine {
     // via playbackRate from the picked zone's root; humanize + portamento + vibrato
     // ride src.detune (cents), same as an osc. loop = sustain via loopStart/End.
     let sampleSrc: AudioBufferSourceNode | undefined;
+    let sampleReady = false;
     if (p.sample && p.sample.level > 0) {
       const preset = this.samplePresets.find(
         (pr) => pr.id === p.sample!.presetId,
       );
       const zone = preset ? this.pickZone(preset, midi) : null;
+      if (preset && !zone) this.warmPatch(p); // decode for the next note
       if (preset && zone) {
+        sampleReady = true;
         const s = c.createBufferSource();
         // varispeed: note pitch × independent transpose (semi + cents), speed-coupled
         const vari = (p.sample.semi ?? 0) / 12 + (p.sample.cents ?? 0) / 1200;
@@ -1818,6 +1821,10 @@ class AudioEngine {
         sampleSrc = s;
       }
     }
+    // sample-only patch whose zones haven't decoded yet → osc stand-in so arm+play
+    // is never silent (loadPreset promised this JS-synth fallback).
+    if (p.sample && p.sample.level > 0 && !sampleReady && p.osc1.level <= 0)
+      addOsc("sawtooth", 0, 0, 0.7);
 
     // amp envelope
     const ae = p.ampEnv;
@@ -1918,7 +1925,14 @@ class AudioEngine {
   // prompt only fires when the user first opts in, e.g. arming a channel) ──
   // status: "idle" (never asked) | "unsupported" | "denied" | "no device" | "N device(s)"
   midiStatus = "idle";
+  /** Count of Web MIDI inputs currently wired. `"no device"` must not count as connected. */
+  midiInputCount = 0;
+  get hasMidiInput() {
+    return this.midiInputCount > 0;
+  }
   private _midiAccess: MIDIAccess | null = null;
+  /** In-flight `requestMIDIAccess` — concurrent enableMidi() callers share it. */
+  private _midiEnable: Promise<boolean> | null = null;
   /** Damper pedal (CC 64) — holds sounding notes until released. */
   private _midiSustain = false;
   /** liveKey strings deferred by sustain (released on pedal up / all-notes-off). */
@@ -1927,39 +1941,59 @@ class AudioEngine {
   // Request Web MIDI access and wire every input to the live keyboard. Idempotent:
   // safe to call repeatedly; once granted it just re-wires. Returns true if access
   // is (or becomes) granted. Triggers the browser permission prompt on first call.
+  // `ensureCtx()` MUST stay synchronous before `requestMIDIAccess` so the click
+  // still counts as the user gesture (do not await resume first).
   async enableMidi(): Promise<boolean> {
+    this.ensureCtx();
+    if (this._midiAccess) {
+      this.wireMidiInputs();
+      return true;
+    }
+    if (this._midiEnable) return this._midiEnable;
+    const p = this.requestMidiAccess();
+    this._midiEnable = p;
+    try {
+      return await p;
+    } finally {
+      if (this._midiEnable === p) this._midiEnable = null;
+    }
+  }
+
+  private async requestMidiAccess(): Promise<boolean> {
     if (!navigator.requestMIDIAccess) {
       this.midiStatus = "unsupported";
+      this.midiInputCount = 0;
       this.emit("midi");
       return false;
     }
-    const wire = () => {
-      let count = 0;
-      this._midiAccess!.inputs.forEach((inp) => {
-        count++;
-        inp.onmidimessage = (msg: MIDIMessageEvent) => {
-          this.handleMidiMessage(msg);
-        };
-      });
-      this.midiStatus = count
-        ? count + " device" + (count > 1 ? "s" : "")
-        : "no device";
-      this.emit("midi");
-    };
-    if (this._midiAccess) {
-      wire();
-      return true;
-    }
     try {
-      this._midiAccess = await navigator.requestMIDIAccess();
-      this._midiAccess.onstatechange = wire;
-      wire();
+      this._midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+      this._midiAccess.onstatechange = () => this.wireMidiInputs();
+      this.wireMidiInputs();
       return true;
     } catch {
       this.midiStatus = "denied";
+      this.midiInputCount = 0;
+      this._midiAccess = null;
       this.emit("midi");
       return false;
     }
+  }
+
+  private wireMidiInputs() {
+    if (!this._midiAccess) return;
+    let count = 0;
+    this._midiAccess.inputs.forEach((inp) => {
+      count++;
+      inp.onmidimessage = (msg: MIDIMessageEvent) => {
+        this.handleMidiMessage(msg);
+      };
+    });
+    this.midiInputCount = count;
+    this.midiStatus = count
+      ? count + " device" + (count > 1 ? "s" : "")
+      : "no device";
+    this.emit("midi");
   }
 
   /** Parse a hardware MIDI message → noteOn/Off (+ sustain / all-notes-off). */
@@ -2034,15 +2068,17 @@ class AudioEngine {
   private liveKey(midi: number, channelId?: string) {
     return (channelId ?? "_") + ":" + midi;
   }
-  // live-keyboard routing: explicit channel > armed channel > the SELECTED midi track
-  // (so playing the Instrument panel of a selected track sounds THAT track — through
-  // its FX strip — without arming; unrouted keys fall back to the global lab patch)
+  // Ableton MIDI destination: explicit channel > armed MIDI/drum track > selected
+  // MIDI/drum track (selected-but-unarmed still plays, like Live with nothing armed).
+  // An armed *audio* track must not swallow keys — MIDI never lands on audio.
   private liveCid(channelId?: string): string | undefined {
     if (channelId) return channelId;
-    if (this.armedChannel) return this.armedChannel;
-    const selId = this._selTrackId;
-    if (selId && this.arrangement.tracks.some((t) => t.id === selId && t.kind === "midi")) return selId;
-    return undefined;
+    const playable = (id: string | null | undefined) => {
+      if (!id) return undefined;
+      const t = this.arrangement.tracks.find((tr) => tr.id === id);
+      return t && (t.kind === "midi" || t.kind === "drum") ? t.id : undefined;
+    };
+    return playable(this.armedChannel) ?? playable(this._selTrackId);
   }
   noteOn(midi: number, vel?: number, channelId?: string) {
     vel = vel == null ? 1 : vel;
@@ -2070,7 +2106,7 @@ class AudioEngine {
       this.recordNoteOn(midi, vel); // drum hits still capture when recording
       return;
     }
-    this.noteOff(midi, true, cid);
+    this.releaseLiveVoices(midi, true, cid ?? "_");
     // `cid` names an arrangement track — resolve it so previewing a note in the piano
     // roll auditions that track's instrument, not the global Audio-Lab patch.
     const sel = this.voiceForId(cid);
@@ -2102,33 +2138,85 @@ class AudioEngine {
 
   noteOff(midi: number, instant?: boolean, channelId?: string) {
     this.recordNoteOff(midi); // close a recorded note even for drum one-shots (no live voice)
-    const cid = this.liveCid(channelId); // must mirror noteOn or the release misses its key
-    const key = this.liveKey(midi, cid);
-    const gKey = this.liveKey(midi, undefined);
-    // fall back to the global slot in case the note was pressed before arming
-    const h = this._liveVoices[key] ?? this._liveVoices[gKey];
-    if (!h) return;
-    // damper pedal: keep sounding until pedal up (instant = retrigger / panic path)
+    // omitted channelId = hardware / computer keys: release every live voice of this
+    // pitch (arming may have changed liveCid since noteOn). Explicit id = that track.
+    this.releaseLiveVoices(
+      midi,
+      instant,
+      channelId !== undefined ? (this.liveCid(channelId) ?? "_") : null,
+    );
+  }
+
+  /**
+   * `scope` = track id / `"_"` → that slot (+ global fallback).
+   * `scope` = null → every live voice of this MIDI pitch (key-up after re-arm).
+   */
+  private releaseLiveVoices(
+    midi: number,
+    instant: boolean | undefined,
+    scope: string | null,
+  ) {
+    const keys: string[] = [];
+    if (scope === null) {
+      for (const k of Object.keys(this._liveVoices)) {
+        const at = k.lastIndexOf(":");
+        if (at >= 0 && Number(k.slice(at + 1)) === midi) keys.push(k);
+      }
+    } else {
+      const key = this.liveKey(midi, scope === "_" ? undefined : scope);
+      const gKey = this.liveKey(midi, undefined);
+      if (this._liveVoices[key]) keys.push(key);
+      if (gKey !== key && this._liveVoices[gKey]) keys.push(gKey);
+    }
+    if (!keys.length) return;
     if (this._midiSustain && !instant) {
-      this._midiSustained.add(this._liveVoices[key] ? key : gKey);
+      for (const k of keys) this._midiSustained.add(k);
       return;
     }
-    this._midiSustained.delete(key);
-    this._midiSustained.delete(gKey);
-    delete this._liveVoices[key];
-    delete this._liveVoices[gKey];
-    this.releaseVoice(h, this.ctx!.currentTime, instant);
+    const now = this.ctx?.currentTime;
+    for (const k of keys) {
+      const h = this._liveVoices[k];
+      if (!h) continue;
+      this._midiSustained.delete(k);
+      delete this._liveVoices[k];
+      if (this.ctx && now != null) this.releaseVoice(h, now, instant);
+    }
     this.emit("synth");
     this._centinelMidiSig = "";
     this.syncCentinelMidiTargets();
   }
 
-  // held pitches, optionally scoped to one channel (for that grid's key glow)
+  /** Instant-release live keyboard voices routed to a track (delete / new project). */
+  private releaseLiveVoicesOnTrack(trackId: string) {
+    const now = this.ctx?.currentTime;
+    let any = false;
+    for (const k of Object.keys(this._liveVoices)) {
+      const at = k.lastIndexOf(":");
+      if (at < 0 || k.slice(0, at) !== trackId) continue;
+      const h = this._liveVoices[k];
+      delete this._liveVoices[k];
+      this._midiSustained.delete(k);
+      if (h && this.ctx && now != null) this.releaseVoice(h, now, true);
+      any = true;
+    }
+    if (!any) return;
+    this.emit("synth");
+    this._centinelMidiSig = "";
+    this.syncCentinelMidiTargets();
+  }
+
+  // held pitches, optionally scoped to one channel (for that grid's key glow).
+  // Default = the live MIDI destination (armed / selected), not the global "_" slot.
   activeNotes(channelId?: string): number[] {
-    const prefix = (channelId ?? "_") + ":";
-    return Object.keys(this._liveVoices)
-      .filter((k) => k.startsWith(prefix))
-      .map((k) => Number(k.slice(prefix.length)));
+    const cid = channelId ?? this.liveCid() ?? "_";
+    const out: number[] = [];
+    for (const k of Object.keys(this._liveVoices)) {
+      const at = k.lastIndexOf(":");
+      if (at < 0 || k.slice(0, at) !== cid) continue;
+      const midi = Number(k.slice(at + 1));
+      if (Number.isFinite(midi)) out.push(midi);
+    }
+    return out;
   }
 
   // ── drum kit voices (arrangement drum clips + note-preview auditions) ──
@@ -2190,34 +2278,54 @@ class AudioEngine {
   midiVel = 0.85; // C/V while midiKeys is on
 
   // Arm an arrangement TRACK for keyboard / audio input (one at a time).
+  // Ableton: the armed MIDI track is the live MIDI destination immediately.
   // midi/drum → computer keys + Web MIDI into that track; audio → mic on ● record.
   armChannel(id: string | null) {
     const t = id ? this.arrangement.tracks.find((x) => x.id === id) : null;
     const ok = t && (t.kind === "midi" || t.kind === "drum" || t.kind === "audio");
     const prev = this.armedChannel;
     this.armedChannel = ok ? t!.id : null;
-    // warm the armed MIDI track's instrument so the first note isn't silent
-    if (this.armedChannel && t?.kind === "midi" && t.presetId)
-      this.warmPatch(this.resolvePatch(t.presetId));
-    // leaving an audio arm → release the mic (privacy); arming audio → request it
-    if (prev && prev !== this.armedChannel) this.teardownInput();
+    if (this.armedChannel && t) {
+      // focus the track (header highlight) without selecting every clip
+      this._selTrackId = t.id;
+      if (t.kind === "midi" || t.kind === "drum") {
+        // same click as arm = user gesture: resume the context + MIDI permission
+        this.ensureCtx();
+        if (t.kind === "midi" && t.presetId)
+          this.warmPatch(this.resolvePatch(t.presetId));
+        // no hardware input yet → computer MIDI keyboard is the controller (Ableton M)
+        if (!this.hasMidiInput) this.setMidiKeys(true);
+        void this.enableMidi();
+      }
+    }
+    // leaving an audio arm → release the mic (privacy); midi↔midi must not touch input
+    if (prev && prev !== this.armedChannel) {
+      const prevKind = this.arrangement.tracks.find((x) => x.id === prev)?.kind;
+      if (prevKind === "audio" || t?.kind === "audio") this.teardownInput();
+    }
     if (this.armedChannel && t?.kind === "audio") {
       void this.enableInput();
       void this.ensureCaptureWorklet(); // warm the worklet module during arm pending
     } else this.syncInputMonitor();
     this.emit("clip");
     this.emit("transport");
+    this.emit("select");
   }
 
-  toggleMidiKeys() {
-    this.midiKeys = !this.midiKeys;
+  setMidiKeys(on: boolean) {
+    if (this.midiKeys === on) return;
+    this.midiKeys = on;
+    if (on) this.ensureCtx();
     try {
-      localStorage.setItem("ain-midi-keys", this.midiKeys ? "1" : "0");
+      localStorage.setItem("ain-midi-keys", on ? "1" : "0");
     } catch {
       /* fine */
     }
     this.emit("transport");
     this.emit("clip");
+  }
+  toggleMidiKeys() {
+    this.setMidiKeys(!this.midiKeys);
   }
   setMidiOctave(n: number) {
     this.midiOctave = Math.min(3, Math.max(-3, Math.round(n)));
@@ -3660,6 +3768,7 @@ class AudioEngine {
   }
   removeTrack(id: string) {
     if (this.armedChannel === id) this.armChannel(null);
+    this.releaseLiveVoicesOnTrack(id);
     const t = this.findTrack(id);
     if (t)
       for (const c of t.clips) {
@@ -4866,6 +4975,8 @@ class AudioEngine {
   /** Stop playback, clear imports/caches/strips/undo — shared by new + .ain open. */
   private async wipeStudioSession(): Promise<void> {
     if (this.sequencePlaying) this.stopArrangement();
+    this.panicMidiNotes();
+    this.armChannel(null);
     this.stopAudioClips();
     this._importBufs = {};
     this._drumBufs = {};
@@ -5905,6 +6016,7 @@ class AudioEngine {
     const end = Math.max(0, ...t.clips.map((c) => c.startBeat + c.lengthBeats));
     this.timeSel = end > 0 ? { start: 0, end, trackIds: [trackId] } : null;
     this._selTrackId = trackId;
+    if (t.kind === "midi" || t.kind === "drum") this.ensureCtx();
     this.emit("select");
   }
   private _selTrackId: string | null = null;

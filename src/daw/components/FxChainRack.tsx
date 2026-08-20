@@ -875,7 +875,7 @@ function DevicePanel({
             label="residual"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="Unmapped bins stay at original phase — air, noise, in-key harmonics. 0 = peaks only."
+            tip="Aperiodic texture in the wet path (air, hash, transients). Never passes out-of-key notes — those lock onto the scale at any residual."
           />
           <Knob
             value={p.floor ?? 0.08}
@@ -897,7 +897,7 @@ function DevicePanel({
             label="hits"
             disabled={!p.on || !mapOn}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="Onset duck — spectral flux briefly turns mapping down so attacks stay sharp."
+            tip="Onset duck on in-key pull. Out-of-key still locks — attacks cannot leak original pitch."
           />
           <Knob
             value={p.maxShift}
@@ -908,6 +908,7 @@ function DevicePanel({
             label="max±"
             disabled={!p.on || p.mode !== "snap"}
             fmt={(v) => "±" + Math.round(v)}
+            tip="Legacy snap distance. Out-of-key always locks to the nearest scale degree — this no longer identity-passes."
           />
           <Knob
             value={p.lo ?? 1}
@@ -919,7 +920,7 @@ function DevicePanel({
             label="lo"
             disabled={!p.on || !mapOn}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="Snap/remap amount below 250 Hz"
+            tip="In-key pull below 250 Hz. Out-of-key still locks."
           />
           <Knob
             value={p.mid ?? 1}
@@ -931,7 +932,7 @@ function DevicePanel({
             label="mid"
             disabled={!p.on || !mapOn}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="Snap/remap amount 250 Hz–2.5 kHz"
+            tip="In-key pull 250 Hz–2.5 kHz. Out-of-key still locks."
           />
           <Knob
             value={p.hi ?? 0.4}
@@ -943,14 +944,14 @@ function DevicePanel({
             label="hi"
             disabled={!p.on || !mapOn}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="Snap/remap amount above 2.5 kHz — keep low to preserve air"
+            tip="In-key pull above 2.5 kHz. Out-of-key still locks; keep low to preserve in-key air."
           />
           <div className="flex flex-col gap-1 self-center">
             <FxChip
               label="snap"
               on={p.mode === "snap"}
               enabled={p.on}
-              title="snap — only nudge out-of-key notes (within max±); in-key color stays"
+              title="snap — lock out-of-key onto the scale; in-key color stays"
               onClick={() => set({ mode: "snap" })}
             />
             <FxChip
@@ -1242,7 +1243,7 @@ function DevicePanel({
               const n = Math.round(v * 100);
               return (n > 0 ? "+" : "") + n + "%";
             }}
-            tip="Natural Vibrato — scale vibrato already in the performance. 0 = leave · left = flatten · right = amplify"
+            tip="Natural Vibrato — scale vibrato already in the performance. 0 = leave (partial residual) · left = flatten · right = amplify"
           />
           <Knob
             value={formant}

@@ -323,6 +323,14 @@ export function PlaybackPane() {
 
         <GridMenu />
 
+        <button
+          className={ctl + px + onOff(eng.midiKeys)}
+          onClick={() => engine.toggleMidiKeys()}
+          title="Computer MIDI Keyboard (M): ON = A–; plays the armed / selected MIDI track"
+        >
+          keys {eng.midiKeys ? "on" : "off"}
+        </button>
+
         {/* tempo */}
         <span className="ml-auto flex items-center gap-2">
           <button

@@ -200,7 +200,7 @@ export function Instrument({ enableTypingKeys = true }: { enableTypingKeys?: boo
           onClick={() => requestMidiEnable()}
           className={
             "rounded-[3px] border px-2 py-1 font-mono text-[10.5px] tracking-[0.05em] whitespace-nowrap transition-colors " +
-            (midiStatus.indexOf("device") >= 0
+            (eng.hasMidiInput
               ? "border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-accent"
               : midiStatus === "idle"
                 ? "border-line text-faint hover:border-accent hover:text-accent"

@@ -196,7 +196,9 @@ export function ShortcutsHelp() {
 
                 <Sec title="midi, instruments & special">
                   <Li label="record">Shift+R</Li>
-                  <Li label="computer keys as midi">M</Li>
+                  <Li label="computer keys as midi">
+                    M (on when you arm a midi track with no controller)
+                  </Li>
                   <Li label="loop on/off">L</Li>
                   <Li label="loop = selection">
                     <span className="keycap">⌘</span>L

@@ -24,7 +24,6 @@ import { TrackFader } from "./TrackFader";
 import { AudioAcceptSheet } from "./AudioAcceptSheet";
 import { BounceCancelConfirm } from "./BounceCancelConfirm";
 import { openContextMenu } from "../context-menu-bus";
-import { requestMidiEnable } from "../midi-gate-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
 
 const HEAD_H = 30; // must match Timeline
@@ -324,7 +323,6 @@ export function ArrangementPage() {
       requestAccept(() => engine.armChannel(next));
       return;
     }
-    if (t?.kind === "midi" || t?.kind === "drum") requestMidiEnable();
     engine.armChannel(next);
   };
   const fxTrack = fxTrackId ? tracks.find((t) => t.id === fxTrackId) : undefined; // auto-hides if deleted
@@ -360,15 +358,19 @@ export function ArrangementPage() {
   const [editSel, setEditSel] = useState<{ trackId: string; clipId: string } | null>(null);
   const primary = eng.selClips.size === 1 ? engine.primaryClip() : null;
   const sel = primary ?? (editSel && engine.getArrClip(editSel.trackId, editSel.clipId) ? editSel : null);
-  // Instrument panel: selected MIDI clip's track, OR the armed MIDI track (so arming
-  // alone is enough to hear/edit — no clip selection required).
+  // Instrument panel: Ableton — the armed MIDI track is what you play/edit.
+  // Fall back to the selected MIDI clip's track, then the selected MIDI track.
   const selTrack = sel ? tracks.find((t) => t.id === sel.trackId) : undefined;
   const armedTrack = eng.armedChannel
     ? tracks.find((t) => t.id === eng.armedChannel)
     : undefined;
+  const focusedTrack = eng.selTrackId
+    ? tracks.find((t) => t.id === eng.selTrackId)
+    : undefined;
   const instrumentTrack =
+    (armedTrack?.kind === "midi" ? armedTrack : undefined) ||
     (selTrack?.kind === "midi" ? selTrack : undefined) ||
-    (armedTrack?.kind === "midi" ? armedTrack : undefined);
+    (focusedTrack?.kind === "midi" ? focusedTrack : undefined);
   const selMidiTrack = instrumentTrack;
 
   useEffect(() => {
@@ -635,16 +637,25 @@ export function ArrangementPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // focus the selected MIDI track's patch in the shared instrument editor
+  // load the track's patch into the shared Instrument (armed / selected MIDI track)
   useEffect(() => {
     if (selMidiTrack?.presetId) engine.setSynthPatch(selMidiTrack.presetId);
   }, [selMidiTrack?.id, selMidiTrack?.presetId]);
 
-  // …and mirror the other way: if the INSTRUMENT selector switches patch while a track
-  // is focused, assign that patch to the track. Guarded by inequality → converges, no loop.
+  // write Instrument selector changes back onto the live MIDI destination only —
+  // do NOT depend on the track object, or arming another track can clobber its preset
+  // with the previous track's patch in the same effect flush.
   useEffect(() => {
-    if (selMidiTrack && eng.synthPatch !== selMidiTrack.presetId) engine.setTrackPreset(selMidiTrack.id, eng.synthPatch);
-  }, [eng.synthPatch, selMidiTrack]);
+    const dest =
+      engine.arrangement.tracks.find(
+        (x) => x.id === engine.armedChannel && x.kind === "midi",
+      ) ||
+      engine.arrangement.tracks.find(
+        (x) => x.id === engine.selTrackId && x.kind === "midi",
+      );
+    if (dest && dest.presetId !== engine.synthPatch)
+      engine.setTrackPreset(dest.id, engine.synthPatch);
+  }, [eng.synthPatch]);
 
   const addTrack = (kind: TrackKind) => {
     engine.addTrack(kind);

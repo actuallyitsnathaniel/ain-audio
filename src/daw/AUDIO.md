@@ -50,36 +50,27 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
 | `reverb` | Convolver + predelay + tone         | Ableton-style hall: decay / size / damping / diffusion / predelay / lo·hi cut / mix. Synth IR via `makeReverbIR`. |
 | `eq` | Native biquad cascade | Pro-Q–style parametric EQ: up to 12 bands, shapes (bell/LS/HS/LC/HC/notch/BP/tilt), drag/Q editor, solo, per-band **dyn**, accurate response curve (incl. live dyn), input RTA, **ST/M/S**. Shared `BandCurveEditor` with speccomp. |
-| `impartialer` | AudioWorklet (STFT) | Phase 1–3 + detail pass: transpose / snap / remap, peak-only mapping, original-phase residual, lo/mid/hi amounts, onset duck. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
-| `centinel` | AudioWorklet (YIN + Fairbanks / PSOLA) | Auto-Tune–style **input type** (Soprano / Alto·Tenor / Low Male / Instrument / Bass) sets YIN fMin–fMax. Soft/PSOLA retune + do-no-harm clamp. Presets: **pop** · soft · robot. |
+| `impartialer` | AudioWorklet (STFT) | Phase 1–3 + detail pass: transpose / snap / remap, peak mapping with musical gate (out-of-key never identity-passes), residual = aperiodic texture, lo/mid/hi + hits on in-key pull. Reports `latencySamples` from quality preset. Dry/wet mixed inside the worklet. See [SPECTRAL.md](SPECTRAL.md). |
+| `centinel` | AudioWorklet (E/H + cycle splice) | Expired US5973252A: recursive E/H period → rate convert + ±1 `Cycle_period` + Decay. **Input type** sets E/H fMin–fMax. LPC formant preserve after splice (settled `|R*|`). Presets: **pop** · nat · soft · robot. |
 | `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
 
-**Centinel control law** — `R* = hz(committedWant)/hz(lockedDet)`. Note commit:
-`stays_locked` (±0.4 st) + hysteretic hold (base ~15 ms, soft stretch capped
-~60 ms — eased from AT-strict after robotics); sticky scale **target** until
-raw is clearly closer (~0.42 st hyst, +extra when stationary; vib-center
-judges parked retargets; commit re-validates; octave-lock sticky register).
-Directed midzone refine + stationary center-tight + loose-hold chase with
-soft-land (chase brake + center latch; no hard audibleWant snaps). **Humanize**
-does not stretch Retune Speed while audible want is still >~12¢ off sticky tgt.
-Post-commit soft floor when stationary never exceeds the Retune Speed knob.
-Want-base slewed. `R*` tracks
-want / live det. **Humanize** otherwise stretches on sustains (~100 ms in);
-**Natural Vibrato** (−1…+1) scales the AC residual around a slow det center
-onto the want (0 = leave · − = flatten · + = amplify). Note-commit under
-PSOLA refreshes a single grain in-place (no dual-grain OLA — that slapped).
-**Cold start** (re-arm after silence): soft+PSOLA floors Retune Speed (~150 ms,
-tapered over ~400 ms) and stays on latency-dry until the audible want is close —
-bare riffs/runs don’t audition a detect-rate staircase. Soft+PSOLA **slews the
-target want** at Retune Speed (per-sample); ratio tracks it tightly — no
-R*-jump + double-chase. Brief post-commit speed floor helps rapid runs.
-Fairbanks: within-note soft only + seed-snap on commit. PSOLA (`formant ≥ 50%`):
-full soft across notes. **Detector confidence**: competing YIN troughs (reverb /
-multipitch / near-octave rivals from room reflections) lower confidence → hold
-retarget, hysteretic wet open/close with ~100 ms close debounce, phrase-end wet
-close on sustained low RMS (~45 ms) so OLA doesn’t ring past dry, brief soft
-speed floor. Detector stays YIN.
+**Centinel control law** — `R* = hz(soundingWant)/hz(Cycle_period)` where
+`soundingWant = audibleWant + Nat Vib offset`. Period and notes
+are E/H only (no second f0). Sticky keeps the committed scale note until live is
+closer by 0.4 st, same-side; scoop-toward past-mid flips now. Decay = Retune Speed
+(per-sample chase of `audibleWant`). **Humanize** stretches that tau on-center after
+~100 ms (gated off mid-glide). **Flex** is an island around the target (0 = always
+pull / pop). **Natural Vibrato** (−1…+1) scales AC residual around a slow det center
+**after** Decay: 0 = leave (`VIB_LEAVE_SCALE` of residual) · − = flatten · + = amplify.
+Formant knob is LPC preserve amount after splice, not a PSOLA path switch.
+`rate=1` on the splice tap is dry. Mix knob is the only parallel blend.
+Do-no-harm clamp keeps corrected MIDI on the det↔want segment.
+
+**Cold start** (re-arm after silence): splice exits onset unity at 18 ms (even when
+formant ≥ 0.5). Untracked (consonant / smear): rate=1, keep sticky. Detector
+confidence still can duck wet on competing troughs / low RMS; it does not seed
+period. PSOLA / Fairbanks remain for `CYCLE_SPLICE=false` only.
 
 **Chains** — `FxChain(ctx, input, output)` owns an ordered list of live device instances wired
 `input → [dev0 → dev1 → …] → output` (empty = passthrough). `addDevice`/`removeDevice`/
@@ -547,11 +538,14 @@ or desktop shell) — see [docs/AIN-MACOS.md](../../docs/AIN-MACOS.md).
     A silent tap into the armed track’s analyser keeps the fader meter alive whether
     or not monitor is on. Speakers can feedback; headphones recommended. Stream stays
     warm while armed either way.
-  - **MIDI** — Web MIDI (`navigator.requestMIDIAccess`), gated by [MidiGate](components/MidiGate.tsx)
-    before the browser prompt. Wired from I/O prefs, Instrument chip, arming a midi/drum
-    track, or ● MIDI record. Note On/Off (+ velocity) → `noteOn`/`noteOff` →
-    `startVoiceAt`/`releaseVoice` (armed/selected track). Also: CC 64 sustain, CC 120/123
-    all-notes/sound-off (`panicMidiNotes`). Status on the studio strip + I/O panel.
+  - **MIDI** — Web MIDI (`navigator.requestMIDIAccess({ sysex: false })`), requested on the
+    **same click as arming** a midi/drum track (user gesture unlocks audio + the browser MIDI
+    prompt). Explicit connect still goes through [MidiGate](components/MidiGate.tsx) (I/O prefs,
+    Instrument chip). Note On/Off (+ velocity) → `noteOn`/`noteOff` →
+    `startVoiceAt`/`releaseVoice` on the **armed MIDI/drum track**, else the selected MIDI/drum
+    track (Ableton: armed wins; selected plays when nothing MIDI-armed). Also: CC 64 sustain,
+    CC 120/123 all-notes/sound-off (`panicMidiNotes`). `hasMidiInput` is the live-device flag
+    (`"no device"` is not connected). Status on the studio strip + I/O panel.
 
 **Capability / acceptance** — first arm of an audio track (or first open of **I/O** prefs)
 shows a one-time **Before you record** sheet (`ain-audio-accept` v1). Checklist must be
@@ -569,11 +563,14 @@ audio capture only appends PCM while `currentBeat()` is inside `[loop.start, loo
 bake places the clip at `max(loop.start, startBeat − comp)` and clamps length to the punched
 span. Loop off = full take from ● to punch-out. Hint under the transport while recording +
 loop on. No takes ladder / mute-previous-take yet.
-**Computer MIDI Keyboard** (`engine.midiKeys`, **M** / `keys` chip in the playback pane): Ableton
+**Computer MIDI Keyboard** (`engine.midiKeys`, **M** / `keys` chip on the playback pane): Ableton
 toggle between single-key shortcuts (off — L loop, R reverse…) and typing-keyboard pitches
 (on — Ableton A–; row plays the **armed** or selected MIDI track via `noteOn`; Z/X octave,
-C/V velocity). Plays without a clip selected — arming alone is enough (Instrument mounts for
-the armed track too). Keyboard: Space = play/stop (from the cursor),
+C/V velocity). Arming a midi/drum track with no hardware input turns keys **on** (the computer
+keyboard is the controller until Web MIDI is live). Skip on MidiGate does the same. Plays
+without a clip selected — arming alone is enough (Instrument mounts for the armed track).
+`ensureCtx()` runs on arm / keys-on / `enableMidi` so the first note isn't swallowed by a
+suspended context (MIDI events are not user activation). Keyboard: Space = play/stop (from the cursor),
 Home = `cursorToStart`, End = `cursorToEnd`, L = loop; ←/→ move the cursor when nothing is
 selected (⌘ fine, ⌘⇧ clip edges — see the ONE-cursor section).
 

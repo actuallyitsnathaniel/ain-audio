@@ -111,7 +111,7 @@ export function StudioStatusStrip({
         <span className="text-faint">·</span>
         <span
           className={
-            eng.midiStatus.indexOf("device") >= 0
+            eng.hasMidiInput
               ? "text-accent"
               : eng.midiStatus === "denied"
                 ? "text-[#e98c79]"
