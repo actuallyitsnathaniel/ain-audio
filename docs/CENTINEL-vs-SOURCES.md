@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build `g5b-vib`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build `g6a-join`).
 
 Interactive companions (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx)
@@ -41,6 +41,7 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 - [x] **Untracked** (`g2g-untrk`) — consonant / smear: rate=1, keep sticky. No last-lock retune.
 - [x] **Body vs room** (`g2h-body`) — analysis HP + 2L preference so reflection delays don't own `Cycle_period`. Splice still reads the wet take (not a dereverb).
 - [x] **Join align** (`g2i-join`) — ±1 cycle, phase-aligned to the current tap.
+- [x] **Seam no-overlap** (`g6a-join`) — don't start another ±cycle until the current join fade finishes; raised-cosine mix. Overlapping xfades were warbling note runs. ¢ unchanged vs g5b (not the pass bar).
 - [x] **Envelope post** (`g4a-env`) — LPC preserve after splice; settled `|R*|` + voiced only. Knob is amount. IIR stays warm at amt=0.
 - [ ] Optional formant *shift* (raise/lower independently) — later
 
@@ -64,18 +65,18 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
   Pop/AT path already demoted them (`CYCLE_SPLICE`). Revisit whether Fairbanks
   fallback and period-PSOLA can be slimmed once 14s/20s ears are done.
 
-## Current scorecard (`g5b-vib`; leave-on-want freeze was `g5a-vib`)
+## Current scorecard (`g6a-join`; leave freeze `g5b-vib`)
 
-| Metric | g5b | g5a | Goal |
+| Metric | g6a | g5b | Goal |
 |---|---|---|---|
-| ≤15¢ of scale | **52.4%** | 52.9% | 53.7% |
+| ≤15¢ of scale | **52.4%** | 52.4% | 53.7% |
 | loose holds (15–35¢ ≥80ms) | **2** | 2 | 2 |
-| listen ~10s ≤15 | **51%** | 50% | 51% |
+| listen ~10s ≤15 | **51%** | 51% | 51% |
 | listen ~14s ≤15 | **59%** | 59% | 47% |
-| listen ~20s ≤15 | **39%** | 41% | 46% |
-| clicks wet/dry | 20 / 21 | 19 / 21 | — |
+| listen ~20s ≤15 | **39%** | 39% | 46% |
+| clicks wet/dry | 20 / 21 | 20 / 21 | — |
 
-Residual after Decay. ~10s park now ties AT (g5a lagged the leave). ¢ drop vs g4a is leave, not a splice hole. Humanize next. Do not chase 20s ¢.
+Splice seam only (no overlapping ±cycle xfades). ¢ matches g5b — warble on runs is ears, not this table. Next if runs still warble: commit-fast (item 2). Do not chase 20s ¢.
 
 Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true`.
 
@@ -86,7 +87,7 @@ Flags: `CYCLE_SPLICE=true`, `EH_LIVE=true`, `EH_DRIVE=true`.
 | `EH_LIVE` / `EH_DRIVE` | ON |
 | E/H sole acquire | ON — `yinPitch` deleted |
 | `inphinc` from E/H | ON — `1/periodSamp` in `process()` |
-| Product pitch-law | G3 knobs live; Nat Vib residual after Decay (`g5b-vib`). Orphan parked |
+| Product pitch-law | G3 knobs live; Nat Vib after Decay (`g5b`). Splice seam no-overlap (`g6a-join`). Orphan parked |
 
 `npm run centinel:eh-validate` → `.tmp_centinel/eh-validate.json`
 

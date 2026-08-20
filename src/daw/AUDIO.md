@@ -66,6 +66,7 @@ pull / pop). **Natural Vibrato** (−1…+1) scales AC residual around a slow de
 Formant knob is LPC preserve amount after splice, not a PSOLA path switch.
 `rate=1` on the splice tap is dry. Mix knob is the only parallel blend.
 Do-no-harm clamp keeps corrected MIDI on the det↔want segment.
+Splice joins one at a time (wait out the seam before the next ±cycle).
 
 **Cold start** (re-arm after silence): splice exits onset unity at 18 ms (even when
 formant ≥ 0.5). Untracked (consonant / smear): rate=1, keep sticky. Detector

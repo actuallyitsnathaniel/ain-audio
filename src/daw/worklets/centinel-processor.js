@@ -4,13 +4,14 @@
 // formant 0–1: cepstral LPC envelope copy after splice (settled |R*| only).
 // PSOLA remains for CYCLE_SPLICE=false only — not the AT reference.
 // Product: G3 sticky + Humanize / Flex / DC finish; G5 Nat Vib after Decay.
+// g6a: splice seam — no overlapping ±cycle xfades; raised-cosine join.
 // Untracked (consonant / reverb smear): rate=1, keep sticky. Tracking knob = ε.
 // E/H analysis is HP'd + 2L body preference so room delays don't own Cycle_period.
 // Splice still reads the wet take (not a dereverb). Insert/delete phase-aligns ±pe.
 // Splice re-arm: exit onset unity on ONSET_SPLICE_MS even when formant≥0.5 (LPC is a post, not a path).
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-19g5b-vib";
+const CENTINEL_BUILD = "2026-08-19g6a-join";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -1356,7 +1357,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
 
   /**
    * US5973252A corrector: interpolate input at a rate-converted read pointer;
-   * ± one Cycle_period when delay leaves the N2±pe window.
+   * ± one Cycle_period when delay leaves the N2±pe window. One join at a
+   * time — wait out the seam before the next ±cycle (g6a).
    * @returns {[number, number]} wet L/R
    */
   _cycleSpliceSample(rate) {
@@ -1380,11 +1382,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const minD = Math.max(pe * 0.35, N2 - pe);
     const maxD = Math.min(N - pe - 4, N2 + pe);
     const before = this._spliceDelay;
-    // Patent: ± one Cycle_period per sample. Align the join to the current
-    // tap so insert/delete isn't a random phase of that cycle (chew).
-    if (this._spliceDelay < minD)
+    // Patent: ± one Cycle_period. Do not start another join while a seam
+    // is still fading — overlapping xfades warble on note runs (g6a).
+    const canJoin = this._spliceXf <= 0;
+    if (canJoin && this._spliceDelay < minD)
       this._spliceDelay += this._alignedPe(this._spliceDelay, pe, 1);
-    else if (this._spliceDelay > maxD)
+    else if (canJoin && this._spliceDelay > maxD)
       this._spliceDelay -= this._alignedPe(this._spliceDelay, pe, -1);
     if (this._spliceDelay < 4) this._spliceDelay = 4;
     if (this._spliceDelay > N - 4) this._spliceDelay = N - 4;
@@ -1400,9 +1403,13 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     let rS = cubicAt(this.cbiR, indd);
     if (this._spliceXf > 0) {
       const ind0 = this.cbiwr - this._spliceXfDelay;
-      const w = this._spliceXf;
-      l = w * cubicAt(this.cbiL, ind0) + (1 - w) * l;
-      rS = w * cubicAt(this.cbiR, ind0) + (1 - w) * rS;
+      // Raised-cosine, sums to 1 — smoother than a linear dump, no extra
+      // boost on a phase-aligned cycle (equal-power would bump).
+      const t = 1 - this._spliceXf;
+      const wOld = 0.5 * (1 + Math.cos(Math.PI * t));
+      const wNew = 1 - wOld;
+      l = wOld * cubicAt(this.cbiL, ind0) + wNew * l;
+      rS = wOld * cubicAt(this.cbiR, ind0) + wNew * rS;
       this._spliceXf -= 1 / this._spliceXfN;
       if (this._spliceXf < 0) this._spliceXf = 0;
     }
