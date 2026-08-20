@@ -21,7 +21,7 @@ import { DRUM_BASE } from "../../data/drum-midi";
 import { type ArrClip, type ArrTrack, slippedLocals } from "../../data/arrangement";
 import {
   dragHasAudioIntake,
-  libraryBufIdFromDrag,
+  libraryBufIdsFromDrag,
 } from "../../library-drag";
 import { filesFromDataTransfer } from "../../file-source";
 
@@ -78,6 +78,7 @@ export function Timeline({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag>(null);
+  const dropAcross = useRef(false);
   const view = useRef({ scrollX: 0, scrollY: 0, ppb: 24 });
   const onScrollYRef = useRef(onScrollY);
   useEffect(() => {
@@ -554,25 +555,34 @@ export function Timeline({
     });
   };
 
-  // drop an audio file onto an audio-track lane → create a clip there + import it.
-  // preventDefault on dragover is REQUIRED or the browser navigates to the file.
+  // drop audio onto a lane. ⌘/Ctrl (read on dragover — drop often drops the flag)
+  // stacks files down existing audio tracks at the same beat (Ableton). No modifier
+  // = end-to-end on the drop track. ⌥ bypasses snap; ⌘ is the stack modifier here.
   const onDragOver = (e: React.DragEvent<HTMLCanvasElement>) => {
-    if (dragHasAudioIntake(e.dataTransfer)) e.preventDefault();
+    if (!dragHasAudioIntake(e.dataTransfer)) return;
+    e.preventDefault();
+    dropAcross.current = cmd(e);
   };
   const onDrop = async (e: React.DragEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+    const acrossTracks = dropAcross.current || cmd(e);
+    dropAcross.current = false;
     const r = ref.current!.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
-    const beat = Math.max(0, snapBeat(xToBeat(x), cmd(e)));
-    const hit = y >= HEAD_H ? hitClip(x, y) : null;
+    const beat = Math.max(0, snapBeat(xToBeat(x), e.altKey));
     const rowTrack = y >= HEAD_H ? tracks()[yToTrackIndex(y)] : undefined;
 
-    const libId = libraryBufIdFromDrag(e.dataTransfer);
-    if (libId) {
-      const trackId = !hit && rowTrack?.kind === "audio" ? rowTrack.id : undefined;
-      const placed = engine.placeLibraryClip(libId, { beat, trackId });
-      if (placed) onEditClip(placed.trackId, placed.clipId);
+    const libIds = libraryBufIdsFromDrag(e.dataTransfer);
+    if (libIds.length) {
+      const trackId = rowTrack?.id;
+      const placed = engine.placeLibraryClips(libIds, {
+        beat,
+        trackId,
+        acrossTracks,
+      });
+      const last = placed[placed.length - 1];
+      if (last) onEditClip(last.trackId, last.clipId);
       return;
     }
 
@@ -584,17 +594,18 @@ export function Timeline({
     // Standard MIDI File → midi clip (tempo/CC/bend preserved in NoteClip.autos)
     if (lower.endsWith(".mid") || lower.endsWith(".midi")) {
       const prefer =
-        !hit && rowTrack?.kind === "midi" ? rowTrack.id : undefined;
+        rowTrack?.kind === "midi" ? rowTrack.id : undefined;
       const res = await engine.importMidiFile(first.file, beat, prefer);
       if (res) onEditClip(res.trackId, res.clipId);
       return;
     }
 
-    const res = await engine.importAudioBatch(fileDrop);
-    if (!res) return; // undecodable
-    const trackId = !hit && rowTrack?.kind === "audio" ? rowTrack.id : undefined;
-    const placed = engine.placeLibraryClip(res.bufId, { beat, trackId });
-    if (placed) onEditClip(placed.trackId, placed.clipId);
+    const ids = await engine.importAudioBatch(fileDrop);
+    if (!ids.length) return; // undecodable
+    const trackId = rowTrack?.id;
+    const placed = engine.placeLibraryClips(ids, { beat, trackId, acrossTracks });
+    const last = placed[placed.length - 1];
+    if (last) onEditClip(last.trackId, last.clipId);
   };
 
   // wheel — Ableton Arrangement mapping (same as the piano roll):

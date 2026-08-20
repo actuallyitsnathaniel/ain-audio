@@ -5039,18 +5039,9 @@ class AudioEngine {
     }
   }
 
-  /** Import every dropped audio file (folders already flattened). Returns the first success. */
-  async importAudioBatch(
-    picked: ImportFile[],
-  ): Promise<{
-    bufId: string;
-    name: string;
-    seconds: number;
-    bpm?: number;
-    bars?: number;
-    key?: string;
-  } | null> {
-    let first: Awaited<ReturnType<AudioEngine["importAudio"]>> = null;
+  /** Import every dropped audio file (folders already flattened). Returns bufIds in order. */
+  async importAudioBatch(picked: ImportFile[]): Promise<string[]> {
+    const ids: string[] = [];
     for (const one of picked) {
       if (looksLikeMidiFile(one.file) || isJunkDropFile(one.file)) continue;
       if (
@@ -5060,9 +5051,9 @@ class AudioEngine {
       )
         continue;
       const res = await this.importAudio(one.file, one);
-      if (res && !first) first = res;
+      if (res) ids.push(res.bufId);
     }
-    return first;
+    return ids;
   }
 
   private libraryImportResult(bufId: string, fileName: string) {
@@ -5810,46 +5801,98 @@ class AudioEngine {
     };
   }
 
+  /**
+   * Place library buffer(s) as audio clips.
+   * Default: end-to-end on one track (Ableton Arrangement drop).
+   * `acrossTracks`: same start time, one file per audio track going down from
+   * `trackId` (Ableton ⌘/Ctrl-drop). Uses existing audio lanes; creates more if short.
+   */
+  placeLibraryClips(
+    bufIds: string[],
+    opts?: { beat?: number; trackId?: string; acrossTracks?: boolean },
+  ): { trackId: string; clipId: string }[] {
+    const ids = bufIds.filter((id) => this.importMeta(id));
+    if (!ids.length) return [];
+    this.pushUndo();
+    const beat = Math.max(0, opts?.beat ?? this.insertBeat);
+    const secPerBeat = 60 / this.arrangement.bpm;
+    const placed: { trackId: string; clipId: string }[] = [];
+    const clipOn = (trackId: string, bufId: string, startBeat: number) => {
+      const meta = this.importMeta(bufId)!;
+      const lengthBeats = Math.max(
+        0.25,
+        Math.round((meta.seconds / secPerBeat) * 4) / 4,
+      );
+      const created = this.addClip(trackId, {
+        startBeat,
+        lengthBeats,
+        loop: false,
+        content: {
+          kind: "audio",
+          bufId: meta.bufId,
+          name: meta.name,
+          a: 0,
+          b: 1,
+          gain: 1,
+          cents: 0,
+          semi: 0,
+          snap: true,
+          norm: true,
+          rootBpm: meta.bpm,
+          bars: meta.bars,
+          key: meta.key,
+        },
+      });
+      if (created) placed.push({ trackId, clipId: created.id });
+      return lengthBeats;
+    };
+
+    if (opts?.acrossTracks && ids.length > 1) {
+      let idx = 0;
+      const startId =
+        opts.trackId ??
+        (this._selTrackId &&
+        this.findTrack(this._selTrackId)?.kind === "audio"
+          ? this._selTrackId
+          : null);
+      if (startId) {
+        const i = this.arrangement.tracks.findIndex((tr) => tr.id === startId);
+        if (i >= 0) idx = i;
+      }
+      for (const bufId of ids) {
+        let t: ArrTrack | undefined;
+        const lanes = this.arrangement.tracks;
+        while (idx < lanes.length) {
+          if (lanes[idx]!.kind === "audio") {
+            t = lanes[idx];
+            idx++;
+            break;
+          }
+          idx++;
+        }
+        if (!t) {
+          t = this.addTrack("audio", this.importMeta(bufId)!.name);
+          idx = this.arrangement.tracks.length;
+        }
+        clipOn(t.id, bufId, beat);
+      }
+    } else {
+      let t = opts?.trackId ? this.findTrack(opts.trackId) : undefined;
+      if (!t || t.kind !== "audio") t = this.addTrack("audio");
+      let at = beat;
+      for (const bufId of ids) at += clipOn(t.id, bufId, at);
+    }
+    if (placed.length) this.setSelectedClips(placed.map((p) => p.clipId));
+    this.emit("arrange");
+    return placed;
+  }
+
   /** Place a library buffer as an audio clip. Omitting trackId adds a new audio track. */
   placeLibraryClip(
     bufId: string,
     opts?: { beat?: number; trackId?: string },
   ): { trackId: string; clipId: string } | null {
-    const meta = this.importMeta(bufId);
-    if (!meta) return null;
-    this.pushUndo();
-    const beat = Math.max(0, opts?.beat ?? this.insertBeat);
-    const secPerBeat = 60 / this.arrangement.bpm;
-    const lengthBeats = Math.max(
-      0.25,
-      Math.round((meta.seconds / secPerBeat) * 4) / 4,
-    );
-    let t = opts?.trackId ? this.findTrack(opts.trackId) : undefined;
-    if (!t || t.kind !== "audio") t = this.addTrack("audio");
-    const created = this.addClip(t.id, {
-      startBeat: beat,
-      lengthBeats,
-      loop: false,
-      content: {
-        kind: "audio",
-        bufId: meta.bufId,
-        name: meta.name,
-        a: 0,
-        b: 1,
-        gain: 1,
-        cents: 0,
-        semi: 0,
-        snap: true,
-        norm: true,
-        rootBpm: meta.bpm,
-        bars: meta.bars,
-        key: meta.key,
-      },
-    });
-    if (!created) return null;
-    this.selectClip(created.id);
-    this.emit("arrange");
-    return { trackId: t.id, clipId: created.id };
+    return this.placeLibraryClips([bufId], opts)[0] ?? null;
   }
 
   private rememberLibrary(
@@ -6009,11 +6052,18 @@ class AudioEngine {
   }
 
   async deleteLibraryItem(bufId: string): Promise<void> {
+    await this.deleteLibraryItems([bufId]);
+  }
+
+  async deleteLibraryItems(bufIds: string[]): Promise<void> {
+    if (!bufIds.length) return;
     this.stopLibraryPreview();
-    this.invalidateImport(bufId);
-    delete this._libMeta[bufId];
-    delete this._importBufs[bufId];
-    void deleteAudio(bufId);
+    for (const bufId of bufIds) {
+      this.invalidateImport(bufId);
+      delete this._libMeta[bufId];
+      delete this._importBufs[bufId];
+      void deleteAudio(bufId);
+    }
     this.emit("arrange");
   }
 

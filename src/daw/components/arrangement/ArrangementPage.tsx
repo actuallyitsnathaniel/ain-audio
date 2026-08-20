@@ -27,6 +27,11 @@ import { BounceCancelConfirm } from "./BounceCancelConfirm";
 import { LibraryPanel } from "./LibraryPanel";
 import { openContextMenu } from "../context-menu-bus";
 import type { ArrTrack, TrackKind } from "../../data/arrangement";
+import {
+  importSourceFromFile,
+  looksLikeAudioFile,
+  type ImportFile,
+} from "../../file-source";
 
 const HEAD_H = 30; // must match Timeline
 const ROW_H = 64; // must match Timeline ROW_H
@@ -414,6 +419,8 @@ export function ArrangementPage() {
       const tag = (el?.tagName || "").toLowerCase();
       return tag === "input" || tag === "textarea" || !!el?.isContentEditable;
     };
+    const inLibrary = (t: EventTarget | null) =>
+      !!(t as HTMLElement | null)?.closest?.("[data-library-panel]");
     const releaseAll = () => {
       for (const k of Object.keys(held)) {
         engine.noteOff(held[k]);
@@ -423,7 +430,7 @@ export function ArrangementPage() {
     const dn = (e: KeyboardEvent) => {
       if (!engine.midiKeys) return;
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (typing(e.target)) return;
+      if (typing(e.target) || inLibrary(e.target)) return;
       const key = e.key.toLowerCase();
       if (key === "z") {
         e.preventDefault();
@@ -483,12 +490,16 @@ export function ArrangementPage() {
       const tag = (el?.tagName || "").toLowerCase();
       return tag === "input" || tag === "textarea" || !!el?.isContentEditable;
     };
+    const inLibrary = (t: EventTarget | null) =>
+      !!(t as HTMLElement | null)?.closest?.("[data-library-panel]");
     const onKey = (e: KeyboardEvent) => {
       if (typing(e.target)) return;
+      const lib = inLibrary(e.target);
       const meta = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
       // Ableton M — Computer MIDI Keyboard on/off (before other letter shortcuts)
       if (key === "m" && !meta && !e.shiftKey && !e.altKey) {
+        if (lib) return;
         e.preventDefault();
         engine.toggleMidiKeys();
         return;
@@ -529,9 +540,10 @@ export function ArrangementPage() {
       }
       // ── GLOBAL: transport + undo, whatever pane is focused ──
       if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
-      if (e.code === "Home") { e.preventDefault(); engine.cursorToStart(); return; }
-      if (e.code === "End") { e.preventDefault(); engine.cursorToEnd(); return; }
+      if (e.code === "Home") { if (lib) return; e.preventDefault(); engine.cursorToStart(); return; }
+      if (e.code === "End") { if (lib) return; e.preventDefault(); engine.cursorToEnd(); return; }
       if (key === "l" && !meta) {
+        if (lib) return;
         e.preventDefault();
         const l = engine.arrangement.loop;
         if (l) engine.setArrangementLoop(l.start, l.end, !l.on);
@@ -598,8 +610,9 @@ export function ArrangementPage() {
         return;
       }
       // ── everything below is TIMELINE-scoped: skip when the editor pane has focus
-      // (the piano roll / editors handle their own keys there) ──
-      if (paneRef.current !== "timeline") return;
+      // (the piano roll / editors handle their own keys there) or the library list
+      // (Finder-style select / arrows / ⌫ / ⌘A live on the panel) ──
+      if (paneRef.current !== "timeline" || lib) return;
       // timeline zoom: + / − Ableton-style, and ⌘+/− (intercepted — this page's zoom,
       // not the browser's). "=" is the unshifted + key.
       if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomApiRef.current?.zoom(1.25); return; }
@@ -629,7 +642,8 @@ export function ArrangementPage() {
       // clipboard: ⌘C copy · ⌘X cut · ⌘V paste (at the insert marker)
       if (meta && e.key.toLowerCase() === "c") { if (engine.selClips.size) { e.preventDefault(); engine.copySelection(); } return; }
       if (meta && e.key.toLowerCase() === "x") { if (engine.selClips.size) { e.preventDefault(); engine.cutSelection(); setEditSel(null); } return; }
-      if (meta && e.key.toLowerCase() === "v") { if (engine.hasClipboard()) { e.preventDefault(); engine.pasteClipboard(); } return; }
+      // ⌘V: OS file paste is the `paste` listener (Finder files → down tracks).
+      // In-app clip clipboard is handled there too so Finder files can win.
       // arrow keys — brace focus wins (Ableton), then selection, then cursor
       if (engine.braceFocus && engine.arrangement.loop) {
         const grid = engine.snapBeats > 0 ? engine.snapBeats : 1;
@@ -675,8 +689,46 @@ export function ArrangementPage() {
       }
       if (e.key === "Escape") { engine.clearSelection(); setEditSel(null); return; }
     };
+    const onPaste = (e: ClipboardEvent) => {
+      if (typing(e.target)) return;
+      if (inLibrary(e.target)) return;
+      const list = e.clipboardData?.files;
+      const audio: ImportFile[] = [];
+      const seen = new Set<string>();
+      const add = (f: File) => {
+        const k = `${f.name}|${f.size}|${f.lastModified}`;
+        if (seen.has(k) || !looksLikeAudioFile(f)) return;
+        seen.add(k);
+        audio.push({ file: f, ...importSourceFromFile(f) });
+      };
+      if (list) for (const f of Array.from(list)) add(f);
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (const it of Array.from(items)) {
+          if (it.kind !== "file") continue;
+          const f = it.getAsFile();
+          if (f) add(f);
+        }
+      }
+      if (audio.length) {
+        e.preventDefault();
+        void engine.importAudioBatch(audio).then((ids) => {
+          if (!ids.length) return;
+          engine.placeLibraryClips(ids, { acrossTracks: true });
+        });
+        return;
+      }
+      if (paneRef.current !== "timeline") return;
+      if (!engine.hasClipboard()) return;
+      e.preventDefault();
+      engine.pasteClipboard();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("paste", onPaste);
+    };
   }, []);
 
   // load the track's patch into the shared Instrument (armed / selected MIDI track)

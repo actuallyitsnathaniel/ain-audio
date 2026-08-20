@@ -122,6 +122,32 @@ export function ShortcutsHelp() {
                     <span className="keycap">⌘⇧</span>S save as
                   </Li>
                 </Sec>
+                <Sec title="library">
+                  <Li label="select">
+                    click · <span className="keycap">⇧</span> range ·{" "}
+                    <span className="keycap">⌘</span> click
+                  </Li>
+                  <Li label="all / clear">
+                    <span className="keycap">⌘</span>A · Esc
+                  </Li>
+                  <Li label="move">
+                    <span className="keycap">↑</span>/
+                    <span className="keycap">↓</span> ·{" "}
+                    <span className="keycap">⇧</span> extends
+                  </Li>
+                  <Li label="preview">click / ↵ · ⏹ or Space stops</Li>
+                  <Li label="place">
+                    dbl-click = one track ·{" "}
+                    <span className="keycap">⌘</span>-drop /{" "}
+                    <span className="keycap">⌘</span>↵ /{" "}
+                    <span className="keycap">⌘</span>V = down tracks
+                  </Li>
+                  <Li label="delete">
+                    <span className="keycap">⌫</span>
+                  </Li>
+                  <Li label="rename">F2</Li>
+                  <Li label="jump">type a name</Li>
+                </Sec>
                 <Sec title="focus & navigation">
                   <Li label="focus">
                     click a pane to key-focus (edit keys follow focused pane;

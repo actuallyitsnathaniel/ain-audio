@@ -3,9 +3,14 @@
 export const LIBRARY_MIME = "text/ain-library";
 const PLAIN_PREFIX = "ain-lib:";
 
-export function setLibraryDrag(dt: DataTransfer, bufId: string): void {
-  dt.setData(LIBRARY_MIME, bufId);
-  dt.setData("text/plain", PLAIN_PREFIX + bufId);
+export function setLibraryDrag(
+  dt: DataTransfer,
+  bufIds: string | string[],
+): void {
+  const ids = (Array.isArray(bufIds) ? bufIds : [bufIds]).filter(Boolean);
+  const packed = ids.join(",");
+  dt.setData(LIBRARY_MIME, packed);
+  dt.setData("text/plain", PLAIN_PREFIX + packed);
   dt.effectAllowed = "copy";
 }
 
@@ -28,11 +33,23 @@ export function dragHasAudioIntake(dt: DataTransfer): boolean {
   return dragHasOsFiles(dt) || dragHasLibrary(dt);
 }
 
-/** Read bufId. Prefer the dedicated MIME; `text/plain` is the Safari/Firefox fallback. */
-export function libraryBufIdFromDrag(dt: DataTransfer): string | null {
+/** All bufIds in a library drag (empty if this isn't one). */
+export function libraryBufIdsFromDrag(dt: DataTransfer): string[] {
   const typed = dt.getData(LIBRARY_MIME);
-  if (typed) return typed;
-  const plain = dt.getData("text/plain");
-  if (plain.startsWith(PLAIN_PREFIX)) return plain.slice(PLAIN_PREFIX.length);
-  return null;
+  const raw = typed || dt.getData("text/plain");
+  if (!raw) return [];
+  const packed = raw.startsWith(PLAIN_PREFIX)
+    ? raw.slice(PLAIN_PREFIX.length)
+    : raw;
+  if (typed || raw.startsWith(PLAIN_PREFIX))
+    return packed
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  return [];
+}
+
+/** First bufId. Prefer the dedicated MIME; `text/plain` is the Safari/Firefox fallback. */
+export function libraryBufIdFromDrag(dt: DataTransfer): string | null {
+  return libraryBufIdsFromDrag(dt)[0] ?? null;
 }
