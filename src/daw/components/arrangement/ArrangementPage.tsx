@@ -509,6 +509,24 @@ export function ArrangementPage() {
           return;
         }
       }
+      if (meta && key === "s") {
+        e.preventDefault();
+        if (!engine.bouncing)
+          window.dispatchEvent(
+            new CustomEvent("ain-file-cmd", {
+              detail: e.shiftKey ? "saveAs" : "save",
+            }),
+          );
+        return;
+      }
+      if (meta && key === "o") {
+        e.preventDefault();
+        if (!engine.bouncing)
+          window.dispatchEvent(
+            new CustomEvent("ain-file-cmd", { detail: "open" }),
+          );
+        return;
+      }
       // ── GLOBAL: transport + undo, whatever pane is focused ──
       if (e.code === "Space") { e.preventDefault(); if (e.shiftKey) engine.playArrangementFromCursor(); else engine.toggleArrangement(); return; }
       if (e.code === "Home") { e.preventDefault(); engine.cursorToStart(); return; }

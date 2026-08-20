@@ -32,6 +32,15 @@ export type StoredAudio = {
   sourcePath?: string;
   /** Chromium File System Access handle — re-read original file. */
   sourceHandle?: FileSystemFileHandle;
+  sourceSize?: number;
+  sourceMtime?: number;
+};
+
+export type AudioSourceMeta = {
+  sourcePath?: string;
+  sourceHandle?: FileSystemFileHandle;
+  sourceSize?: number;
+  sourceMtime?: number;
 };
 
 export function inferLibraryKind(bufId: string, name: string): LibraryKind {
@@ -89,7 +98,7 @@ export async function putAudio(
   name: string,
   mime: PersistMime = "application/octet-stream",
   kind?: LibraryKind,
-  source?: { sourcePath?: string; sourceHandle?: FileSystemFileHandle },
+  source?: AudioSourceMeta,
 ): Promise<boolean> {
   const db = await open();
   if (!db) return false;
@@ -101,6 +110,8 @@ export async function putAudio(
     kind: LibraryKind;
     sourcePath?: string;
     sourceHandle?: FileSystemFileHandle;
+    sourceSize?: number;
+    sourceMtime?: number;
   } = {
     bytes,
     name,
@@ -109,6 +120,8 @@ export async function putAudio(
   };
   if (source?.sourcePath) record.sourcePath = source.sourcePath;
   if (source?.sourceHandle) record.sourceHandle = source.sourceHandle;
+  if (source?.sourceSize != null) record.sourceSize = source.sourceSize;
+  if (source?.sourceMtime != null) record.sourceMtime = source.sourceMtime;
 
   const write = (value: typeof record) =>
     new Promise<boolean>((resolve) => {
@@ -126,6 +139,8 @@ export async function putAudio(
       mime: record.mime,
       kind: record.kind,
       sourcePath: record.sourcePath,
+      sourceSize: record.sourceSize,
+      sourceMtime: record.sourceMtime,
     });
   }
   db.close();
@@ -205,6 +220,8 @@ export async function allAudio(): Promise<StoredAudio[]> {
         kind?: LibraryKind;
         sourcePath?: string;
         sourceHandle?: FileSystemFileHandle;
+        sourceSize?: number;
+        sourceMtime?: number;
       }[];
       resolve(
         keys.map((k, i) => {
@@ -220,6 +237,8 @@ export async function allAudio(): Promise<StoredAudio[]> {
             sourcePath:
               vals[i]!.sourcePath || (kind === "drop" ? name : undefined),
             sourceHandle: vals[i]!.sourceHandle,
+            sourceSize: vals[i]!.sourceSize,
+            sourceMtime: vals[i]!.sourceMtime,
           };
         }),
       );
@@ -254,9 +273,24 @@ export function sniffMime(bytes: ArrayBuffer, name: string): PersistMime {
     u8[11] === 0x45
   )
     return "audio/wav";
+  if (
+    u8.length >= 12 &&
+    u8[0] === 0x46 &&
+    u8[1] === 0x4f &&
+    u8[2] === 0x52 &&
+    u8[3] === 0x4d &&
+    u8[8] === 0x41 &&
+    u8[9] === 0x49 &&
+    u8[10] === 0x46 &&
+    u8[11] === 0x46
+  )
+    return "audio/aiff";
   const lower = name.toLowerCase();
   if (lower.endsWith(".webm")) return "audio/webm";
   if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".aiff") || lower.endsWith(".aif") || lower.endsWith(".aifc"))
+    return "audio/aiff";
+  if (lower.endsWith(".caf")) return "audio/x-caf";
   if (lower.endsWith(".ogg") || lower.endsWith(".opus")) return "audio/ogg";
   if (lower.endsWith(".mp3")) return "audio/mpeg";
   if (lower.endsWith(".m4a") || lower.endsWith(".aac")) return "audio/mp4";
@@ -285,6 +319,8 @@ export async function patchAudio(
     kind?: LibraryKind;
     sourcePath?: string;
     sourceHandle?: FileSystemFileHandle;
+    sourceSize?: number;
+    sourceMtime?: number;
   },
 ): Promise<boolean> {
   const db = await open();
@@ -302,6 +338,8 @@ export async function patchAudio(
             kind?: LibraryKind;
             sourcePath?: string;
             sourceHandle?: FileSystemFileHandle;
+            sourceSize?: number;
+            sourceMtime?: number;
           }
         | undefined;
       if (!cur) return;
@@ -312,6 +350,8 @@ export async function patchAudio(
           kind: patch.kind ?? cur.kind,
           sourcePath: patch.sourcePath ?? cur.sourcePath,
           sourceHandle: patch.sourceHandle ?? cur.sourceHandle,
+          sourceSize: patch.sourceSize ?? cur.sourceSize,
+          sourceMtime: patch.sourceMtime ?? cur.sourceMtime,
         },
         bufId,
       );

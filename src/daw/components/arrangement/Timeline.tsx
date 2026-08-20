@@ -577,21 +577,20 @@ export function Timeline({
     }
 
     const fileDrop = await filesFromDataTransfer(e.dataTransfer);
-    const file = fileDrop[0]?.file;
-    if (!file) return;
-    const lower = file.name.toLowerCase();
+    const first = fileDrop[0];
+    if (!first) return;
+    const lower = first.file.name.toLowerCase();
 
     // Standard MIDI File → midi clip (tempo/CC/bend preserved in NoteClip.autos)
     if (lower.endsWith(".mid") || lower.endsWith(".midi")) {
       const prefer =
         !hit && rowTrack?.kind === "midi" ? rowTrack.id : undefined;
-      const res = await engine.importMidiFile(file, beat, prefer);
+      const res = await engine.importMidiFile(first.file, beat, prefer);
       if (res) onEditClip(res.trackId, res.clipId);
       return;
     }
 
-    const origin = fileDrop[0]!;
-    const res = await engine.importAudio(file, origin);
+    const res = await engine.importAudioBatch(fileDrop);
     if (!res) return; // undecodable
     const trackId = !hit && rowTrack?.kind === "audio" ? rowTrack.id : undefined;
     const placed = engine.placeLibraryClip(res.bufId, { beat, trackId });

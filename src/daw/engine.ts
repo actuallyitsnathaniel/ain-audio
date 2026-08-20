@@ -54,7 +54,15 @@ import {
 import {
   fileSourcePath,
   importSourceFromFile,
+  isJunkDropFile,
+  looksLikeAudioFile,
+  looksLikeMidiFile,
+  pickAinSave,
+  canSaveFilePicker,
   readHandleFile,
+  whenFileHandle,
+  writeBlobToHandle,
+  type ImportFile,
   type ImportSource,
 } from "./file-source";
 import {
@@ -64,6 +72,12 @@ import {
   safeAinFilename,
   unpackAin,
 } from "./ain-pack";
+import {
+  clearProjectFileRef,
+  loadProjectFileRef,
+  saveProjectFileRef,
+  type ProjectFileRef,
+} from "./data/project-file";
 // pitch-preserving stretch (WASM/AudioWorklet) — see CREDITS.md "signalsmith-stretch"
 import SignalsmithStretch, { type StretchNode } from "signalsmith-stretch";
 import {
@@ -226,6 +240,12 @@ export type LibraryEntry = {
   sourcePath?: string;
   /** True when a Chromium file handle can re-read the original. */
   hasSourceHandle: boolean;
+};
+
+export type LibraryStorage = {
+  used: number;
+  quota: number;
+  persisted: boolean;
 };
 
 export interface Levels {
@@ -582,13 +602,34 @@ class AudioEngine {
       persistOk: boolean;
       sourcePath?: string;
       sourceHandle?: FileSystemFileHandle;
+      sourceSize?: number;
+      sourceMtime?: number;
     }
   > = {};
+  private _projectFile: ProjectFileRef | null = null;
+  private _persistAsked = false;
+  private _storageEst: {
+    used: number;
+    quota: number;
+    persisted: boolean;
+  } | null = null;
   private _libPreview: {
     bufId: string;
     src: AudioBufferSourceNode;
     gain: GainNode;
+    startedAt: number;
   } | null = null;
+  private _importLocks = new Map<
+    string,
+    Promise<{
+      bufId: string;
+      name: string;
+      seconds: number;
+      bpm?: number;
+      bars?: number;
+      key?: string;
+    } | null>
+  >();
   /** True after any IndexedDB write failed (private mode / quota). */
   private _libraryPersistFailed = false;
   // audio clips are long one-shots (not per-note events) — track which have been started
@@ -4933,6 +4974,37 @@ class AudioEngine {
     bars?: number;
     key?: string;
   } | null> {
+    const origin = source ?? importSourceFromFile(file);
+    const key = `${file.name}|${origin.sourceSize ?? file.size}|${origin.sourceMtime ?? file.lastModified}`;
+    const pending = this._importLocks.get(key);
+    if (pending) return pending;
+    const work = this.importAudioOnce(file, origin);
+    this._importLocks.set(key, work);
+    try {
+      return await work;
+    } finally {
+      this._importLocks.delete(key);
+    }
+  }
+
+  private async importAudioOnce(
+    file: File,
+    origin: ImportSource,
+  ): Promise<{
+    bufId: string;
+    name: string;
+    seconds: number;
+    bpm?: number;
+    bars?: number;
+    key?: string;
+  } | null> {
+    const dup = this.findDuplicateImport(file, origin);
+    if (dup) {
+      if (origin.sourceHandle && !this._libMeta[dup]?.sourceHandle)
+        this.patchLibrarySource(dup, origin);
+      else this.attachHandleLater(dup, file, origin);
+      return this.libraryImportResult(dup, file.name);
+    }
     const c = this.ensureCtx();
     try {
       const ab = await file.arrayBuffer();
@@ -4941,7 +5013,6 @@ class AudioEngine {
       const buf = await c.decodeAudioData(ab);
       const bufId = "imp" + ++this._importSeq + Date.now().toString(36);
       this._importBufs[bufId] = buf;
-      const origin = source ?? importSourceFromFile(file);
       const persistOk = await putAudio(
         bufId,
         raw,
@@ -4956,20 +5027,131 @@ class AudioEngine {
         persistOk,
         sourcePath: origin.sourcePath,
         sourceHandle: origin.sourceHandle,
+        sourceSize: origin.sourceSize ?? file.size,
+        sourceMtime: origin.sourceMtime ?? file.lastModified,
       });
-      const stem = file.name.replace(/\.[^.]+$/, ""); // drop the extension
-      const meta = parseLoopMeta(stem);
-      return {
-        bufId,
-        name: meta.name || file.name,
-        seconds: buf.duration,
-        bpm: meta.bpm,
-        bars: meta.bars,
-        key: meta.key,
-      };
+      this.attachHandleLater(bufId, file, origin);
+      this.askPersistentStorage();
+      void this.refreshStorageEstimate();
+      return this.libraryImportResult(bufId, file.name);
     } catch {
       return null; // undecodable file
     }
+  }
+
+  /** Import every dropped audio file (folders already flattened). Returns the first success. */
+  async importAudioBatch(
+    picked: ImportFile[],
+  ): Promise<{
+    bufId: string;
+    name: string;
+    seconds: number;
+    bpm?: number;
+    bars?: number;
+    key?: string;
+  } | null> {
+    let first: Awaited<ReturnType<AudioEngine["importAudio"]>> = null;
+    for (const one of picked) {
+      if (looksLikeMidiFile(one.file) || isJunkDropFile(one.file)) continue;
+      if (
+        !looksLikeAudioFile(one.file) &&
+        one.file.type &&
+        !one.file.type.startsWith("audio/")
+      )
+        continue;
+      const res = await this.importAudio(one.file, one);
+      if (res && !first) first = res;
+    }
+    return first;
+  }
+
+  private libraryImportResult(bufId: string, fileName: string) {
+    const buf = this._importBufs[bufId];
+    const stem = fileName.replace(/\.[^.]+$/, "");
+    const meta = parseLoopMeta(stem);
+    return {
+      bufId,
+      name: meta.name || fileName,
+      seconds: buf?.duration ?? 0,
+      bpm: meta.bpm,
+      bars: meta.bars,
+      key: meta.key,
+    };
+  }
+
+  private findDuplicateImport(
+    file: File,
+    origin: ImportSource,
+  ): string | null {
+    const size = origin.sourceSize ?? file.size;
+    const mtime = origin.sourceMtime ?? file.lastModified;
+    if (!size) return null;
+    for (const [bufId, m] of Object.entries(this._libMeta)) {
+      if (m.sourceSize === size && m.sourceMtime === mtime) {
+        const sameName =
+          m.name === file.name ||
+          (m.sourcePath && m.sourcePath.endsWith(file.name));
+        if (sameName) return bufId;
+      }
+    }
+    return null;
+  }
+
+  private attachHandleLater(
+    bufId: string,
+    file: File,
+    origin: ImportSource,
+  ): void {
+    if (origin.sourceHandle) return;
+    void whenFileHandle(file).then((h) => {
+      if (!h || !this._libMeta[bufId]) return;
+      this.patchLibrarySource(bufId, { ...origin, sourceHandle: h });
+    });
+  }
+
+  private patchLibrarySource(bufId: string, origin: ImportSource): void {
+    const meta = this._libMeta[bufId];
+    if (!meta) return;
+    this.rememberLibrary(bufId, {
+      ...meta,
+      sourcePath: origin.sourcePath ?? meta.sourcePath,
+      sourceHandle: origin.sourceHandle ?? meta.sourceHandle,
+      sourceSize: origin.sourceSize ?? meta.sourceSize,
+      sourceMtime: origin.sourceMtime ?? meta.sourceMtime,
+    });
+    void patchAudio(bufId, {
+      sourcePath: origin.sourcePath,
+      sourceHandle: origin.sourceHandle,
+      sourceSize: origin.sourceSize,
+      sourceMtime: origin.sourceMtime,
+    });
+  }
+
+  private askPersistentStorage(): void {
+    if (this._persistAsked || !navigator.storage?.persist) return;
+    this._persistAsked = true;
+    void navigator.storage.persist().then(() => {
+      void this.refreshStorageEstimate();
+    });
+  }
+
+  async refreshStorageEstimate(): Promise<void> {
+    try {
+      const est = await navigator.storage?.estimate();
+      const persisted = (await navigator.storage?.persisted?.()) ?? false;
+      this._storageEst = {
+        used: est?.usage ?? 0,
+        quota: est?.quota ?? 0,
+        persisted,
+      };
+      this.emit("arrange");
+    } catch {
+      /* private mode */
+    }
+  }
+
+  libraryStorage(): LibraryStorage | null {
+    return this._storageEst;
   }
 
   /**
@@ -5095,6 +5277,8 @@ class AudioEngine {
   // audio library in IndexedDB + memory so imports can be dropped back in.
   async newProject(): Promise<void> {
     await this.wipeStudioSession();
+    this._projectFile = null;
+    await clearProjectFileRef();
     this.arrangement = emptyArrangement();
     saveArrangement(this.arrangement);
     this.bpm = this.arrangement.bpm;
@@ -5141,13 +5325,9 @@ class AudioEngine {
 
   /**
    * Collect-and-save: PCM16 WAV master bounce + zip (arrangement + imports) +
-   * AIN1 trailer → downloadable `.ain`. Working copy stays in LS + IndexedDB.
-   * Uses the last mix bounce when present; otherwise records one first.
+   * AIN1 trailer. Chromium writes in place (or Save As picker); others download.
    */
-  async exportAin(
-    name = "project",
-    opts?: { wavMask?: boolean },
-  ): Promise<void> {
+  async buildAinBlob(name = "project"): Promise<Blob> {
     this.saveArr();
     const ids = referencedImportIds(this.arrangement);
     const stored = await allAudio();
@@ -5170,14 +5350,66 @@ class AudioEngine {
       assets.push({ bufId, bytes, name: clipName });
     }
     const previewWav = await this.ensureAinPreviewWav();
-    const blob = packAin({
+    return packAin({
       name,
       arrangement: this.arrangement,
       assets,
       masterFx: this.masterDevices(),
       previewWav,
     });
-    downloadBlob(blob, safeAinFilename(name, opts));
+  }
+
+  hasProjectFileHandle(): boolean {
+    return !!this._projectFile?.handle;
+  }
+
+  projectFileName(): string | null {
+    return this._projectFile?.name ?? null;
+  }
+
+  projectWavMask(): boolean {
+    return !!this._projectFile?.wavMask;
+  }
+
+  private async rememberProjectFile(ref: ProjectFileRef): Promise<void> {
+    this._projectFile = ref;
+    await saveProjectFileRef(ref);
+    this.emit("arrange");
+  }
+
+  /** Cmd+S — overwrite the last opened/saved `.ain`. False if we need Save As. */
+  async saveAinInPlace(): Promise<boolean> {
+    const ref = this._projectFile;
+    if (!ref?.handle) return false;
+    const blob = await this.buildAinBlob(ref.name);
+    const ok = await writeBlobToHandle(ref.handle, blob);
+    this.askPersistentStorage();
+    return ok;
+  }
+
+  /**
+   * Save As: file picker when available (stores the handle for the next Cmd+S),
+   * otherwise a download. User abort of the picker writes nothing.
+   */
+  async exportAin(
+    name = "project",
+    opts?: { wavMask?: boolean },
+  ): Promise<void> {
+    const blob = await this.buildAinBlob(name);
+    const filename = safeAinFilename(name, opts);
+    if (canSaveFilePicker()) {
+      const handle = await pickAinSave(filename, opts?.wavMask);
+      if (handle === null) return;
+      if (handle && (await writeBlobToHandle(handle, blob))) {
+        await this.rememberProjectFile({
+          handle,
+          name,
+          wavMask: !!opts?.wavMask,
+        });
+        return;
+      }
+    }
+    downloadBlob(blob, filename);
   }
 
   /** Last realtime mix bounce (MediaRecorder blob), used as .ain preview source. */
@@ -5407,7 +5639,10 @@ class AudioEngine {
    * Open a `.ain` pack: replaces the current studio (same as new project, then load).
    * Returns the project name from the manifest.
    */
-  async importAin(file: File | Blob): Promise<string> {
+  async importAin(
+    file: File | Blob,
+    source?: { handle?: FileSystemFileHandle },
+  ): Promise<string> {
     const pack = unpackAin(await file.arrayBuffer());
     await this.wipeStudioSession();
 
@@ -5466,7 +5701,17 @@ class AudioEngine {
     this.emit("select");
     this.emit("transport");
     this.emit("fx");
-    return pack.manifest.name || "project";
+    const projName = pack.manifest.name || "project";
+    const handle = source?.handle;
+    if (handle) {
+      const wavMask =
+        file instanceof File && file.name.toLowerCase().endsWith(".wav");
+      await this.rememberProjectFile({ handle, name: projName, wavMask });
+    } else {
+      this._projectFile = null;
+      await clearProjectFileRef();
+    }
+    return projName;
   }
 
   // Re-hydrate the user library on boot: decode each stored file into _importBufs.
@@ -5475,7 +5720,16 @@ class AudioEngine {
     void this.probePersistCodec();
     const c = this.ensureCtx();
     const stored = await allAudio();
-    for (const { bufId, bytes, name, kind, sourcePath, sourceHandle } of stored) {
+    for (const {
+      bufId,
+      bytes,
+      name,
+      kind,
+      sourcePath,
+      sourceHandle,
+      sourceSize,
+      sourceMtime,
+    } of stored) {
       this.rememberLibrary(
         bufId,
         {
@@ -5484,6 +5738,8 @@ class AudioEngine {
           persistOk: true,
           sourcePath,
           sourceHandle,
+          sourceSize,
+          sourceMtime,
         },
         true,
       );
@@ -5499,6 +5755,8 @@ class AudioEngine {
       for (const cl of t.clips)
         if (cl.content.kind === "audio" && warpModeOf(cl.content) === "complex")
           this.ensureStretchNode(cl);
+    this._projectFile = await loadProjectFileRef();
+    void this.refreshStorageEstimate();
     this.emit("arrange");
   }
   // reverse an imported buffer (cached), for reverse playback. Returns a NEW buffer.
@@ -5602,6 +5860,8 @@ class AudioEngine {
       persistOk: boolean;
       sourcePath?: string;
       sourceHandle?: FileSystemFileHandle;
+      sourceSize?: number;
+      sourceMtime?: number;
     },
     silent = false,
   ) {
@@ -5667,11 +5927,22 @@ class AudioEngine {
           /* fine */
         }
         this.emit("arrange");
+        this.emit("transport");
       }
     };
     src.start();
-    this._libPreview = { bufId, src, gain: g };
+    this._libPreview = { bufId, src, gain: g, startedAt: c.currentTime };
     this.emit("arrange");
+    this.emit("transport");
+  }
+
+  /** 0–1 playhead while a library row is auditioning, else null. */
+  libraryPreviewPos(bufId: string): number | null {
+    const p = this._libPreview;
+    if (!p || p.bufId !== bufId || !this.ctx) return null;
+    const dur = p.src.buffer?.duration ?? 0;
+    if (dur <= 0) return 0;
+    return Math.min(1, Math.max(0, (this.ctx.currentTime - p.startedAt) / dur));
   }
 
   stopLibraryPreview() {
@@ -5691,6 +5962,7 @@ class AudioEngine {
       /* fine */
     }
     this.emit("arrange");
+    this.emit("transport");
   }
 
   libraryUsages(
@@ -5732,13 +6004,7 @@ class AudioEngine {
     const trimmed = name.trim();
     if (!trimmed || !this._libMeta[bufId]) return;
     const meta = this._libMeta[bufId]!;
-    this.rememberLibrary(bufId, {
-      name: trimmed,
-      kind: meta.kind,
-      persistOk: meta.persistOk,
-      sourcePath: meta.sourcePath,
-      sourceHandle: meta.sourceHandle,
-    });
+    this.rememberLibrary(bufId, { ...meta, name: trimmed });
     void patchAudio(bufId, { name: trimmed });
   }
 
@@ -5782,7 +6048,10 @@ class AudioEngine {
         persistOk,
         sourcePath: origin.sourcePath,
         sourceHandle: origin.sourceHandle,
+        sourceSize: origin.sourceSize ?? file.size,
+        sourceMtime: origin.sourceMtime ?? file.lastModified,
       });
+      this.attachHandleLater(bufId, file, origin);
       return true;
     } catch {
       return false;
@@ -5798,6 +6067,8 @@ class AudioEngine {
     return this.replaceLibraryFile(bufId, file, {
       sourcePath: fileSourcePath(file),
       sourceHandle: handle,
+      sourceSize: file.size,
+      sourceMtime: file.lastModified,
     });
   }
 
@@ -6252,6 +6523,7 @@ class AudioEngine {
     this.playSequence(fromBeat);
   }
   stopArrangement() {
+    this.stopLibraryPreview();
     this.stopSequence();
     this.arrangeMode = false;
   }
@@ -6267,6 +6539,7 @@ class AudioEngine {
   toggleArrangement() {
     if (this.bouncing) return;
     if (this.sequencePlaying && this.arrangeMode) this.stopArrangement();
+    else if (this._libPreview) this.stopLibraryPreview();
     else this.playArrangement(this.insertBeat);
   }
   // ── transport verbs (playback pane) ──
@@ -6288,6 +6561,7 @@ class AudioEngine {
   // stop: halt and return the cursor to the start (loop-brace start if looping, else 0)
   stopArrangementToStart() {
     if (this.bouncing) return;
+    this.stopLibraryPreview();
     const home =
       this.loopOn && this.arrangement.loop?.on
         ? this.arrangement.loop.start

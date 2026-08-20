@@ -2,9 +2,10 @@
 // New / Open / Save · Bounce · I/O prefs. Project + audio session actions live here.
 
 import { useEffect, useRef, useState } from "react";
-import { AIN_ICON, AIN_MIME, AIN_MIME_LEGACY } from "../../ain-pack";
+import { AIN_ICON } from "../../ain-pack";
 import { engine } from "../../engine";
 import { useEngine } from "../../hooks/useEngine";
+import { pickAinProject } from "../../file-source";
 import { AudioPrefsPanel } from "./AudioPrefsPanel";
 import { AudioAcceptSheet } from "./AudioAcceptSheet";
 import { AudioSessionNudges } from "./AudioSessionNudges";
@@ -54,14 +55,78 @@ export function FileMenu({
   prefsOpen: boolean;
   onPrefsOpenChange: (open: boolean) => void;
 }) {
-  const eng = useEngine(["transport"]);
+  const eng = useEngine(["transport", "arrange"]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [bounceOpen, setBounceOpen] = useState(false);
   const [rereadAccept, setRereadAccept] = useState(false);
   const [busy, setBusy] = useState<"save" | "open" | "bounce" | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const busyRef = useRef(busy);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  const openAin = async (file: File, handle?: FileSystemFileHandle) => {
+    if (busyRef.current) return;
+    if (
+      !window.confirm(
+        `Open “${file.name}”? This replaces the current arrangement. Your audio library stays (this project's files are added to it). Continue?`,
+      )
+    )
+      return;
+    setBusy("open");
+    try {
+      await engine.importAin(file, { handle });
+    } catch (e) {
+      window.alert(
+        e instanceof Error ? e.message : "Couldn't open AIN project",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runOpen = async () => {
+    if (busyRef.current) return;
+    setMenuOpen(false);
+    const picked = await pickAinProject();
+    if (!picked) return;
+    await openAin(picked.file, picked.handle);
+  };
+
+  const runSave = async (saveAs: boolean) => {
+    if (busyRef.current) return;
+    setMenuOpen(false);
+    setBounceOpen(false);
+    if (!saveAs && engine.hasProjectFileHandle()) {
+      setBusy("save");
+      try {
+        const ok = await engine.saveAinInPlace();
+        if (!ok) setSaveOpen(true);
+      } catch (e) {
+        window.alert(
+          e instanceof Error ? e.message : "Couldn't save AIN project",
+        );
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    setSaveOpen(true);
+  };
+
+  useEffect(() => {
+    const onCmd = (e: Event) => {
+      const action = (e as CustomEvent<"save" | "saveAs" | "open">).detail;
+      if (action === "open") void runOpen();
+      else if (action === "saveAs") void runSave(true);
+      else void runSave(false);
+    };
+    window.addEventListener("ain-file-cmd", onCmd);
+    return () => window.removeEventListener("ain-file-cmd", onCmd);
+    // runOpen/runSave close over latest engine + setters
+  });
 
   useEffect(() => {
     if (!menuOpen && !saveOpen && !bounceOpen) return;
@@ -114,39 +179,10 @@ export function FileMenu({
     eng.inputStatus === "live" ||
     eng.inputStatus === "pending";
 
-  const openSave = () => {
-    setMenuOpen(false);
-    setBounceOpen(false);
-    setSaveOpen(true);
-  };
-
   const openBounce = () => {
     setMenuOpen(false);
     setSaveOpen(false);
     setBounceOpen(true);
-  };
-
-  const openAin = async (file: File) => {
-    if (busy) return;
-    if (
-      !window.confirm(
-        `Open “${file.name}”? This replaces the current arrangement. Your audio library stays (this project's files are added to it). Continue?`,
-      )
-    ) {
-      if (fileRef.current) fileRef.current.value = "";
-      return;
-    }
-    setBusy("open");
-    try {
-      await engine.importAin(file);
-    } catch (e) {
-      window.alert(
-        e instanceof Error ? e.message : "Couldn't open AIN project",
-      );
-    } finally {
-      setBusy(null);
-      if (fileRef.current) fileRef.current.value = "";
-    }
   };
 
   const newProject = () => {
@@ -156,6 +192,7 @@ export function FileMenu({
     onNewProject();
   };
 
+  const proj = engine.projectFileName();
   const fileLabel =
     busy === "save"
       ? "File · saving…"
@@ -167,7 +204,9 @@ export function FileMenu({
             ? eng.inputStatus === "pending"
               ? "File · I/O…"
               : "File · I/O live"
-            : "File";
+            : proj
+              ? `File · ${proj}`
+              : "File";
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -192,7 +231,7 @@ export function FileMenu({
             setMenuOpen((o) => !o);
           }}
           aria-expanded={menuOpen || saveOpen || bounceOpen}
-          title="File — new, open, save, bounce, I/O"
+          title="File — new, open, save, bounce, I/O (⌘O · ⌘S · ⌘⇧S)"
         >
           {fileLabel}
           <span className="ml-1.5 text-[8px] text-faint" aria-hidden>
@@ -220,27 +259,36 @@ export function FileMenu({
               role="menuitem"
               className={item}
               disabled={busy !== null}
-              onClick={() => {
-                setMenuOpen(false);
-                fileRef.current?.click();
-              }}
+              onClick={() => void runOpen()}
             >
               <span className="flex items-center gap-2">
                 <AinMark />
-                Open project…
+                Open…
               </span>
+              <span className={kbd}>⌘O</span>
             </button>
             <button
               type="button"
               role="menuitem"
               className={item}
               disabled={busy !== null}
-              onClick={openSave}
+              onClick={() => void runSave(false)}
             >
               <span className="flex items-center gap-2">
                 <AinMark />
-                {busy === "save" ? "Saving…" : "Save project…"}
+                {busy === "save" ? "Saving…" : "Save"}
               </span>
+              <span className={kbd}>⌘S</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={item}
+              disabled={busy !== null}
+              onClick={() => void runSave(true)}
+            >
+              <span>Save As…</span>
+              <span className={kbd}>⌘⇧S</span>
             </button>
 
             <div className={sep} role="separator" />
@@ -302,17 +350,6 @@ export function FileMenu({
             onBusy={(on) => setBusy(on ? "bounce" : null)}
           />
         )}
-
-        <input
-          ref={fileRef}
-          type="file"
-          accept={`.ain,.wav,${AIN_MIME},${AIN_MIME_LEGACY},application/zip`}
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void openAin(f);
-          }}
-        />
 
         {prefsOpen && (
           <AudioPrefsPanel

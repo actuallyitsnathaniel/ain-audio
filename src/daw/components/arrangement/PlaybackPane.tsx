@@ -72,7 +72,8 @@ function fmtBarBeat(beat: number, bpb: number): string {
 
 export function PlaybackPane() {
   const eng = useEngine(["transport", "arrange", "clip", "select"]);
-  const playing = eng.sequencePlaying && eng.arrangeMode;
+  const audition = !!eng.libraryPreviewing();
+  const playing = (eng.sequencePlaying && eng.arrangeMode) || audition;
   const bpb = eng.arrangement.beatsPerBar;
   const loop = eng.arrangement.loop;
   const loopOn = !!loop?.on;
@@ -141,7 +142,7 @@ export function PlaybackPane() {
           <button
             className={iconBtn + (playing ? activeCls : idle)}
             onClick={() => engine.toggleArrangement()}
-            title="play / stop (Space)"
+            title={audition && !eng.sequencePlaying ? "stop preview (Space)" : "play / stop (Space)"}
           >
             <span
               className={playing ? "icon-pause small" : "icon-play small"}
@@ -169,7 +170,7 @@ export function PlaybackPane() {
           <button
             className={iconBtn + idle}
             onClick={() => engine.stopArrangementToStart()}
-            title="stop → return to start"
+            title="stop → return to start (also stops library preview)"
           >
             ⏹
           </button>

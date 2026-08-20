@@ -22,7 +22,7 @@ export function useAinFileLaunch() {
         try {
           const file = await handle.getFile();
           if (!file.name.toLowerCase().endsWith(AIN_EXT)) continue;
-          await engine.importAin(file);
+          await engine.importAin(file, { handle });
           return;
         } catch (e) {
           console.warn("[ain] launch open failed", e);

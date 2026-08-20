@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { AIN_EXT, AIN_ICON, safeAinFilename } from "../../ain-pack";
 import { engine } from "../../engine";
+import { canSaveFilePicker } from "../../file-source";
 
 const field =
   "h-7 w-full rounded-sm border border-line2 bg-panel2 px-2 font-mono text-[10px] text-daw-text placeholder:text-faint focus:border-accent focus:outline-none";
@@ -18,8 +19,10 @@ export function SaveAinPanel({
 }) {
   const nameId = useId();
   const wavId = useId();
-  const [name, setName] = useState("project");
-  const [wavMask, setWavMask] = useState(false);
+  const [name, setName] = useState(
+    () => engine.projectFileName() || "project",
+  );
+  const [wavMask, setWavMask] = useState(() => engine.projectWavMask());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -100,6 +103,10 @@ export function SaveAinPanel({
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") void save();
+          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+            e.preventDefault();
+            void save();
+          }
         }}
         disabled={busy}
         spellCheck={false}
@@ -130,8 +137,13 @@ export function SaveAinPanel({
       </label>
 
       <div className="mb-2.5 font-mono text-[9px] text-faint">
-        downloads as{" "}
+        {canSaveFilePicker() ? "saves as " : "downloads as "}
         <span className="text-accent">{filename}</span>
+        {canSaveFilePicker() && (
+          <span className="mt-1 block">
+            Next ⌘S overwrites that file. Safari / Firefox still download.
+          </span>
+        )}
         {needsBounce && (
           <span className="mt-1 block text-[color-mix(in_srgb,#e09860_90%,white)]">
             No mix bounce yet — Save will play through once to capture the

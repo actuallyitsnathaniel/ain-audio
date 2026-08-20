@@ -16,6 +16,13 @@ import {
   type ImportFile,
 } from "../../file-source";
 
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function shortPath(p: string): string {
   const parts = p.split(/[/\\]/).filter(Boolean);
   if (parts.length <= 2) return p;
@@ -45,6 +52,7 @@ export function LibraryPanel({
   const [editing, setEditing] = useState<string | null>(null);
   const [over, setOver] = useState(false);
   const overRef = useRef(false);
+  const dropLock = useRef(false);
 
   const items = engine.listLibrary().filter((it) => {
     if (!q.trim()) return true;
@@ -53,16 +61,10 @@ export function LibraryPanel({
   });
   const persistFailed = engine.libraryPersistFailed();
   const previewing = engine.libraryPreviewing();
+  const storage = engine.libraryStorage();
 
   const importPicked = async (picked: ImportFile[]) => {
-    for (const one of picked) {
-      if (
-        !one.file.type.startsWith("audio/") &&
-        !/\.(wav|mp3|m4a|ogg|flac|aac|webm)$/i.test(one.file.name)
-      )
-        continue;
-      await engine.importAudio(one.file, one);
-    }
+    await engine.importAudioBatch(picked);
   };
 
   const menuFor = (it: LibraryEntry, x: number, y: number) => {
@@ -73,7 +75,10 @@ export function LibraryPanel({
       items: [
         {
           label: previewing === it.bufId ? "stop preview" : "preview",
-          onClick: () => engine.previewLibrary(it.bufId),
+          onClick: () => {
+            if (previewing === it.bufId) engine.stopLibraryPreview();
+            else engine.previewLibrary(it.bufId);
+          },
           disabled: !engine.hasImport(it.bufId),
         },
         {
@@ -144,10 +149,16 @@ export function LibraryPanel({
 
   const onDropFiles = (e: DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     disarmDrop();
     if (libraryBufIdFromDrag(e.dataTransfer)) return;
-    const pending = filesFromDataTransfer(e.dataTransfer);
-    void pending.then((got) => void importPicked(got));
+    if (dropLock.current) return;
+    dropLock.current = true;
+    void filesFromDataTransfer(e.dataTransfer)
+      .then((got) => importPicked(got))
+      .finally(() => {
+        dropLock.current = false;
+      });
   };
 
   useEffect(() => {
@@ -222,7 +233,7 @@ export function LibraryPanel({
             <span className="font-mono text-[10px] leading-snug text-dim">
               {q.trim()
                 ? "no matches"
-                : "Drop files here or onto the timeline"}
+                : "Drop files or folders here or onto the timeline"}
             </span>
             {!q.trim() && (
               <span className="font-mono text-[8.5px] leading-snug text-faint">
@@ -267,7 +278,11 @@ export function LibraryPanel({
       <p className="shrink-0 border-t border-line px-2 py-1.5 font-mono text-[8px] leading-snug text-faint">
         {persistFailed
           ? "Couldn't save to this browser (private mode or quota). Files here vanish on reload."
-          : "Stored in this browser. Clearing site data deletes the library."}
+          : storage && storage.quota > 0
+            ? `${fmtBytes(storage.used)} of ${fmtBytes(storage.quota)} used` +
+              (storage.persisted ? " · kept by this browser" : "") +
+              ". Clearing site data deletes the library."
+            : "Stored in this browser. Clearing site data deletes the library."}
       </p>
     </div>
   );
@@ -331,12 +346,29 @@ function LibraryRow({
         [
           it.sourcePath && it.sourcePath !== it.name ? it.sourcePath : it.name,
           it.persistOk
-            ? "click preview · drag onto timeline"
+            ? "click preview · click again or ⏹ to stop · drag onto timeline"
             : "not saved (gone on reload)",
         ].join(" — ")
       }
     >
-      <LibWave bufId={it.bufId} />
+      <button
+        type="button"
+        className={
+          "flex h-7 w-5 shrink-0 items-center justify-center rounded-xs font-mono text-[8px] " +
+          (previewing
+            ? "border border-accent text-accent"
+            : "border border-line text-faint hover:border-accent hover:text-accent")
+        }
+        title={previewing ? "stop preview" : "preview"}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (previewing) engine.stopLibraryPreview();
+          else onPreview();
+        }}
+      >
+        {previewing ? "■" : "▶"}
+      </button>
+      <LibWave bufId={it.bufId} previewing={previewing} />
       <div className="min-w-0 flex-1">
         {editing ? (
           <input
@@ -374,7 +406,7 @@ function LibraryRow({
   );
 }
 
-function LibWave({ bufId }: { bufId: string }) {
+function LibWave({ bufId, previewing }: { bufId: string; previewing: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useRafLoop(() => {
     const cv = ref.current;
@@ -405,6 +437,11 @@ function LibWave({ bufId }: { bufId: string }) {
     for (let i = 0; i < peaks.length; i++) {
       const ph = Math.max(1, peaks[i]! * (h - 2));
       g.fillRect(i * bw, mid - ph / 2, Math.max(1, bw - 0.35), ph);
+    }
+    const pos = previewing ? engine.libraryPreviewPos(bufId) : null;
+    if (pos != null) {
+      g.fillStyle = "rgba(255,255,255,0.9)";
+      g.fillRect(Math.floor(pos * w), 0, 1, h);
     }
   });
   return (

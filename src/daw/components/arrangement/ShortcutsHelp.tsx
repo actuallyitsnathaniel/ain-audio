@@ -113,6 +113,15 @@ export function ShortcutsHelp() {
 
               {/* .keycap (index.css) inflates unicode key glyphs to match this mono size */}
               <div className="grid gap-5 overflow-y-auto px-4 py-4 font-mono text-[11px] leading-[1.55] tracking-[0.03em] text-faint sm:grid-cols-2">
+                <Sec title="file">
+                  <Li label="open">
+                    <span className="keycap">⌘</span>O
+                  </Li>
+                  <Li label="save">
+                    <span className="keycap">⌘</span>S (overwrite) ·{" "}
+                    <span className="keycap">⌘⇧</span>S save as
+                  </Li>
+                </Sec>
                 <Sec title="focus & navigation">
                   <Li label="focus">
                     click a pane to key-focus (edit keys follow focused pane;
