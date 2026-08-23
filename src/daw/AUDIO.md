@@ -63,7 +63,7 @@ closer by 0.4 st, same-side; scoop-toward past-mid flips now. Decay = Retune Spe
 ~100 ms (gated off mid-glide). **Flex** is an island around the target (0 = always
 pull / pop). **Natural Vibrato** (−1…+1) scales AC residual around a slow det center
 **after** Decay: 0 = leave (`VIB_LEAVE_SCALE` of residual) · − = flatten · + = amplify.
-Leave rides scoops (clamp still caps |resid|). Formant knob is LPC preserve amount after splice, not a PSOLA path switch.
+Formant knob is LPC preserve amount after splice, not a PSOLA path switch.
 Preserve is gain-matched to the splice bed. Once open it stays through the
 park (close on glide / phrase edge), with a 40ms fade — amt=1 was snapping
 off every land and on failed LPC hops. Formant 100% is ear-better (`g4c`); LPC is frozen.

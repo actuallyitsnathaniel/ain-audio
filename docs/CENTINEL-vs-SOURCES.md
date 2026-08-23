@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build `g5c-scoop`; LPC freeze `g4c-lpc`; hop freeze `g6e-edge`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build `g5c-rev` = `g4c-lpc` live; hop freeze `g6e-edge`).
 
 Interactive companions (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx)
@@ -46,6 +46,7 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 - [x] **Period hold** (`g6c-pe`) — mid-run E/H miss re-detects without dropping rate to 1 (24ms). Period slews on a run. Identity-flash at hops was the leftover warble.
 - [x] **Hop land vs Cher** (`g6d-hop`) — commit-fast is a fraction of Retune Speed (pop isolated 14ms / run 17ms), not a hard 8ms on every held-note hop. That 8ms was the robotic pop transition.
 - [x] **Phrase edges** (`g6e-edge`) — g6c period-hold does not run on cold start or while RMS is falling. Commit-fast skipped during cold start. Holding lock into the tail was the weirder hard stop.
+- [ ] **Isolated hop hold** (proposed `g6f`) — g6c keeps last `Cycle_period` only while `_inRun`. Held-note hops still `_ehDropLock` → `spliceRate=1` (20s identity gulp vs AT). Same 24ms re-detect hold, drop `_inRun`; keep g6e (no hold on cold / edge / !voiced). Ask first.
 - [x] **Envelope post** (`g4a-env`) — LPC preserve after splice; settled `|R*|` + voiced only. Knob is amount. IIR stays warm at amt=0.
 - [x] **LPC level + gate** (`g4b-lpc`) — formant=100% was 0↔1 snaps (12ms xfade on an 8¢ chatter) plus all-pole drain (no gain match). Hysteresis + 40ms xfade + RMS match to splice.
 - [x] **LPC latch** (`g4c-lpc`) — stay open through the park (8¢ off was every land). Failed hop kept last poles (identity flash). Slower k/gain, hop 512. Nathaniel: formant 100% better. LPC frozen.
@@ -60,13 +61,13 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 
 ### G5 — Product ear-pass (one knob at a time)
 - [x] **Nat Vib leave at 0** (`g5a-vib` → `g5b-vib`) — pop `vibrato: 0` means leave. g5a re-added residual onto `wantTgt`; Decay/Humanize low-passed it (lagged ~10s park). g5b rides the residual **after** Decay. ¢ is not the pass bar.
-- [x] **Leave through scoops** (`g5c-scoop`) — |resid| gate faded to 0 at the 0.38st clamp, so hops lost leave (dead transitions). Clamp stays; leave rides the scoop. LPC untouched.
+- [x] **Leave through scoops** (`g5c-scoop`) — **reverted** (`g5c-rev`). vs-goal 20s gulp was `rate=1`, not muted leave. Ungating residual loosened parks (≤15 44.9%, loose 13) without filling the identity hole.
 - [ ] **Humanize** — ear-pass on long parks (already stretches Decay on-center). Ask first; one knob.
 - [ ] **Flex island** — ear-pass (0 = always pull / pop). Ask first.
 
 ### G4 — Formant post / stay away
 - [x] Do not merge Smuts phase vocoder into live Centinel
-- [x] **LPC preserve** (`g4a-env` → `g4c-lpc`) — after splice, settled `|R*|` only. Not a second shifter. g4c latches through parks and keeps last poles so amt=1 doesn't snap/fade. Ear: better at 100%. Frozen while hops iterate.
+- [x] **LPC preserve** (`g4a-env` → `g4c-lpc`) — after splice, settled `|R*|` only. Not a second shifter. g4c latches through parks and keeps last poles so amt=1 doesn't snap/fade. Ear: better at 100%. Frozen.
 - [ ] Optional formant *shift* (`1/R` pole warp / throat) — after preserve does not chew
 - [ ] **Later — Lent-adjacent cleanup audit:** do **not** gut Fairbanks/PSOLA now.
   Pop/AT path already demoted them (`CYCLE_SPLICE`). Revisit whether Fairbanks
@@ -137,7 +138,7 @@ E_i(L) - 2H_i(L) \le \varepsilon\, E_i(L)
 | Corrector | Rate + ±1 cycle | `CYCLE_SPLICE` (one path; `rate=1` ≡ dry; ±pe aligned `g2i`) |
 | Formant | Rejected Lent | LPC preserve after splice, settled `|R*|` only (`g4a-env`) |
 | Softness | Decay | Retune Speed |
-| Product | — | G3 knobs + G5 Nat Vib leave at 0, through scoops (`g5c`). Orphan parked |
+| Product | — | G3 knobs + G5 Nat Vib leave at 0 (`g5b`). Orphan parked |
 
 ---
 
