@@ -864,7 +864,7 @@ function DevicePanel({
             label="strength"
             disabled={!p.on}
             fmt={(v) => Math.round(v * 100) + "%"}
-            tip="Overall dry/wet vs latency-aligned dry. Sub (<100 Hz) stays wet — always a single clean partial."
+            tip="Overall dry/wet vs latency-aligned dry. Sub (<100 Hz) stays wet — key-locked F0 + harmonics."
           />
           <Knob
             value={p.residual ?? 1}

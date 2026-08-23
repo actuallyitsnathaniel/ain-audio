@@ -5801,11 +5801,57 @@ class AudioEngine {
     };
   }
 
+  /** Clip length used by place + the timeline drop ghost (¼-beat quantize). */
+  audioLengthBeats(seconds: number): number {
+    const secPerBeat = 60 / this.arrangement.bpm;
+    return Math.max(0.25, Math.round((seconds / secPerBeat) * 4) / 4);
+  }
+
+  /**
+   * Lane indices for a stacked multi-drop (same start time). Values may be
+   * ≥ `tracks.length` — those become new audio tracks on place.
+   */
+  libraryStackTrackIndices(
+    count: number,
+    startTrackId?: string | null,
+  ): number[] {
+    const lanes = this.arrangement.tracks;
+    let idx = 0;
+    const startId =
+      startTrackId ??
+      (this._selTrackId && this.findTrack(this._selTrackId)?.kind === "audio"
+        ? this._selTrackId
+        : null);
+    if (startId) {
+      const i = lanes.findIndex((tr) => tr.id === startId);
+      if (i >= 0) idx = i;
+    }
+    const out: number[] = [];
+    let extra = 0;
+    for (let k = 0; k < count; k++) {
+      let found = -1;
+      while (idx < lanes.length) {
+        if (lanes[idx]!.kind === "audio") {
+          found = idx;
+          idx++;
+          break;
+        }
+        idx++;
+      }
+      if (found < 0) {
+        found = lanes.length + extra;
+        extra++;
+      }
+      out.push(found);
+    }
+    return out;
+  }
+
   /**
    * Place library buffer(s) as audio clips.
-   * Default: end-to-end on one track (Ableton Arrangement drop).
-   * `acrossTracks`: same start time, one file per audio track going down from
-   * `trackId` (Ableton ⌘/Ctrl-drop). Uses existing audio lanes; creates more if short.
+   * Two or more files stack down existing audio tracks at the same start
+   * (creates lanes if short). One file, or `acrossTracks: false`, stays on
+   * a single lane end-to-end.
    */
   placeLibraryClips(
     bufIds: string[],
@@ -5815,14 +5861,10 @@ class AudioEngine {
     if (!ids.length) return [];
     this.pushUndo();
     const beat = Math.max(0, opts?.beat ?? this.insertBeat);
-    const secPerBeat = 60 / this.arrangement.bpm;
     const placed: { trackId: string; clipId: string }[] = [];
     const clipOn = (trackId: string, bufId: string, startBeat: number) => {
       const meta = this.importMeta(bufId)!;
-      const lengthBeats = Math.max(
-        0.25,
-        Math.round((meta.seconds / secPerBeat) * 4) / 4,
-      );
+      const lengthBeats = this.audioLengthBeats(meta.seconds);
       const created = this.addClip(trackId, {
         startBeat,
         lengthBeats,
@@ -5847,33 +5889,14 @@ class AudioEngine {
       return lengthBeats;
     };
 
-    if (opts?.acrossTracks && ids.length > 1) {
-      let idx = 0;
-      const startId =
-        opts.trackId ??
-        (this._selTrackId &&
-        this.findTrack(this._selTrackId)?.kind === "audio"
-          ? this._selTrackId
-          : null);
-      if (startId) {
-        const i = this.arrangement.tracks.findIndex((tr) => tr.id === startId);
-        if (i >= 0) idx = i;
-      }
-      for (const bufId of ids) {
-        let t: ArrTrack | undefined;
-        const lanes = this.arrangement.tracks;
-        while (idx < lanes.length) {
-          if (lanes[idx]!.kind === "audio") {
-            t = lanes[idx];
-            idx++;
-            break;
-          }
-          idx++;
-        }
-        if (!t) {
+    if (opts?.acrossTracks !== false && ids.length > 1) {
+      const indices = this.libraryStackTrackIndices(ids.length, opts.trackId);
+      for (let i = 0; i < ids.length; i++) {
+        const bufId = ids[i]!;
+        const ti = indices[i]!;
+        let t = this.arrangement.tracks[ti];
+        if (!t || t.kind !== "audio")
           t = this.addTrack("audio", this.importMeta(bufId)!.name);
-          idx = this.arrangement.tracks.length;
-        }
         clipOn(t.id, bufId, beat);
       }
     } else {

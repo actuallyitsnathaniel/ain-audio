@@ -20,10 +20,16 @@ import { clipBeats } from "../../data/clips";
 import { DRUM_BASE } from "../../data/drum-midi";
 import { type ArrClip, type ArrTrack, slippedLocals } from "../../data/arrangement";
 import {
+  clearLibraryDrag,
   dragHasAudioIntake,
+  dragHasOsFiles,
   libraryBufIdsFromDrag,
+  peekLibraryDragIds,
 } from "../../library-drag";
-import { filesFromDataTransfer } from "../../file-source";
+import {
+  filesFromDataTransfer,
+  peekOsAudioDragNames,
+} from "../../file-source";
 
 const HEAD_H = 30; // ruler height (must match ArrangementPage) — tall enough for brace grips
 const ROW_H = 64; // track lane height (must match ArrangementPage ROW_H)
@@ -58,6 +64,16 @@ type Drag =
   | { mode: "marquee"; x0: number; y0: number; anchorBeat: number; anchorTrack: number; moved: boolean }
   | null;
 
+type DropGhost = {
+  beat: number;
+  clips: {
+    trackIndex: number;
+    lengthBeats: number;
+    name: string;
+    bufId?: string;
+  }[];
+};
+
 export function Timeline({
   height,
   onEditClip,
@@ -78,7 +94,7 @@ export function Timeline({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag>(null);
-  const dropAcross = useRef(false);
+  const dropGhost = useRef<DropGhost | null>(null);
   const view = useRef({ scrollX: 0, scrollY: 0, ppb: 24 });
   const onScrollYRef = useRef(onScrollY);
   useEffect(() => {
@@ -555,18 +571,85 @@ export function Timeline({
     });
   };
 
-  // drop audio onto a lane. ⌘/Ctrl (read on dragover — drop often drops the flag)
-  // stacks files down existing audio tracks at the same beat (Ableton). No modifier
-  // = end-to-end on the drop track. ⌥ bypasses snap; ⌘ is the stack modifier here.
-  const onDragOver = (e: React.DragEvent<HTMLCanvasElement>) => {
-    if (!dragHasAudioIntake(e.dataTransfer)) return;
+  // drop audio onto a lane. Several files stack down existing audio tracks at
+  // the same beat; a single file lands on the drop track. ⌥ bypasses snap.
+  // Force dropEffect copy — Mac ⌘-drag otherwise requests "link" and the drop dies.
+  const armIntake = (e: React.DragEvent<HTMLCanvasElement>) => {
+    if (!dragHasAudioIntake(e.dataTransfer)) return false;
     e.preventDefault();
-    dropAcross.current = cmd(e);
+    try {
+      e.dataTransfer.dropEffect = "copy";
+    } catch {
+      /* some browsers */
+    }
+    return true;
+  };
+  const updateDropGhost = (e: React.DragEvent<HTMLCanvasElement>) => {
+    const r = ref.current!.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    const beat = Math.max(0, snapBeat(xToBeat(x), e.altKey));
+    const rowTrack = y >= HEAD_H ? tracks()[yToTrackIndex(y)] : undefined;
+    const libIds = peekLibraryDragIds().length
+      ? peekLibraryDragIds()
+      : libraryBufIdsFromDrag(e.dataTransfer);
+    const items: {
+      name: string;
+      lengthBeats: number;
+      bufId?: string;
+    }[] = [];
+    if (libIds.length) {
+      for (const id of libIds) {
+        const m = engine.importMeta(id);
+        items.push({
+          bufId: id,
+          name: m?.name ?? id,
+          lengthBeats: m
+            ? engine.audioLengthBeats(m.seconds)
+            : engine.arrangement.beatsPerBar,
+        });
+      }
+    } else if (dragHasOsFiles(e.dataTransfer)) {
+      const names = peekOsAudioDragNames(e.dataTransfer);
+      const fallback = names.length > 0 ? names : ["audio"];
+      const bar = engine.arrangement.beatsPerBar;
+      for (const name of fallback)
+        items.push({ name, lengthBeats: bar });
+    }
+    if (!items.length) {
+      dropGhost.current = null;
+      return;
+    }
+    const indices = engine.libraryStackTrackIndices(
+      items.length,
+      rowTrack?.id,
+    );
+    dropGhost.current = {
+      beat,
+      clips: items.map((it, i) => ({
+        ...it,
+        trackIndex: indices[i]!,
+      })),
+    };
+  };
+  const onDragOver = (e: React.DragEvent<HTMLCanvasElement>) => {
+    if (!armIntake(e)) return;
+    updateDropGhost(e);
+  };
+  const onDragLeave = (e: React.DragEvent<HTMLCanvasElement>) => {
+    const next = e.relatedTarget as Node | null;
+    if (next && e.currentTarget.contains(next)) return;
+    dropGhost.current = null;
   };
   const onDrop = async (e: React.DragEvent<HTMLCanvasElement>) => {
+    dropGhost.current = null;
+    clearLibraryDrag();
     e.preventDefault();
-    const acrossTracks = dropAcross.current || cmd(e);
-    dropAcross.current = false;
+    try {
+      e.dataTransfer.dropEffect = "copy";
+    } catch {
+      /* some browsers */
+    }
     const r = ref.current!.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
@@ -579,7 +662,6 @@ export function Timeline({
       const placed = engine.placeLibraryClips(libIds, {
         beat,
         trackId,
-        acrossTracks,
       });
       const last = placed[placed.length - 1];
       if (last) onEditClip(last.trackId, last.clipId);
@@ -603,7 +685,7 @@ export function Timeline({
     const ids = await engine.importAudioBatch(fileDrop);
     if (!ids.length) return; // undecodable
     const trackId = rowTrack?.id;
-    const placed = engine.placeLibraryClips(ids, { beat, trackId, acrossTracks });
+    const placed = engine.placeLibraryClips(ids, { beat, trackId });
     const last = placed[placed.length - 1];
     if (last) onEditClip(last.trackId, last.clipId);
   };
@@ -644,8 +726,15 @@ export function Timeline({
         setScrollY(v.scrollY + e.deltaY, cv.clientHeight);
       }
     };
+    const clearGhost = () => {
+      dropGhost.current = null;
+    };
     cv.addEventListener("wheel", onWheel, { passive: false });
-    return () => cv.removeEventListener("wheel", onWheel);
+    window.addEventListener("dragend", clearGhost);
+    return () => {
+      cv.removeEventListener("wheel", onWheel);
+      window.removeEventListener("dragend", clearGhost);
+    };
     // setScrollY closes over stable refs; re-binding every render would thrash listeners
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -733,14 +822,19 @@ export function Timeline({
     g.clip();
 
     // track lane backgrounds + separators (skip fully off-screen rows)
-    tracks().forEach((_, i) => {
+    const ghost = dropGhost.current;
+    const laneCount = Math.max(
+      tracks().length,
+      ghost ? Math.max(0, ...ghost.clips.map((c) => c.trackIndex)) + 1 : 0,
+    );
+    for (let i = 0; i < laneCount; i++) {
       const y = trackYOf(i);
-      if (y + ROW_H < HEAD_H || y > h) return;
+      if (y + ROW_H < HEAD_H || y > h) continue;
       g.fillStyle = i % 2 === 0 ? "#101014" : "#0e0e12";
       g.fillRect(0, y, w, ROW_H);
       g.fillStyle = "rgba(255,255,255,0.05)";
       g.fillRect(0, y + ROW_H - 1, w, 1);
-    });
+    }
 
     // gridlines across the visible range (labels drawn later, over the ruler bg).
     // Hierarchy: bars (strong) → beats (medium) → SNAP subdivisions (faint) — the
@@ -1036,6 +1130,56 @@ export function Timeline({
       }
     }
 
+    // drop ghost — opaque clip blocks at the snapped beat / stacked lanes
+    if (ghost?.clips.length) {
+      const gx = beatToX(ghost.beat);
+      g.fillStyle = "color-mix(in srgb, " + ac + " 18%, transparent)";
+      const lo = Math.min(...ghost.clips.map((c) => c.trackIndex));
+      const hi = Math.max(...ghost.clips.map((c) => c.trackIndex));
+      g.fillRect(0, trackYOf(lo), w, (hi - lo + 1) * ROW_H);
+      g.fillStyle = ac;
+      g.globalAlpha = 0.85;
+      g.fillRect(gx, trackYOf(lo), 2, (hi - lo + 1) * ROW_H);
+      g.globalAlpha = 1;
+      for (const gc of ghost.clips) {
+        const y = trackYOf(gc.trackIndex);
+        const cw = Math.max(4, gc.lengthBeats * view.current.ppb);
+        if (y + ROW_H < HEAD_H || y > h || gx + cw < 0 || gx > w) continue;
+        g.globalAlpha = 0.7;
+        g.fillStyle = CLIP_COLOR.audio;
+        g.beginPath();
+        g.roundRect(gx, y + 3, cw, ROW_H - 8, 3);
+        g.fill();
+        g.strokeStyle = ac;
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.roundRect(gx + 0.75, y + 3.75, cw - 1.5, ROW_H - 9.5, 3);
+        g.stroke();
+        if (gc.bufId) {
+          const peaks = engine.importPeaks(gc.bufId, Math.max(8, Math.floor(cw)));
+          if (peaks) {
+            const midY = y + 3 + (ROW_H - 8) / 2;
+            const half = (ROW_H - 8) / 2 - 4;
+            g.fillStyle = "rgba(255,255,255,0.55)";
+            const bw = cw / peaks.length;
+            for (let i = 0; i < peaks.length; i++) {
+              const hh = Math.max(0.5, peaks[i]! * half);
+              g.fillRect(gx + i * bw, midY - hh, Math.max(1, bw - 0.3), hh * 2);
+            }
+          }
+        }
+        if (cw > 28) {
+          g.fillStyle = "rgba(255,255,255,0.92)";
+          g.font = "9px ui-monospace, monospace";
+          g.textBaseline = "top";
+          const label = gc.name.replace(/\.[^.]+$/, "");
+          g.fillText(label, gx + 6, y + 7, cw - 12);
+        }
+      }
+      g.globalAlpha = 1;
+      g.textBaseline = "alphabetic";
+    }
+
     g.restore(); // end lane clip — sticky ruler draws on top
 
     // ── sticky beat-time ruler (Ableton: stays put while tracks scroll) ──
@@ -1194,7 +1338,9 @@ export function Timeline({
       }}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
+      onDragEnter={onDragOver}
       onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
       onDrop={onDrop}
     />
   );

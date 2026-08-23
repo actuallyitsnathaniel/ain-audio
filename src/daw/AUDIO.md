@@ -50,7 +50,7 @@ blob into it (ramped via `setTargetAtTime`, click-safe). Adding a new effect = o
 | `crush`  | WaveShaper (tanh) + auto-gain       | see loudness safety below                                                                                                                                                                                                                                                                                                              |
 | `reverb` | Convolver + predelay + tone         | Ableton-style hall: decay / size / damping / diffusion / predelay / lo·hi cut / mix. Synth IR via `makeReverbIR`. |
 | `eq` | Native biquad cascade | Pro-Q–style parametric EQ: up to 12 bands, shapes (bell/LS/HS/LC/HC/notch/BP/tilt), drag/Q editor, solo, per-band **dyn**, accurate response curve (incl. live dyn), input RTA, **ST/M/S**. Shared `BandCurveEditor` with speccomp. |
-| `impartialer` | AudioWorklet (STFT) | Phase 1–3 + detail pass: transpose / snap / remap, musical gate, residual = aperiodic, **<100 Hz always collapsed to one partial** (clean sub; mix takes that band from wet). See [SPECTRAL.md](SPECTRAL.md). |
+| `impartialer` | AudioWorklet (STFT) | …musical gate, residual = aperiodic, **<100 Hz keyed harmonic lock** (F0 + n·F0′; sine fallback; sub always wet). See [SPECTRAL.md](SPECTRAL.md). |
 | `centinel` | AudioWorklet (E/H + cycle splice) | Expired US5973252A: recursive E/H period → rate convert + ±1 `Cycle_period` + Decay. **Input type** sets E/H fMin–fMax. LPC formant preserve after splice (settled `|R*|`). Presets: **pop** · nat · soft · robot. |
 | `cliplim` | AudioWorklet | Lookahead clip-limiter + Au5-style **preserve** (highpassed delta restore). Ceiling / soft / look / rel / mix. Reports lookahead latency; mini-ADC aligned. Peak-scope viz. |
 | `speccomp` | AudioWorklet (STFT) | Per-band spectral compressor (magnitude gains, phase intact). Thresh / ratio / tilt / focus / quality. See [SPECTRAL.md](SPECTRAL.md). |
@@ -63,10 +63,10 @@ closer by 0.4 st, same-side; scoop-toward past-mid flips now. Decay = Retune Spe
 ~100 ms (gated off mid-glide). **Flex** is an island around the target (0 = always
 pull / pop). **Natural Vibrato** (−1…+1) scales AC residual around a slow det center
 **after** Decay: 0 = leave (`VIB_LEAVE_SCALE` of residual) · − = flatten · + = amplify.
-Formant knob is LPC preserve amount after splice, not a PSOLA path switch.
+Leave rides scoops (clamp still caps |resid|). Formant knob is LPC preserve amount after splice, not a PSOLA path switch.
 Preserve is gain-matched to the splice bed. Once open it stays through the
 park (close on glide / phrase edge), with a 40ms fade — amt=1 was snapping
-off every land and on failed LPC hops.
+off every land and on failed LPC hops. Formant 100% is ear-better (`g4c`); LPC is frozen.
 `rate=1` on the splice tap is dry. Mix knob is the only parallel blend.
 Do-no-harm clamp keeps corrected MIDI on the det↔want segment.
 Splice joins one at a time (wait out the seam before the next ±cycle).

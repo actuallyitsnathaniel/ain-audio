@@ -135,12 +135,10 @@ export function ShortcutsHelp() {
                     <span className="keycap">↓</span> ·{" "}
                     <span className="keycap">⇧</span> extends
                   </Li>
-                  <Li label="preview">click / ↵ · ⏹ or Space stops</Li>
+                  <Li label="preview">▶ / ↵ · ⏹ or Space stops</Li>
                   <Li label="place">
-                    dbl-click = one track ·{" "}
-                    <span className="keycap">⌘</span>-drop /{" "}
-                    <span className="keycap">⌘</span>↵ /{" "}
-                    <span className="keycap">⌘</span>V = down tracks
+                    drop / dbl-click / <span className="keycap">⌘</span>↵ —
+                    several files stack down tracks
                   </Li>
                   <Li label="delete">
                     <span className="keycap">⌫</span>

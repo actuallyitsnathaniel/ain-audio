@@ -69,6 +69,25 @@ export function isJunkDropFile(file: File): boolean {
   return false;
 }
 
+/** Names visible during dragover (items exist; `files` is often empty until drop). */
+export function peekOsAudioDragNames(dt: DataTransfer): string[] {
+  const names: string[] = [];
+  const items = dt.items;
+  if (!items?.length) return names;
+  for (const it of Array.from(items)) {
+    if (it.kind !== "file") continue;
+    const f = it.getAsFile();
+    if (f) {
+      if (isJunkDropFile(f) || looksLikeMidiFile(f)) continue;
+      if (looksLikeAudioFile(f) || !f.type || f.type.startsWith("audio/"))
+        names.push(f.name);
+      continue;
+    }
+    if (!it.type || it.type.startsWith("audio/")) names.push("audio");
+  }
+  return names;
+}
+
 // ── FSA handles arriving after the File snapshot (Chrome empties items if we await) ──
 
 const handleByKey = new Map<string, FileSystemFileHandle>();

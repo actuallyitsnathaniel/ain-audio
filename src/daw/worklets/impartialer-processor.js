@@ -8,7 +8,8 @@
 //
 // Musical gate: out-of-key pitched energy is always locked onto the scale (or
 // muted). Residual is aperiodic texture only — never a dry-pitch bleed.
-// Sub law: everything < 100 Hz collapses to one fundamental (clean sub), always.
+// Sub law: < SUB_HZ → one bass F0 (sticky), key-locked β, integer harmonics
+// n·F0′; non-series bins dropped. Sine collapse when n=2 isn’t credible.
 // Soft masks: weight 1 at exact n·F0 → 0 at HPS_HARM_CENTS (not a perfect demix).
 // E/H: US5973252A correction-mode window on the mono analysis ring, seeded by HPS.
 
@@ -80,8 +81,12 @@ function fft(re, im, inverse) {
 const VIZ_BINS = 96;
 const SPLIT_LO_HZ = 250;
 const SPLIT_HI_HZ = 2500;
-/** Hard ceiling for the clean-sub collapse. Not a knob. */
+/** Hard ceiling for bass harmonic lock + wet-only mix split. Not a knob. */
 const SUB_HZ = 100;
+/** Harmonic gate for sub-band bins (same spirit as HPS mask). */
+const SUB_HARM_CENTS = 45;
+/** n=2 energy vs fundamental — below this, collapse to sine. */
+const SUB_MIN_N2_RATIO = 0.08;
 
 /** HPS (Noll): P(k)=∏_{r=1..R} |X(r·k)| — multi-F0 acquire. */
 const HPS_R = 4;
@@ -461,35 +466,112 @@ function lockSubHz(hz, pitchRatio, mapOn, force, key, scalePcs) {
   return hz * pitchRatio;
 }
 
-/**
- * Collapse every bin below SUB_HZ to a single sine-like partial.
- * Ignores residual / hits / lo / floor / mapping-off. Always.
- * destHz may sit above SUB_HZ (global transpose); the old sub band stays empty then.
- */
-function simplifySubBand(
-  synMag,
-  synFreq,
-  identityMag,
-  residualMag,
-  mag,
-  binHz,
-  half,
-  destHz,
-) {
-  const kMax = Math.max(1, Math.floor((SUB_HZ - 1e-6) / binHz));
-  let energy = 0;
-  for (let k = 0; k <= kMax; k++) {
-    if (k > 0) energy += mag[k];
-    synMag[k] = 0;
-    identityMag[k] = 0;
-    residualMag[k] = 0;
+/** Nearest harmonic index n≥1, or 0 if outside SUB_HARM_CENTS. */
+function subHarmonicN(hz, srcHz) {
+  if (!(srcHz > 0) || !(hz > 0)) return 0;
+  const n = Math.round(hz / srcHz);
+  if (n < 1) return 0;
+  const cents = Math.abs((1200 * Math.log(hz / (n * srcHz))) / Math.LN2);
+  return cents <= SUB_HARM_CENTS ? n : 0;
+}
+
+/** Series lock when n=2 is in-band and credible; else sine collapse. */
+function subSeriesViable(mag, srcHz, binHz, kMax) {
+  const n2Hz = srcHz * 2;
+  if (n2Hz >= SUB_HZ * 0.98) return true;
+  const k1 = Math.max(1, Math.min(kMax, Math.round(srcHz / binHz)));
+  const fundE = mag[k1];
+  if (fundE < 1e-12) return false;
+  let n2E = 0;
+  for (let k = 1; k <= kMax; k++) {
+    if (subHarmonicN(k * binHz, srcHz) === 2) n2E += mag[k];
   }
-  if (!(destHz > 0) || energy < 1e-12) return;
+  return n2E >= fundE * SUB_MIN_N2_RATIO;
+}
+
+/** Hop-rate sticky bass F0 (processor-owned; L channel writes). */
+function stickySubF0(sticky, rawHz, ownsSticky) {
+  if (!(rawHz > 0)) {
+    if (ownsSticky) {
+      sticky.v *= 0.92;
+      if (sticky.v < 20) sticky.v = 0;
+    }
+    return sticky.v > 0 ? sticky.v : 0;
+  }
+  if (!ownsSticky) return sticky.v > 0 ? sticky.v : rawHz;
+  if (!(sticky.v > 0)) {
+    sticky.v = rawHz;
+    return rawHz;
+  }
+  const cents = Math.abs((1200 * Math.log(rawHz / sticky.v)) / Math.LN2);
+  if (cents > 60) sticky.v = rawHz;
+  else sticky.v = sticky.v * 0.88 + rawHz * 0.12;
+  return sticky.v;
+}
+
+/** Sine fallback — all sub-band energy → one partial at destHz. */
+function collapseSubSine(synMag, synFreq, mag, binHz, half, kMax, destHz) {
+  let energy = 0;
+  for (let k = 1; k <= kMax; k++) energy += mag[k];
+  if (energy < 1e-12 || !(destHz > 0)) return;
   let winK = (destHz / binHz + 0.5) | 0;
   if (winK < 1) winK = 1;
   if (winK > half) winK = half;
   synMag[winK] += energy;
   synFreq[winK] = destHz / binHz;
+}
+
+/**
+ * Bass band (< SUB_HZ): key-lock one F0, shift integer harmonics by one β.
+ * Non-harmonic bins are dropped. Falls back to sine when the series isn’t credible.
+ */
+function lockSubHarmonics(
+  synMag,
+  synFreq,
+  identityMag,
+  residualMag,
+  mag,
+  freq,
+  binHz,
+  half,
+  pitchRatio,
+  mapOn,
+  force,
+  key,
+  scalePcs,
+  sticky,
+  ownsSticky,
+) {
+  const kMax = Math.max(1, Math.floor((SUB_HZ - 1e-6) / binHz));
+  for (let k = 0; k <= kMax; k++) {
+    synMag[k] = 0;
+    identityMag[k] = 0;
+    residualMag[k] = 0;
+  }
+
+  let subEnergy = 0;
+  for (let k = 1; k <= kMax; k++) subEnergy += mag[k];
+  if (subEnergy < 1e-12) return;
+
+  const rawHz = pickSubHz(mag, kMax, binHz);
+  const srcHz = stickySubF0(sticky, rawHz, ownsSticky);
+  if (!(srcHz > 0)) return;
+
+  const destHz = lockSubHz(srcHz, pitchRatio, mapOn, force, key, scalePcs);
+  if (!(destHz > 0)) return;
+  const beta = destHz / srcHz;
+
+  if (!subSeriesViable(mag, srcHz, binHz, kMax)) {
+    collapseSubSine(synMag, synFreq, mag, binHz, half, kMax, destHz);
+    return;
+  }
+
+  for (let k = 1; k <= kMax; k++) {
+    const m = mag[k];
+    if (m < 1e-12) continue;
+    if (!subHarmonicN(k * binHz, srcHz)) continue;
+    depositShift(synMag, synFreq, freq, k, m, beta, half);
+  }
 }
 
 function depositShift(synMag, synFreq, freq, k, m, ratio, half) {
@@ -675,7 +757,7 @@ function processFrame(ch, window, fftSize, hop, opts) {
       const m = mag[k];
       if (m < 1e-12) continue;
       const hz = k * binHz;
-      if (hz < SUB_HZ) continue; // owned by simplifySubBand
+      if (hz < SUB_HZ) continue; // owned by lockSubHarmonics
       const own = nearestHarmonicTrack(hz, f0Hz, nF0);
       if (own) {
         // Entire owned bin takes the track β — leftover must not identity-pass.
@@ -727,7 +809,7 @@ function processFrame(ch, window, fftSize, hop, opts) {
       if (m < 1e-12) continue;
 
       const hz = k * binHz;
-      if (hz < SUB_HZ) continue; // owned by simplifySubBand
+      if (hz < SUB_HZ) continue; // owned by lockSubHarmonics
       const isPeak =
         k > 0 &&
         k < half &&
@@ -766,18 +848,22 @@ function processFrame(ch, window, fftSize, hop, opts) {
     }
   }
 
-  const kSub = Math.max(1, Math.floor((SUB_HZ - 1e-6) / binHz));
-  const srcHz = pickSubHz(mag, kSub, binHz);
-  const destHz = lockSubHz(srcHz, pitchRatio, mapOn, force, key, scalePcs);
-  simplifySubBand(
+  lockSubHarmonics(
     synMag,
     synFreq,
     identityMag,
     residualMag,
     mag,
+    freq,
     binHz,
     half,
-    destHz,
+    pitchRatio,
+    mapOn,
+    force,
+    key,
+    scalePcs,
+    opts.subSticky,
+    opts.ownsSubSticky,
   );
 
   for (let k = 0; k <= half; k++) {
@@ -931,6 +1017,7 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
     this._ehWr = 0;
     this._ehScratchE = new Float32Array(EH_TRACK_N);
     this._ehScratchH = new Float32Array(EH_TRACK_N);
+    this._subSticky = { v: 0 };
     this.port.onmessage = (ev) => {
       const d = ev.data || {};
       if (d.type !== "config") return;
@@ -1013,6 +1100,7 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
       ch.subD2 = 0;
       // keep inFifo / dryDelay so we don't click the input stream
     }
+    this._subSticky.v = 0;
   }
 
   _emptyInput(n) {
@@ -1075,6 +1163,8 @@ class AinImpartialerProcessor extends AudioWorkletProcessor {
           ehWr: this._ehWr,
           ehScratchE: this._ehScratchE,
           ehScratchH: this._ehScratchH,
+          subSticky: this._subSticky,
+          ownsSubSticky: emitViz,
         });
         if (emitViz && this._viz) {
           this._vizCountdown--;

@@ -11,13 +11,15 @@
 // g6e: don't hold E/H lock on cold start / phrase-end — that pitched the tail.
 // g4b: LPC preserve — gain-match + slower gate so formant=100% doesn't snap/fade.
 // g4c: latch preserve through parks (8¢ off was every land); keep last poles on a miss.
+//      Ear: formant 100% better (Nathaniel). LPC frozen — do not mix into hops.
+// g5c: Nat Vib leave through scoops (gate-to-0 on large residual was dead hops).
 // Untracked (consonant / reverb smear): rate=1, keep sticky. Tracking knob = ε.
 // E/H analysis is HP'd + 2L body preference so room delays don't own Cycle_period.
 // Splice still reads the wet take (not a dereverb). Insert/delete phase-aligns ±pe.
 // Splice re-arm: exit onset unity on ONSET_SPLICE_MS even when formant≥0.5 (LPC is a post, not a path).
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-19g4c-lpc";
+const CENTINEL_BUILD = "2026-08-23g5c-scoop";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -196,10 +198,6 @@ const VIB_LEAVE_SCALE = 0.5;
 const VIB_RESID_MAX_SEMI = 0.38;
 /** Smooth hop-to-hop residual so E/H refine jitter isn't injected as vibrato. */
 const VIB_RESID_SLEW_MS = 18;
-/** |resid|/max below this → full leave gate; fade to 0 at the clamp. */
-const VIB_GATE_FULL = 0.55;
-/** Leave-gate slew (ms). */
-const VIB_GATE_SLEW_MS = 14;
 /** Cold wet fade — slower than normal so the dry→tuned handoff isn't a step. */
 const COLD_WET_XFADE_MS = 28;
 // Detector confidence (reverb / multipitch).
@@ -852,8 +850,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._vibCenter = 60;
     /** Slewed vibrato residual (anti-shake from hop-rate E/H jitter). */
     this._vibSemiSlew = 0;
-    /** Slewed leave-gate 0..1 (no hard motion on/off). */
-    this._vibGateSlew = 0;
     /** AC residual (st) added after Decay — not on wantTgt. */
     this._vibOffset = 0;
     /** |d pitch / dt| (st/s), smoothed — portamento vs stationary. */
@@ -1009,7 +1005,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._wantBaseSlew = 60;
     this._vibCenter = 60;
     this._vibSemiSlew = 0;
-    this._vibGateSlew = 0;
     this._vibOffset = 0;
     if (clearRing) {
       this._stopPeriodTrack();
@@ -1854,15 +1849,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     const slewA = 1 - Math.exp(-dtMs / VIB_RESID_SLEW_MS);
     this._vibSemiSlew += (resid - this._vibSemiSlew) * slewA;
     resid = this._vibSemiSlew;
-    const span = Math.max(1e-6, VIB_RESID_MAX_SEMI);
-    const u = Math.abs(resid) / span;
-    const gateTgt =
-      u <= VIB_GATE_FULL
-        ? 1
-        : Math.max(0, 1 - (u - VIB_GATE_FULL) / (1 - VIB_GATE_FULL));
-    const gateA = 1 - Math.exp(-dtMs / VIB_GATE_SLEW_MS);
-    this._vibGateSlew += (gateTgt - this._vibGateSlew) * gateA;
-    resid *= this._vibGateSlew;
+    // g5c: leave rides the scoop. Gating |resid|→0 at the clamp muted hops.
+    // Clamp still caps scoop (not vibrato); offset is after Decay.
 
     const v = this._vibrato;
     const leave = VIB_LEAVE_SCALE;
@@ -2097,7 +2085,6 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._inRun = false;
           this._vibCenter = midi;
           this._vibSemiSlew = 0;
-          this._vibGateSlew = 0;
           this._vibOffset = 0;
           this._audibleWant = midi;
           this._wantTgt = midi;

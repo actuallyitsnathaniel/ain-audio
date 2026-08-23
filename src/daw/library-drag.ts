@@ -3,20 +3,53 @@
 export const LIBRARY_MIME = "text/ain-library";
 const PLAIN_PREFIX = "ain-lib:";
 
+/** Live ids for the in-flight library drag. `getData` is empty on dragover. */
+let liveIds: string[] = [];
+let dragImage: HTMLCanvasElement | null = null;
+let dragEndBound = false;
+
+function bindDragEnd() {
+  if (dragEndBound || typeof window === "undefined") return;
+  dragEndBound = true;
+  window.addEventListener("dragend", clearLibraryDrag);
+}
+
+export function clearLibraryDrag(): void {
+  liveIds = [];
+}
+
+export function peekLibraryDragIds(): string[] {
+  return liveIds;
+}
+
 export function setLibraryDrag(
   dt: DataTransfer,
   bufIds: string | string[],
 ): void {
   const ids = (Array.isArray(bufIds) ? bufIds : [bufIds]).filter(Boolean);
+  liveIds = ids;
+  bindDragEnd();
   const packed = ids.join(",");
   dt.setData(LIBRARY_MIME, packed);
   dt.setData("text/plain", PLAIN_PREFIX + packed);
-  dt.effectAllowed = "copy";
+  dt.effectAllowed = "all";
+  // Tiny drag image so the row ghost doesn't cover the timeline clip preview.
+  try {
+    if (!dragImage) {
+      dragImage = document.createElement("canvas");
+      dragImage.width = 1;
+      dragImage.height = 1;
+    }
+    dt.setDragImage(dragImage, 0, 0);
+  } catch {
+    /* Safari / some OS drags */
+  }
 }
 
 export function dragHasLibrary(dt: DataTransfer): boolean {
   const types = Array.from(dt.types);
-  return types.includes(LIBRARY_MIME);
+  // `text/plain` is the Safari/Firefox fallback; ⌘-drag on Mac can omit custom MIMEs.
+  return types.includes(LIBRARY_MIME) || types.includes("text/plain");
 }
 
 export function dragHasOsFiles(dt: DataTransfer): boolean {

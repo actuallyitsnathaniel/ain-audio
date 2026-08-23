@@ -1,7 +1,7 @@
 // ── USER AUDIO LIBRARY — browser of IndexedDB imports / takes / bounces ──────
 // Drop files here (or onto the timeline). Rows stay after clip delete and File →
 // New project. Drag a row onto an audio lane or kit sample well (same bufId, no
-// second decode). Click auditions through the master bus — not startSources.
+// second decode). ▶ / ↵ auditions through the master bus — not startSources.
 // Selection: click · ⇧ range · ⌘ toggle · ⌘A · arrows · ⌫ delete · drag the set.
 
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
@@ -95,44 +95,42 @@ export function LibraryPanel({
     engine.previewLibrary(bufId);
   };
 
-  const selectOnly = (bufId: string, play = true) => {
+  const selectOnly = (bufId: string) => {
     setSel(new Set([bufId]));
     setFocusId(bufId);
     anchorRef.current = bufId;
-    if (play) audition(bufId);
   };
 
-  const applySel = (next: string[], focus: string, play = false) => {
+  const applySel = (next: string[], focus: string) => {
     setSel(new Set(next));
     setFocusId(focus);
-    if (play) audition(focus);
   };
 
   const onRowClick = (bufId: string, e: MouseEvent) => {
     if (editing) return;
     const meta = e.metaKey || e.ctrlKey;
     if (e.shiftKey) {
-      applySel(rangeIds(ids, anchorRef.current ?? focusId, bufId), bufId, true);
+      applySel(rangeIds(ids, anchorRef.current ?? focusId, bufId), bufId);
       return;
     }
     if (meta) {
       const next = new Set(sel);
-      const adding = !next.has(bufId);
-      if (adding) next.add(bufId);
-      else next.delete(bufId);
+      if (next.has(bufId)) next.delete(bufId);
+      else next.add(bufId);
       setSel(next);
       setFocusId(bufId);
       anchorRef.current = bufId;
-      if (adding) audition(bufId);
       return;
     }
-    selectOnly(bufId, true);
+    selectOnly(bufId);
   };
 
-  const placeIds = (bufIds: string[], acrossTracks = false) => {
+  const placeIds = (bufIds: string[], serial = false) => {
     const ordered = ids.filter((id) => bufIds.includes(id) && engine.hasImport(id));
     if (!ordered.length) return;
-    const placed = engine.placeLibraryClips(ordered, { acrossTracks });
+    const placed = engine.placeLibraryClips(ordered, {
+      acrossTracks: !serial,
+    });
     const hit = placed[0]
       ? engine.libraryUsages(ordered[0]!)[0]
       : null;
@@ -194,8 +192,7 @@ export function LibraryPanel({
           onClick: () => placeIds(targets),
         },
         {
-          label: "place on tracks",
-          hint: "⌘↵",
+          label: "place on one track",
           disabled: !many,
           onClick: () => placeIds(targets, true),
         },
@@ -325,14 +322,14 @@ export function LibraryPanel({
     if (meta && key === "v") {
       e.preventDefault();
       e.stopPropagation();
-      placeIds(selected.length ? selected : focusId ? [focusId] : [], true);
+      placeIds(selected.length ? selected : focusId ? [focusId] : []);
       return;
     }
     if (e.key === "Enter") {
       e.preventDefault();
       e.stopPropagation();
       if (e.metaKey || e.ctrlKey) {
-        placeIds(selected.length ? selected : focusId ? [focusId] : [], true);
+        placeIds(selected.length ? selected : focusId ? [focusId] : []);
         return;
       }
       const id = focusId ?? selected[0];
@@ -362,9 +359,9 @@ export function LibraryPanel({
       const id = ids[next]!;
       if (e.shiftKey) {
         const from = anchorRef.current ?? ids[cur]!;
-        applySel(rangeIds(ids, from, id), id, true);
+        applySel(rangeIds(ids, from, id), id);
       } else {
-        selectOnly(id, true);
+        selectOnly(id);
       }
       scrollFocus(id);
       return;
@@ -388,7 +385,7 @@ export function LibraryPanel({
       if (!match) return;
       e.preventDefault();
       e.stopPropagation();
-      selectOnly(match.bufId, true);
+      selectOnly(match.bufId);
       scrollFocus(match.bufId);
     }
   };
@@ -519,10 +516,9 @@ export function LibraryPanel({
                 onEditDone={() => setEditing(null)}
                 onPreview={() => audition(it.bufId)}
                 onClick={(e) => onRowClick(it.bufId, e)}
-                onPlace={(across) =>
+                onPlace={() =>
                   placeIds(
                     selected.includes(it.bufId) ? selected : [it.bufId],
-                    across,
                   )
                 }
                 onMenu={(x, y) => menuFor(it, x, y)}
@@ -591,7 +587,7 @@ function LibraryRow({
   onEditDone: () => void;
   onPreview: () => void;
   onClick: (e: MouseEvent) => void;
-  onPlace: (across?: boolean) => void;
+  onPlace: () => void;
   onMenu: (x: number, y: number) => void;
   onDragIds: () => string[];
   onDragUnselected: () => void;
@@ -625,7 +621,7 @@ function LibraryRow({
       onClick={onClick}
       onDoubleClick={(e) => {
         e.preventDefault();
-        onPlace(e.metaKey || e.ctrlKey);
+        onPlace();
       }}
       onContextMenu={(e) => {
         if (e.shiftKey) return;
@@ -645,7 +641,7 @@ function LibraryRow({
         [
           it.sourcePath && it.sourcePath !== it.name ? it.sourcePath : it.name,
           it.persistOk
-            ? "click select/preview · ⇧ range · ⌘ add · drag onto timeline"
+            ? "click to select · ▶ preview · ⇧ range · ⌘ add · drag onto timeline"
             : "not saved (gone on reload)",
         ].join(" — ")
       }
