@@ -1130,45 +1130,59 @@ export function Timeline({
       }
     }
 
-    // drop ghost — opaque clip blocks at the snapped beat / stacked lanes
+    // drop ghost — dim clip blocks at the snapped beat / stacked lanes.
+    // Paint ONLY the on-screen slice. A canvas `filter` on a minutes-long clip
+    // allocated a full-width bitmap every frame and pinned the machine.
     if (ghost?.clips.length) {
       const gx = beatToX(ghost.beat);
-      g.fillStyle = "color-mix(in srgb, " + ac + " 18%, transparent)";
       const lo = Math.min(...ghost.clips.map((c) => c.trackIndex));
       const hi = Math.max(...ghost.clips.map((c) => c.trackIndex));
+      g.fillStyle = "color-mix(in srgb, " + ac + " 8%, transparent)";
       g.fillRect(0, trackYOf(lo), w, (hi - lo + 1) * ROW_H);
-      g.fillStyle = ac;
-      g.globalAlpha = 0.85;
-      g.fillRect(gx, trackYOf(lo), 2, (hi - lo + 1) * ROW_H);
-      g.globalAlpha = 1;
+      if (gx >= KEY_W - 1 && gx <= w) {
+        g.fillStyle = ac;
+        g.globalAlpha = 0.85;
+        g.fillRect(gx, trackYOf(lo), 2, (hi - lo + 1) * ROW_H);
+        g.globalAlpha = 1;
+      }
       for (const gc of ghost.clips) {
         const y = trackYOf(gc.trackIndex);
         const cw = Math.max(4, gc.lengthBeats * view.current.ppb);
-        if (y + ROW_H < HEAD_H || y > h || gx + cw < 0 || gx > w) continue;
+        const x0 = Math.max(gx, KEY_W);
+        const x1 = Math.min(gx + cw, w);
+        if (y + ROW_H < HEAD_H || y > h || x1 <= x0) continue;
         g.globalAlpha = 0.7;
-        g.fillStyle = CLIP_COLOR.audio;
-        g.beginPath();
-        g.roundRect(gx, y + 3, cw, ROW_H - 8, 3);
-        g.fill();
+        g.fillStyle = "rgb(18, 23, 11)"; // audio green at 15% brightness
+        g.fillRect(x0, y + 3, x1 - x0, ROW_H - 8);
         g.strokeStyle = ac;
-        g.lineWidth = 1.5;
-        g.beginPath();
-        g.roundRect(gx + 0.75, y + 3.75, cw - 1.5, ROW_H - 9.5, 3);
-        g.stroke();
+        g.lineWidth = 1;
+        g.strokeRect(x0 + 0.5, y + 3.5, x1 - x0 - 1, ROW_H - 9);
         if (gc.bufId) {
-          const peaks = engine.importPeaks(gc.bufId, Math.max(8, Math.floor(cw)));
-          if (peaks) {
+          const wv = ghostClipWave(gc.bufId, gc.lengthBeats);
+          if (wv) {
+            const gain = Math.min(1.5, wv.gain);
+            const n = wv.peaks.length;
             const midY = y + 3 + (ROW_H - 8) / 2;
             const half = (ROW_H - 8) / 2 - 4;
-            g.fillStyle = "rgba(255,255,255,0.55)";
-            const bw = cw / peaks.length;
-            for (let i = 0; i < peaks.length; i++) {
-              const hh = Math.max(0.5, peaks[i]! * half);
-              g.fillRect(gx + i * bw, midY - hh, Math.max(1, bw - 0.3), hh * 2);
+            g.fillStyle = "rgba(255,255,255,0.5)";
+            const px0 = Math.max(Math.ceil(x0), KEY_W);
+            const px1 = Math.min(x1, w);
+            for (let px = px0; px < px1; px++) {
+              const clipBeat = xToBeat(px) - ghost.beat;
+              if (clipBeat < 0) continue;
+              const pos =
+                wv.startSec + clipBeat * wv.secPerBeat * wv.rate;
+              if (pos >= wv.endSec) continue;
+              const pk =
+                (wv.peaks[
+                  Math.min(n - 1, Math.floor((pos / wv.durSec) * n))
+                ] || 0) * gain;
+              const hh = Math.max(0.5, Math.min(1, pk) * half);
+              g.fillRect(px, midY - hh, 1, hh * 2);
             }
           }
         }
-        if (cw > 28) {
+        if (gx + 6 < x1 && cw > 28) {
           g.fillStyle = "rgba(255,255,255,0.92)";
           g.font = "9px ui-monospace, monospace";
           g.textBaseline = "top";
@@ -1344,6 +1358,33 @@ export function Timeline({
       onDrop={onDrop}
     />
   );
+}
+
+/** Same wave + auto-normalize as a just-placed library clip (see placeLibraryClips). */
+function ghostClipWave(bufId: string, lengthBeats: number) {
+  const meta = engine.importMeta(bufId);
+  if (!meta) return null;
+  return engine.audioClipWave({
+    id: "ghost:" + bufId,
+    startBeat: 0,
+    lengthBeats,
+    loop: false,
+    content: {
+      kind: "audio",
+      bufId,
+      name: meta.name,
+      a: 0,
+      b: 1,
+      gain: 1,
+      cents: 0,
+      semi: 0,
+      snap: true,
+      norm: true,
+      rootBpm: meta.bpm,
+      bars: meta.bars,
+      key: meta.key,
+    },
+  });
 }
 
 // a blank drum pattern sized to one bar (reuses SequenceClip shape minimally)
