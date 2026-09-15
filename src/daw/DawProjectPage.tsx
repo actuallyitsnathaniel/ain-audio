@@ -100,8 +100,8 @@ export function DawProjectPage({ project }: { project: Project }) {
 
         {disco.length ? (
           <div className="flex flex-col gap-[22px]">
-            <DiscoGroup label="singles / EPs" items={singles} />
             <DiscoGroup label="albums" items={albums} />
+            <DiscoGroup label="singles / EPs" items={singles} />
             <DiscoGroup label="works" items={general} />
           </div>
         ) : !p.vimeo && p.id !== "jlm" ? (
