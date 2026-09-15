@@ -56,6 +56,7 @@ import art50 from "/src/assets/images/projects/krptk/discography/how-u-like-that
 import art51 from "/src/assets/images/projects/platinum-roses/discography/contemplate-single.jpg";
 import art52 from "/src/assets/images/projects/platinum-roses/discography/whatd-i-do-single.jpg";
 import art53 from "/src/assets/images/projects/platinum-roses/discography/one-thing-i-know-single.jpg";
+import art54 from "/src/assets/images/projects/riley/Singles_EPs/aimless-remix.jpeg";
 
 export type ReleaseType = "single" | "ep" | "album" | "general";
 
@@ -77,6 +78,7 @@ export interface DiscoEntry {
 
 export const discography: Record<string, DiscoEntry[]> = {
   "riley": [
+    { title: "Aimless (riley remix)", type: "single", art: art54, links: {"spotify":"https://open.spotify.com/album/6Gtl7CBbUSC6N9UwRP6dZC","apple":"https://music.apple.com/us/album/aimless-riley-remix/6801512363?i=6801512368","tidal":"https://tidal.com/browse/track/552362874","youtube":"https://www.youtube.com/watch?v=YqGoL9Rmsf4"} },
     { title: "With the Rain", type: "single", art: art0, links: {"spotify":"https://open.spotify.com/track/2SaapkvKlKTbhrcQpROGAT?si=6728999cee3d4cc7","apple":"https://music.apple.com/us/album/with-the-rain-feat-riley-single/1790476408","youtube":"https://www.youtube.com/watch?v=s5ZICMn1k80"} },
     { title: "Stars (riley remix)", type: "single", art: art1, links: {"spotify":"https://open.spotify.com/track/29NlMvw2a5h7o5sCqgJ7K3?si=f8ae2b4e9aa145b1","apple":"https://music.apple.com/us/album/stars-riley-remix/1660688944?i=1660688945","youtube":"https://www.youtube.com/watch?v=9z8t3nt7ZmA"} },
     { title: "I Was 9 (riley remix)", type: "single", art: art2, links: {"spotify":"https://open.spotify.com/track/3F87Dak8Q41QSNbJfA6AMx?si=14fdcbed18374a3e","apple":"https://music.apple.com/us/album/i-was-9-riley-remix/1649318275?i=1649318276","tidal":"https://tidal.com/browse/album/253512701","youtube":"https://youtu.be/CsQ9kl_a1Y4?si=DOJsUs4qZvEmiplA"} },
