@@ -57,6 +57,7 @@ import art51 from "/src/assets/images/projects/platinum-roses/discography/contem
 import art52 from "/src/assets/images/projects/platinum-roses/discography/whatd-i-do-single.jpg";
 import art53 from "/src/assets/images/projects/platinum-roses/discography/one-thing-i-know-single.jpg";
 import art54 from "/src/assets/images/projects/riley/Singles_EPs/aimless-remix.jpeg";
+import art55 from "/src/assets/images/projects/sam-denton/LPs/ebba_600x600bb.jpeg";
 
 export type ReleaseType = "single" | "ep" | "album" | "general";
 
@@ -89,6 +90,7 @@ export const discography: Record<string, DiscoEntry[]> = {
 
   ],
   "sam-denton": [
+    { title: "ebba", type: "album", art: art55, links: {"apple":"https://music.apple.com/us/album/ebba/1841159470","tidal":"https://tidal.com/browse/album/461916015","youtube":"https://www.youtube.com/playlist?list=OLAK5uy_nRZ_OVSwb3jnDb_R8R6BN_4vTFlSCv6no"} },
     { title: "for now,", type: "ep", art: art5, links: {"spotify":"https://open.spotify.com/album/41VQPdMsvw0bLKRAiQ0dsL?si=j5K5fDzhSACNNMooWrQAOQ","apple":"https://music.apple.com/ph/album/for-now/1476295406","tidal":"https://tidal.com/browse/album/245469084"} },
     { title: "dreams", type: "single", art: art6, links: {"spotify":"https://open.spotify.com/track/5X0UGqgAEsG0YWGtkqtvBt?si=0a9f3e0664a54c9a","apple":"https://music.apple.com/us/album/dreams/1573467286?i=1573467301","tidal":"https://tidal.com/browse/track/243956491","youtube":"https://www.youtube.com/watch?v=lA42ghfjvCo"} },
     { title: "better (with riley & john white)", type: "single", art: art7, links: {"spotify":"https://open.spotify.com/track/52lu5hXrnYdWtPb90ImyA6?si=d8d3dedf5e23468b","apple":"https://music.apple.com/us/album/better/1556313448?i=1556313450","tidal":"https://tidal.com/browse/track/244622029","youtube":"https://www.youtube.com/watch?v=YkTWodHhM0o"} },
