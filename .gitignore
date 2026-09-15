@@ -25,6 +25,8 @@ dist-ssr
 *.sw?
 .env
 db.json
+.tmp_centinel*
+.tmp_formant*
 
 # showcase capture artifacts
 showcase/
