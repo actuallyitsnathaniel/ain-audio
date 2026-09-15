@@ -9,6 +9,11 @@
 // g6c: run-boundary E/H miss → re-detect without dropping rate to 1.
 // g6d: commit-fast scales with Retune Speed (pop hop ≠ Cher 8ms).
 // g6e: don't hold E/H lock on cold start / phrase-end — that pitched the tail.
+// g6f/g6g reverted — stale period hold on every hop land was rough + CPU heavy.
+// g6h: hop land keeps last R* through re-detect (no identity flash, no stale-period hold).
+// g6i: hop-land !trackOk — no ±cycle joins (stale pe + rate≠1 chewed 8–11s); clamp delay.
+// g6j: tighter hop-land clamp (±0.25 pe around N2, not full ±1 cycle).
+// g6k: lands still thin — clamp ±0.18 pe.
 // g4b: LPC preserve — gain-match + slower gate so formant=100% doesn't snap/fade.
 // g4c: latch preserve through parks (8¢ off was every land); keep last poles on a miss.
 //      Ear: formant 100% better (Nathaniel). LPC frozen.
@@ -19,7 +24,7 @@
 // Splice re-arm: exit onset unity on ONSET_SPLICE_MS even when formant≥0.5 (LPC is a post, not a path).
 //
 // Build stamp — bump when diagnosing "did the worklet reload?" (AudioWorklets do NOT HMR).
-const CENTINEL_BUILD = "2026-08-23g5c-rev";
+const CENTINEL_BUILD = "2026-08-24g6k-clamp";
 
 const N = 2048;
 const N2 = N >> 1;
@@ -243,6 +248,8 @@ const COMMIT_FAST_ISOLATED_FRAC = 0.7;
 const COMMIT_FAST_RUN_MS = 160;
 /** Run land ≥ this × knob (pop 20 → 17ms). */
 const COMMIT_FAST_RUN_FRAC = 0.85;
+/** Hop-land re-detect: clamp read delay to ±this × pe around N2 (g6j). Full ±1 chewed. */
+const HOP_LAND_CLAMP_FRAC = 0.18;
 /** Skip humanize stretch while |audibleWant − tgt| exceeds this (cents).
  * 20¢ was still mid-glide — Humanize slowed the finish → pitchy 15–35¢ parks.
  * Gate to near-center so Retune Speed owns the last cents, then breathe. */
@@ -726,6 +733,9 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._spliceXf = 0;
     this._spliceXfN = 24;
     this._spliceXfDelay = N2;
+    this._splicePeLast = 0;
+    /** Last good Cycle_period for splice window while E/H re-detects (g6i). */
+    this._splicePeHold = 0;
     this._lpcR = new Float32Array(LPC_P + 1);
     this._lpcAWork = new Float32Array(LPC_P + 1);
     this._lpcAt = new Float32Array(LPC_P + 1);
@@ -1058,6 +1068,8 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._spliceInit = false;
     this._spliceXf = 0;
     this._spliceXfDelay = N2;
+    this._splicePeLast = 0;
+    this._splicePeHold = 0;
     this._lpcReset();
   }
 
@@ -1187,16 +1199,34 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
   }
 
   _ehDropLock() {
+    const keepRate = this._hopLandActive();
+    if (this._periodSamp > 1) this._splicePeHold = this._periodSamp;
     this._detectionMode = true;
     this._trackOk = false;
     this._periodSamp = 0;
     this._ehClarity *= 0.5;
     this._ehFail = 0;
     this._ehHoldMs = 0;
-    // Patent: fail → re-detect, rate = 1. Do not keep shifting on a stale R*.
-    this.phincfact = 1;
-    this._phincSlew = 1;
-    this._rStar = 1;
+    // Patent: fail → re-detect. Mid-sustain → rate=1. Hop land (g6h): keep
+    // last R* so splice doesn't identity-flash while E/H re-acquires.
+    if (!keepRate) {
+      this.phincfact = 1;
+      this._phincSlew = 1;
+      this._rStar = 1;
+      this._splicePeHold = 0;
+    }
+  }
+
+  /** Voiced commit-fast land after a sticky flip — not cold / edge / unity. */
+  _hopLandActive() {
+    return (
+      this._armed &&
+      !this._onsetUnity &&
+      !this._edgeQuiet &&
+      this._voiced &&
+      !this._coldStart &&
+      this._noteAgeMs < COMMIT_FAST_MS
+    );
   }
 
   _ehFailToDetect() {
@@ -1214,7 +1244,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
     this._ehClarity *= 0.5;
     this._detectionMode = true;
     if (hold) {
-      // Re-detect; keep last Cycle_period / R* so the hop doesn't gulp dry.
+      // g6c run only — g6f/g6g stale-period hold reverted (rough + CPU).
       this._ehHoldMs = 0;
       return;
     }
@@ -1453,33 +1483,53 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       this._spliceDelay = N2;
       this._spliceInit = true;
     }
-    // Cycle_period: E/H when tracking; else last inphinc.
-    let pe =
-      EH_DRIVE && this._trackOk && this._periodSamp > 1
-        ? this._periodSamp
-        : this.inphinc > 1e-6
-          ? 1 / this.inphinc
-          : sampleRate / Math.max(1e-6, midiToHz(this._lockedDet));
+    // Hop-land re-detect: R* still chases (g6h) but ±cycle on a stale pe
+    // chewed 8–11s (g6i) — size the window from hold, no new joins.
+    const hopLandBare = this._hopLandActive() && !this._trackOk;
+    // Cycle_period: E/H when tracking; hop-land hold; else last inphinc.
+    let pe;
+    if (EH_DRIVE && this._trackOk && this._periodSamp > 1) {
+      pe = this._periodSamp;
+      this._splicePeHold = pe;
+    } else if (hopLandBare && this._splicePeHold > 1) {
+      pe = this._splicePeHold;
+    } else if (this.inphinc > 1e-6) {
+      pe = 1 / this.inphinc;
+    } else {
+      pe = sampleRate / Math.max(1e-6, midiToHz(this._lockedDet));
+    }
     pe = this._clampPe(pe);
     const r = Math.max(FACT_MIN, Math.min(FACT_MAX, rate));
 
     this._spliceDelay += 1 - r;
     if (this._spliceXf > 0) this._spliceXfDelay += 1 - r;
 
-    const minD = Math.max(pe * 0.35, N2 - pe);
-    const maxD = Math.min(N - pe - 4, N2 + pe);
+    const minD = hopLandBare
+      ? Math.max(
+          pe * 0.35,
+          N2 - pe * HOP_LAND_CLAMP_FRAC,
+        )
+      : Math.max(pe * 0.35, N2 - pe);
+    const maxD = hopLandBare
+      ? Math.min(N - pe - 4, N2 + pe * HOP_LAND_CLAMP_FRAC)
+      : Math.min(N - pe - 4, N2 + pe);
     const before = this._spliceDelay;
     // Patent: ± one Cycle_period. Do not start another join while a seam
     // is still fading — overlapping xfades warble on note runs (g6a).
-    const canJoin = this._spliceXf <= 0;
+    // Hop-land bare: hard-clamp only (no insert/delete chew).
+    const canJoin = this._spliceXf <= 0 && !hopLandBare;
     if (canJoin && this._spliceDelay < minD)
       this._spliceDelay += this._alignedPe(this._spliceDelay, pe, 1);
     else if (canJoin && this._spliceDelay > maxD)
       this._spliceDelay -= this._alignedPe(this._spliceDelay, pe, -1);
+    else if (hopLandBare) {
+      if (this._spliceDelay < minD) this._spliceDelay = minD;
+      if (this._spliceDelay > maxD) this._spliceDelay = maxD;
+    }
     if (this._spliceDelay < 4) this._spliceDelay = 4;
     if (this._spliceDelay > N - 4) this._spliceDelay = N - 4;
 
-    if (this._spliceDelay !== before) {
+    if (this._spliceDelay !== before && canJoin) {
       this._spliceXfDelay = before;
       this._spliceXfN = Math.max(8, Math.min(48, pe * 0.25));
       this._spliceXf = 1;
@@ -1508,6 +1558,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
    * Still one cycle — a few-sample phase hunt, not a second period estimate.
    */
   _alignedPe(delay, pe, dir) {
+    if (this._splicePeLast > 1 && Math.abs(pe - this._splicePeLast) < 4) return pe;
     const span = Math.max(2, Math.min(14, (pe * 0.12) | 0));
     const nW = Math.max(8, Math.min(20, (pe * 0.18) | 0));
     const wr = this.cbiwr;
@@ -1528,6 +1579,7 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
         best = cand;
       }
     }
+    this._splicePeLast = best;
     return best;
   }
 
@@ -2653,8 +2705,23 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
           this._phincSlew = 1;
           this.outphinc = this.inphinc;
         } else if (!this._trackOk) {
-          // Consonant / reverb smear: freeze R*. spliceRate is already 1.
-          this.outphinc = this.inphinc;
+          if (this._hopLandActive() && softPsola) {
+            // g6h: E/H re-detect on a hop land — chase R*, don't freeze outphinc.
+            this.phincfact = this._rStar;
+            const inHzG = this.inphinc * sampleRate;
+            this._phincSlew += (this.phincfact - this._phincSlew) * slewAlpha;
+            this._phincSlew = this._guardRatio(
+              inHzG,
+              this._phincSlew,
+              this._lockedDet,
+              this._corrMidi,
+              this._naturalTgt,
+            );
+            this.outphinc = this.inphinc * this._phincSlew;
+          } else {
+            // Consonant / smear: identity. spliceRate is 1 unless hop land (g6h).
+            this.outphinc = this.inphinc;
+          }
         } else {
           const cur = Math.max(1e-6, this.phincfact);
           const ratioCents = (1200 * Math.log(this._rStar / cur)) / Math.LN2;
@@ -2812,11 +2879,12 @@ class AinCentinelProcessor extends AudioWorkletProcessor {
       let wetR;
       if (this._on && this._useCycleSplice()) {
         // rate=1 while unity / unarmed → wet ≈ latency-dry (delay stays ~N2)
+        const hopLand = this._hopLandActive();
         const spliceRate =
           !this._armed ||
           this._onsetUnity ||
           this._edgeQuiet ||
-          !this._trackOk
+          (!this._trackOk && !hopLand)
             ? 1
             : this._phincSlew;
         const pair = this._cycleSpliceSample(spliceRate);

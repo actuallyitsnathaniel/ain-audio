@@ -1,7 +1,7 @@
 # Centinel vs Auto-Tune patent / Autotalent literature
 
 Front-to-back reading of the three sources Nathaniel flagged, mapped onto live
-Centinel (`src/daw/worklets/centinel-processor.js`, build `g5c-rev` = `g4c-lpc` live; hop freeze `g6e-edge`).
+Centinel (`src/daw/worklets/centinel-processor.js`, build `g6k-clamp`; LPC freeze `g4c-lpc`).
 
 Interactive companions (open beside chat):
 [`centinel-vs-autotune.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-vs-autotune.canvas.tsx)
@@ -11,11 +11,17 @@ Interactive companions (open beside chat):
 
 **[US5973252A](https://patents.google.com/patent/US5973252A/en) is expired** (term ended ~2018; public domain). Implement the preferred embodiment as closely as the text allows — not Autotalent/Lent as a stand-in.
 
+**Modern AT on this fixture is `output_goal.wav`.** Patent = engine they still run (E/H → rate + ±1 cycle + Decay). Everything the goal does that the 1997 text does not name (Humanize, Flex, leave, formant preserve) is post-patent product. A/B wet↔goal on a named window. ¢ scorecard is after, not the target.
+
+**Classify first** (`R* = hz(want)/hz(Cycle_period)`): core miss (period / `spliceRate=1` / fail-re-detect) vs product miss (knob feel) vs don't-care (¢ the goal also has). Prefer a predicate already in the file. One change, re-A/B that window, revert if it didn't move.
+
 **Order of work:**
 
-1. **Patent-faithful core first** — detection mode (8:1 DS + \(E/H\) search) → correction mode (narrow-band recursive \(E/H\), quadratic period) → rate convert + ±1 `Cycle_period` insert/delete.
-2. **Then refine past the patent** — Retune Speed is Decay. Humanize / Flex / Nat Vib / sticky sit **on top of** the G1 core (`g1l-oct`). Do not mix them in to chase a scorecard hole; one knob at a time.
+1. **Patent-faithful core first** — detection mode (8:1 DS + \(E/H\) search) → correction mode (narrow-band recursive \(E/H\), quadratic period) → rate convert + ±1 `Cycle_period` insert/delete. Fail → re-detect **without** dropping the resampler to identity.
+2. **Then refine past the patent** — Retune Speed is Decay. Humanize / Flex / Nat Vib / sticky sit **on top** of a continuous corrector. Do not mix them in to hide a `rate=1` gulp.
 3. **PSOLA / Fairbanks / PV** are fallbacks (`CYCLE_SPLICE=false`), not the AT-matching reference. Pop formant is LPC preserve after splice (`g4a-env`). Do not gut Lent-adjacent code until a later cleanup audit (see G4).
+
+See also [`centinel-paradigm.canvas.tsx`](/Users/nate/.cursor/projects/Users-nate-Documents-development-website-ain-actuallyitsnathaniel-audio/canvases/centinel-paradigm.canvas.tsx).
 
 ## Open items ledger (for the next plan)
 
@@ -28,7 +34,7 @@ Interactive companions (open beside chat):
 - [x] `process()` sets `_inphincTgt = 1/periodSamp` when tracking (0¢ vs period). The old “never write `_inphincTgt`” rule was for the YIN-babysitter era (p1a–e); it does not apply now.
 - [x] Product pitch-law stripped so the core could be judged alone
 - [x] ~14s beats AT without Flex taper (54% vs 47%)
-- [x] ~20s mix actually opens (wet≈dry 85%→0%; leftover hole is nearest-note/Decay, not dry-through)
+- [x] ~20s mix actually opens (g3c re-arm). Isolated hop identity on 20s E→F# closed in `g6f-hop` (drop `_inRun` from g6c hold; bounce wet≈dry 0% on `loose-20s`).
 - [x] Patent octave check (DS 2L/4L) + notes follow period. YIN-era `octaveLock`/`MAX_JUMP` was shifting a correct C#4 period back up (`R*=2`) — that was the 279ms 20.76s C#5 run.
 
 Freeze this core. Do **not** open another detector/slew/ε cut unless a listen shows the *period* is wrong.
@@ -46,7 +52,10 @@ Freeze this core. Do **not** open another detector/slew/ε cut unless a listen s
 - [x] **Period hold** (`g6c-pe`) — mid-run E/H miss re-detects without dropping rate to 1 (24ms). Period slews on a run. Identity-flash at hops was the leftover warble.
 - [x] **Hop land vs Cher** (`g6d-hop`) — commit-fast is a fraction of Retune Speed (pop isolated 14ms / run 17ms), not a hard 8ms on every held-note hop. That 8ms was the robotic pop transition.
 - [x] **Phrase edges** (`g6e-edge`) — g6c period-hold does not run on cold start or while RMS is falling. Commit-fast skipped during cold start. Holding lock into the tail was the weirder hard stop.
-- [ ] **Isolated hop hold** (proposed `g6f`) — g6c keeps last `Cycle_period` only while `_inRun`. Held-note hops still `_ehDropLock` → `spliceRate=1` (20s identity gulp vs AT). Same 24ms re-detect hold, drop `_inRun`; keep g6e (no hold on cold / edge / !voiced). Ask first.
+- [x] **Isolated hop hold** (`g6f` → `g6g` → **reverted**) — period-hold on every land was rough + CPU. Replaced by `g6h`/`g6i`.
+- [x] **Hop-land rate** (`g6h-hoprate`) — keep last R* through re-detect (no identity flash). E/H still drops lock.
+- [x] **Hop-land no-join** (`g6i-nojoin`) — during hop-land `!trackOk`, no ±cycle insert/delete (stale pe + rate≠1 chewed 8–11s). Delay hard-clamped; R* still chases.
+- [x] **Hop-land clamp** (`g6j` → `g6k-clamp`) — hop-land delay ±0.18 pe around N2 (0.25 still thin on lands; full ±1 chewed).
 - [x] **Envelope post** (`g4a-env`) — LPC preserve after splice; settled `|R*|` + voiced only. Knob is amount. IIR stays warm at amt=0.
 - [x] **LPC level + gate** (`g4b-lpc`) — formant=100% was 0↔1 snaps (12ms xfade on an 8¢ chatter) plus all-pole drain (no gain match). Hysteresis + 40ms xfade + RMS match to splice.
 - [x] **LPC latch** (`g4c-lpc`) — stay open through the park (8¢ off was every land). Failed hop kept last poles (identity flash). Slower k/gain, hop 512. Nathaniel: formant 100% better. LPC frozen.
