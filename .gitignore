@@ -24,6 +24,7 @@ dist-ssr
 *.sln
 *.sw?
 .env
+!.env.example
 db.json
 .tmp_centinel*
 .tmp_formant*

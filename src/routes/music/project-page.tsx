@@ -1,14 +1,15 @@
 import { useParams, Link } from "react-router-dom";
-import { projectById } from "../../daw/data/projects";
 import { DawShell } from "../../daw/DawShell";
 import { DawProjectPage } from "../../daw/DawProjectPage";
 import SEO from "../../components/seo";
+import { useAudioContent } from "../../sanity/AudioContentContext";
 
 const SITE = "https://audio.actuallyitsnathaniel.com";
 
 const ProjectPage = () => {
   const { projectId } = useParams<{ projectId: string }>();
-  const project = projectId ? projectById(projectId) : undefined;
+  const { projects } = useAudioContent();
+  const project = projectId ? projects.find((p) => p.id === projectId) : undefined;
 
   if (!project) {
     return (

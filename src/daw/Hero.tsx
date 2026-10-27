@@ -1,10 +1,12 @@
 import ainPfp from "/src/assets/images/daw-art/ain-pfp.jpg";
-import { roles, aboutParagraphs } from "./data/site";
+import { roles } from "./data/site";
 import { RoleChip } from "./components/RoleChip";
 import { TrackSection } from "./components/TrackSection";
 import { scrollToId } from "./lab-utils";
+import { useAudioContent } from "../sanity/AudioContentContext";
 
 export function Hero() {
+  const { aboutParagraphs } = useAudioContent();
   return (
     <TrackSection
       id="hero"

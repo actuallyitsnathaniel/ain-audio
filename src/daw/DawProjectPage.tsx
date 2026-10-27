@@ -1,7 +1,6 @@
 import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import type { Project } from "./data/projects";
-import { discographyFor } from "./data/discography";
 import { RoleChip } from "./components/RoleChip";
 import { PlayButton } from "./components/PlayButton";
 import { TimeReadout } from "./components/TimeReadout";
@@ -11,6 +10,7 @@ import { DiscoGroup } from "./components/Discography";
 import { ABDial } from "./components/audio-lab/ABDial";
 import { LabErrorBanner } from "./components/audio-lab/LabErrorBanner";
 import { lockChip } from "./lab-utils";
+import { useAudioContent } from "../sanity/AudioContentContext";
 
 // JLM's phase-locked mix ↔ master A/B player, wired to the global engine.
 function ProjectLab({ p }: { p: Project }) {
@@ -31,7 +31,8 @@ function ProjectLab({ p }: { p: Project }) {
 
 export function DawProjectPage({ project }: { project: Project }) {
   const p = project;
-  const disco = discographyFor(p.id);
+  const { discography } = useAudioContent();
+  const disco = discography[p.id] || [];
 
   const singles = disco.filter((d) => d.type === "single" || d.type === "ep");
   const albums = disco.filter((d) => d.type === "album");

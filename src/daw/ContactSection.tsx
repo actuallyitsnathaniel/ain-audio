@@ -1,6 +1,6 @@
-import { socials } from "./data/site";
 import { SectionHead } from "./components/SectionHead";
 import { TrackSection } from "./components/TrackSection";
+import { useAudioContent } from "../sanity/AudioContentContext";
 
 const ctaBtn =
   "inline-flex items-center gap-[9px] rounded-[3px] border border-line2 bg-panel px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap no-underline transition-[border-color,background] duration-150 hover:border-dim hover:bg-panel2";
@@ -8,6 +8,7 @@ const ctaAccent =
   "inline-flex items-center gap-[9px] rounded-[3px] border border-accent bg-accent px-[18px] py-[11px] text-[13px] font-semibold whitespace-nowrap text-[#111] no-underline transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--accent)_85%,white)]";
 
 export function ContactSection() {
+  const { socials } = useAudioContent();
   return (
     <TrackSection id="contact" label="contact" rail="03">
       <SectionHead num="03" title="contact" />

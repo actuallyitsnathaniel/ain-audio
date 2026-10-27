@@ -6,6 +6,7 @@ import Root from "../src/routes/root";
 import Secret from "../src/routes/secret";
 import ErrorPage from "../src/error-page";
 import Loader from "../src/components/loader";
+import { AudioContentProvider } from "./sanity/AudioContentContext";
 import "/src/index.css";
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -72,7 +73,9 @@ const head = createHead();
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <UnheadProvider head={head}>
-      <RouterProvider router={router} />
+      <AudioContentProvider>
+        <RouterProvider router={router} />
+      </AudioContentProvider>
     </UnheadProvider>
   </React.StrictMode>,
 );

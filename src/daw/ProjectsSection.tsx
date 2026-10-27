@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Project } from "./data/projects";
-import { projects } from "./data/projects";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { RoleChip } from "./components/RoleChip";
 import { SectionHead } from "./components/SectionHead";
 import { TrackSection } from "./components/TrackSection";
+import { useAudioContent } from "../sanity/AudioContentContext";
 
 function ClipCard({ p, active, onClick }: { p: Project; active: boolean; onClick: () => void }) {
   return (
@@ -151,6 +151,7 @@ function DetailSheet({ p, onClose }: { p: Project; onClose: () => void }) {
 export function ProjectsSection() {
   // sel is nullable now: clicking the open card collapses it (accordion). On
   // mobile the sheet opens instead of the inline row.
+  const { projects } = useAudioContent();
   const [sel, setSel] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const isMobile = useMediaQuery("(max-width: 767px)");

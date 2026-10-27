@@ -1,8 +1,9 @@
-import { press } from "./data/site";
 import { SectionHead } from "./components/SectionHead";
 import { TrackSection } from "./components/TrackSection";
+import { useAudioContent } from "../sanity/AudioContentContext";
 
 export function PressSection() {
+  const { press } = useAudioContent();
   return (
     <TrackSection id="press" label="press" rail="02">
       <SectionHead num="02" title="press" />

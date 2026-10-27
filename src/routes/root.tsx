@@ -1,13 +1,18 @@
 import SEO from "../components/seo";
 import { DawShell } from "../daw/DawShell";
 import { DawHome } from "../daw/DawHome";
+import { useAudioContent } from "../sanity/AudioContentContext";
 
 const Root = () => {
+  const { siteDescription, socials } = useAudioContent();
+  const description =
+    siteDescription ||
+    "Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations.";
   return (
     <>
       <SEO
         title="audio | actuallyitsnathaniel"
-        description="Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations."
+        description={description}
         url="https://audio.actuallyitsnathaniel.com"
         type="profile"
         jsonLd={{
@@ -24,11 +29,7 @@ const Root = () => {
             "Mastering",
             "Sound Design",
           ],
-          sameAs: [
-            "https://instagram.com/actuallyitsnathaniel",
-            "https://www.youtube.com/@actuallyitsnathaniel",
-            "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY",
-          ],
+          sameAs: [socials.instagram, socials.youtube, socials.spotify],
         }}
       />
       <DawShell>
