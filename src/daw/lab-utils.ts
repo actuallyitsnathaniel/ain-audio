@@ -1,8 +1,9 @@
-// Smooth-scroll to a section by id, accounting for the fixed transport bar.
+// Smooth-scroll to a section by id. Sections use scroll-mt-* to clear the fixed
+// transport bar — don't subtract an extra offset here or you get a double gap.
 export function scrollToId(id: string) {
   const el = document.getElementById(id);
   if (!el) return;
-  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 64, behavior: "smooth" });
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // Shared button styles translated from the prototype's .ab-snap.

@@ -20,7 +20,9 @@ export function TrackSection({
       id={id}
       data-screen-label={label}
       className={
-        "mx-auto grid max-w-[1280px] grid-cols-[56px_1fr] px-6 pt-[72px] pb-9 max-[760px]:grid-cols-1 max-[760px]:px-4 max-[760px]:pt-14 max-[760px]:pb-6 " +
+        // scroll-mt-13 clears the fixed transport bar (h-13); keep pt modest so
+        // nav/hash jumps don't leave a double gap under the header.
+        "mx-auto grid max-w-[1280px] scroll-mt-13 grid-cols-[56px_1fr] px-6 pt-8 pb-9 max-[760px]:grid-cols-1 max-[760px]:px-4 max-[760px]:pt-6 max-[760px]:pb-6 " +
         className
       }
     >
