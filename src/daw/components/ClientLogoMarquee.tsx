@@ -34,7 +34,7 @@ function LogoSet({ ariaHidden }: { ariaHidden?: boolean }) {
   );
 }
 
-/** Infinite horizontal logo strip for the hire panel. */
+/** Infinite horizontal logo strip — selected client marks. */
 export function ClientLogoMarquee() {
   return (
     <div className="w-full border-y border-line py-4">

@@ -10,16 +10,17 @@ export const socials = {
   soundbetter: "https://soundbetter.com/profiles/45520-actuallyitsnathaniel",
 } as const;
 
-/** Locked produce/mix offer — keep in sync with SoundBetter. */
+/** Hire mailto — keep in sync with SoundBetter where rates overlap. */
 export const HIRE_EMAIL =
   "mailto:nathanielrbowman@gmail.com?subject=" +
-  encodeURIComponent("produce+mix — [song title]");
+  encodeURIComponent("audio project — [what you need]");
 
 export type HireOffer = {
   headline: string
   lead: string
   produceMix: string
   mixOnly: string
+  mastering: string
   scope: string
   payment: string
   mailto: string
@@ -28,12 +29,13 @@ export type HireOffer = {
 }
 
 export const hireOffer: HireOffer = {
-  headline: "Production and mixing for release-ready songs.",
-  lead:
-    "Selected work includes sound design for Adidas × Messi, assisted sound work for Netflix, sound design and presets for EVAbeat's Melody Sauce 2 (12 presets, 5 .sfz demos), mastering for Jessica Lea Mayfield (prod. Day Wave), Brand X Music library placements, and Aubit Sound packs used by artists including U2 and Cheat Codes. Produce and mix credits include Sam Denton, John White, KRPTK, and Platinum Roses.",
+  headline: "Production, mixing, mastering, and whatever else the record needs.",
+  lead: "Clientele includes: Netflix, Prime, Adidas, Brand X, and many more.",
   produceMix: "$1,000 / song",
   mixOnly: "$400 / song",
-  scope: "Includes two revision rounds. Mastering quoted separately.",
+  mastering: "quoted / song",
+  scope:
+    "Starting rates for common song packages. Sound design, composition, and custom work quoted per project. Produce/mix includes two revision rounds.",
   payment: "New clients: SoundBetter escrow preferred; otherwise 50% deposit, 50% on delivery.",
   mailto: HIRE_EMAIL,
   primaryCta: "Start a project",
@@ -41,7 +43,7 @@ export const hireOffer: HireOffer = {
 }
 
 export const siteDescription =
-  "Los Angeles producer and mix engineer. Credits include Adidas × Messi sound design, Jessica Lea Mayfield mastering, Brand X Music, EVAbeat Melody Sauce 2, and Aubit packs used by U2 and Cheat Codes."
+  "Los Angeles producer, mix & mastering engineer, and sound designer. Credits include Adidas × Messi, Jessica Lea Mayfield, Brand X Music, EVAbeat Melody Sauce 2, and Aubit packs used by U2 and Cheat Codes."
 
 export const roles: string[] = [
   "production",
@@ -51,10 +53,9 @@ export const roles: string[] = [
   "composition",
 ];
 
-// Two hero paragraphs — the old "about" section was merged into the hero.
+// Hero about copy — selected-work credits live in ClientLogoMarquee instead.
 export const aboutParagraphs: string[] = [
   "Los Angeles producer, mix engineer, and sound designer with over twelve years behind the board. Credits span artist records, commercial campaigns, trailer library cues, and sample libraries — digital and analog tools shaped into work that holds up on a release.",
-  "Selected work: sound design for Adidas × Messi; mastering for Jessica Lea Mayfield (produced by Day Wave); composition for Brand X Music; Aubit Sound packs used by artists including U2, Cheat Codes, and Virginia to Vegas; produce and mix for Sam Denton, John White, KRPTK, and Platinum Roses.",
 ];
 
 export interface PressItem {

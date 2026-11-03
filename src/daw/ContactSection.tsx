@@ -1,4 +1,3 @@
-import { ClientLogoMarquee } from "./components/ClientLogoMarquee";
 import { SectionHead } from "./components/SectionHead";
 import { TrackSection } from "./components/TrackSection";
 import { scrollToId } from "./lab-utils";
@@ -14,8 +13,8 @@ export function ContactSection() {
 
   return (
     <TrackSection id="hire" label="hire" rail="01">
-      <SectionHead num="01" title="hire" sub="produce · mix" />
-      <div className="flex flex-col items-start gap-[18px] rounded-[4px] border border-line bg-panel p-8">
+      <SectionHead num="01" title="hire" sub="production · mixing · mastering · more" />
+      <div className="flex min-h-0 w-full flex-1 flex-col items-start gap-[18px] rounded-[4px] border border-line bg-panel p-8">
         <p className="m-0 text-[22px] font-bold tracking-[-0.01em]">{hireOffer.headline}</p>
         <p className="m-0 max-w-[68ch] text-pretty text-dim">{hireOffer.lead}</p>
         <button
@@ -26,16 +25,18 @@ export function ContactSection() {
           View full portfolio ↓
         </button>
 
-        <ClientLogoMarquee />
-
         <dl className="m-0 grid w-full max-w-[36ch] gap-3 font-mono text-[12px] leading-relaxed">
           <div className="grid grid-cols-[1fr_auto] gap-x-6">
-            <dt className="text-faint">Produce + mix</dt>
+            <dt className="text-faint">Production + mix</dt>
             <dd className="m-0 text-right text-daw-text">{hireOffer.produceMix}</dd>
           </div>
           <div className="grid grid-cols-[1fr_auto] gap-x-6">
             <dt className="text-faint">Mix only</dt>
             <dd className="m-0 text-right text-daw-text">{hireOffer.mixOnly}</dd>
+          </div>
+          <div className="grid grid-cols-[1fr_auto] gap-x-6">
+            <dt className="text-faint">Mastering</dt>
+            <dd className="m-0 text-right text-daw-text">{hireOffer.mastering}</dd>
           </div>
         </dl>
 

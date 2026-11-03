@@ -3,7 +3,7 @@ import {defineQuery} from 'groq'
 export const AUDIO_SITE_QUERY = defineQuery(`*[_type == "site" && key == "audio"][0]{
   name, headline, description, about,
   links[]{label, url},
-  hire{headline, lead, produceMix, mixOnly, scope, payment, mailto, primaryCta, soundBetterCta},
+  hire{headline, lead, produceMix, mixOnly, mastering, scope, payment, mailto, primaryCta, soundBetterCta},
   seo
 }`)
 

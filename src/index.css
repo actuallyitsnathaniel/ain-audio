@@ -144,7 +144,7 @@ body {
   backdrop-filter: blur(10px);
 }
 
-/* Hire panel client logo marquee
+/* Client logo marquee (hero selected-work strip)
    Each set uses the same gap + end padding so translateX(-50%) loops with no jump. */
 @keyframes client-marquee {
   from {

@@ -5,7 +5,7 @@ import { useAudioContent } from "../sanity/AudioContentContext";
 export function PressSection() {
   const { press } = useAudioContent();
   return (
-    <TrackSection id="press" label="press" rail="03">
+    <TrackSection id="press" label="press" rail="03" fill={false}>
       <SectionHead num="03" title="press" />
       <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3">
         {press.map((pr) => (

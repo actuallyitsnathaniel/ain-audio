@@ -25,7 +25,7 @@ const Hero = () => (
     id="hero"
     label="hero"
     rail="00"
-    className="min-h-[calc(100vh-52px)] content-start pt-30"
+    className="pt-30 max-[760px]:pt-20"
   >
     <motion.div
       className="mx-auto flex flex-col md:flex-row items-center gap-12 max-w-5xl w-full"

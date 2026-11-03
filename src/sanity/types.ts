@@ -11,6 +11,7 @@ export type SanityHireOffer = {
   lead?: string
   produceMix?: string
   mixOnly?: string
+  mastering?: string
   scope?: string
   payment?: string
   mailto?: string

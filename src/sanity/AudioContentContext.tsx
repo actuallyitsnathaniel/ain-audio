@@ -40,19 +40,10 @@ type AudioContent = {
 
 const AudioContentContext = createContext<AudioContent | null>(null)
 
-function mergeHire(remote: Partial<HireOffer> | undefined): HireOffer {
-  if (!remote) return localHire
-  return {
-    headline: remote.headline || localHire.headline,
-    lead: remote.lead || localHire.lead,
-    produceMix: remote.produceMix || localHire.produceMix,
-    mixOnly: remote.mixOnly || localHire.mixOnly,
-    scope: remote.scope || localHire.scope,
-    payment: remote.payment || localHire.payment,
-    mailto: remote.mailto || localHire.mailto,
-    primaryCta: remote.primaryCta || localHire.primaryCta,
-    soundBetterCta: remote.soundBetterCta || localHire.soundBetterCta,
-  }
+// Hire marketing ships from site.ts (synced out to Sanity). Ignore remote so a
+// stale CMS doc can't resurrect old walls of credits over in-progress copy.
+function mergeHire(_remote: Partial<HireOffer> | undefined): HireOffer {
+  return localHire
 }
 
 export function AudioContentProvider({children}: {children: ReactNode}) {
@@ -85,7 +76,7 @@ export function AudioContentProvider({children}: {children: ReactNode}) {
           setDiscography({...localDiscography, ...remoteDisco})
         }
         if (remotePress.length) setPress(remotePress)
-        if (site?.aboutParagraphs?.length) setAbout(site.aboutParagraphs.slice(0, 2))
+        if (site?.aboutParagraphs?.length) setAbout(site.aboutParagraphs.slice(0, 1))
         if (site?.hire) setHireOffer(mergeHire(site.hire))
         if (site?.seo?.description || site?.description) {
           setSiteDescription(site.seo?.description || site.description || localSiteDescription)
