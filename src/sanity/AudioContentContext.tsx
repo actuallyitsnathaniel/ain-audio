@@ -10,8 +10,14 @@ import type {DiscoEntry} from '../daw/data/discography'
 import {discography as localDiscography} from '../daw/data/discography'
 import type {Project} from '../daw/data/projects'
 import {projects as localProjects} from '../daw/data/projects'
-import type {PressItem} from '../daw/data/site'
-import {aboutParagraphs as localAbout, press as localPress, socials as localSocials} from '../daw/data/site'
+import type {HireOffer, PressItem} from '../daw/data/site'
+import {
+  aboutParagraphs as localAbout,
+  hireOffer as localHire,
+  press as localPress,
+  siteDescription as localSiteDescription,
+  socials as localSocials,
+} from '../daw/data/site'
 import {
   fetchAudioProjects,
   fetchAudioSite,
@@ -27,11 +33,24 @@ type AudioContent = {
   discography: Record<string, DiscoEntry[]>
   press: PressItem[]
   aboutParagraphs: string[]
+  hireOffer: HireOffer
   socials: Socials
-  siteDescription?: string
+  siteDescription: string
 }
 
 const AudioContentContext = createContext<AudioContent | null>(null)
+
+function mergeHire(remote: Partial<HireOffer> | undefined): HireOffer {
+  if (!remote) return localHire
+  return {
+    headline: remote.headline || localHire.headline,
+    lead: remote.lead || localHire.lead,
+    produceMix: remote.produceMix || localHire.produceMix,
+    mixOnly: remote.mixOnly || localHire.mixOnly,
+    scope: remote.scope || localHire.scope,
+    payment: remote.payment || localHire.payment,
+  }
+}
 
 export function AudioContentProvider({children}: {children: ReactNode}) {
   const [ready, setReady] = useState(false)
@@ -39,8 +58,9 @@ export function AudioContentProvider({children}: {children: ReactNode}) {
   const [discography, setDiscography] = useState(localDiscography)
   const [press, setPress] = useState(localPress)
   const [aboutParagraphs, setAbout] = useState(localAbout)
+  const [hireOffer, setHireOffer] = useState(localHire)
   const [socials, setSocials] = useState(localSocials)
-  const [siteDescription, setSiteDescription] = useState<string | undefined>()
+  const [siteDescription, setSiteDescription] = useState(localSiteDescription)
 
   useEffect(() => {
     let cancelled = false
@@ -53,11 +73,20 @@ export function AudioContentProvider({children}: {children: ReactNode}) {
           fetchPress(),
         ])
         if (cancelled) return
-        if (remoteProjects.length) setProjects(remoteProjects)
-        if (Object.keys(remoteDisco).length) setDiscography(remoteDisco)
+        if (remoteProjects.length) {
+          const remoteIds = new Set(remoteProjects.map((p) => p.id))
+          const extras = localProjects.filter((p) => !remoteIds.has(p.id))
+          setProjects(extras.length ? [...remoteProjects, ...extras] : remoteProjects)
+        }
+        if (Object.keys(remoteDisco).length) {
+          setDiscography({...localDiscography, ...remoteDisco})
+        }
         if (remotePress.length) setPress(remotePress)
-        if (site?.aboutParagraphs?.length) setAbout(site.aboutParagraphs)
-        if (site?.description) setSiteDescription(site.description)
+        if (site?.aboutParagraphs?.length) setAbout(site.aboutParagraphs.slice(0, 2))
+        if (site?.hire) setHireOffer(mergeHire(site.hire))
+        if (site?.seo?.description || site?.description) {
+          setSiteDescription(site.seo?.description || site.description || localSiteDescription)
+        }
         if (site?.links?.length) {
           const byLabel = Object.fromEntries(
             site.links
@@ -69,6 +98,7 @@ export function AudioContentProvider({children}: {children: ReactNode}) {
             instagram: byLabel.instagram || localSocials.instagram,
             youtube: byLabel.youtube || localSocials.youtube,
             spotify: byLabel.spotify || localSocials.spotify,
+            soundbetter: byLabel.soundbetter || localSocials.soundbetter,
           })
         }
       } catch (error) {
@@ -83,8 +113,17 @@ export function AudioContentProvider({children}: {children: ReactNode}) {
   }, [])
 
   const value = useMemo(
-    () => ({ready, projects, discography, press, aboutParagraphs, socials, siteDescription}),
-    [ready, projects, discography, press, aboutParagraphs, socials, siteDescription],
+    () => ({
+      ready,
+      projects,
+      discography,
+      press,
+      aboutParagraphs,
+      hireOffer,
+      socials,
+      siteDescription,
+    }),
+    [ready, projects, discography, press, aboutParagraphs, hireOffer, socials, siteDescription],
   )
 
   return (

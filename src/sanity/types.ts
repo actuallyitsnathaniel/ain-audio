@@ -6,12 +6,22 @@ export type SanityImage = {
   alt?: string
 }
 
+export type SanityHireOffer = {
+  headline?: string
+  lead?: string
+  produceMix?: string
+  mixOnly?: string
+  scope?: string
+  payment?: string
+}
+
 export type SanitySite = {
   name?: string
   headline?: string
   description?: string
   about?: PortableTextBlock[]
   links?: Array<{label?: string; url?: string}>
+  hire?: SanityHireOffer
   seo?: {title?: string; description?: string}
 }
 

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 108" role="img" aria-label="Jessica Lea Mayfield">
+  <defs>
+    <style type="text/css"><![CDATA[
+      @font-face {
+        font-family: "JLMMarquee";
+        src: url("file:///System/Library/Fonts/Supplemental/Arial%20Bold.ttf");
+        font-weight: 700;
+      }
+      .jlm {
+        font-family: "JLMMarquee", Arial, Helvetica, sans-serif;
+        font-weight: 700;
+        font-size: 30px;
+        fill: none;
+        stroke: #E4E4E8;
+        stroke-width: 1.35;
+        stroke-linejoin: round;
+        stroke-linecap: round;
+        text-anchor: middle;
+      }
+    ]]></style>
+  </defs>
+  <text class="jlm" x="280" y="42" letter-spacing="0.36em">JESSICA LEA</text>
+  <text class="jlm" x="280" y="86" letter-spacing="0.48em">MAYFIELD</text>
+</svg>

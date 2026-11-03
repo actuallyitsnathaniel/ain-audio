@@ -164,30 +164,6 @@ const Services = () => (
   </TrackSection>
 );
 
-// ─── Photo Divider ───────────────────────────────────────────────────────────
-
-const PhotoDivider = () => (
-  <motion.div
-    className="w-full mx-auto min-h-screen border-y border-line"
-    initial={{ opacity: 0 }}
-    whileInView={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
-    viewport={{ once: false, margin: "-80px" }}
-    transition={{ duration: 0.6 }}
-    style={{
-      maskImage:
-        "linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%)",
-    }}
-  >
-    <img
-      src={actionPhoto}
-      alt="Nathaniel Bowman mixing audio at a live event"
-      className="w-full h-full object-cover grayscale-20"
-      style={{ objectPosition: "center 75%" }}
-    />
-  </motion.div>
-);
-
 // ─── How It Works ────────────────────────────────────────────────────────────
 
 const steps = [
@@ -223,26 +199,39 @@ const HowItWorks = () => (
       <motion.div variants={fadeUp}>
         <SectionHead num="02" title="how it works" />
       </motion.div>
-      <motion.div
-        className="flex flex-col md:flex-row gap-4"
-        variants={stagger}
-      >
-        {steps.map((step) => (
-          <motion.div
-            key={step.number}
-            className="flex-1 flex flex-col gap-3 text-center rounded-sm border border-line bg-panel p-6"
-            variants={fadeUp}
-          >
-            <span className="font-mono text-4xl font-bold text-faint">
-              {step.number}
-            </span>
-            <h3 className="text-xl font-bold">{step.title}</h3>
-            <p className="text-dim text-sm leading-relaxed">
-              {step.description}
-            </p>
-          </motion.div>
-        ))}
-      </motion.div>
+
+      {/* Desktop: photo | steps. Header stays full-width above. */}
+      <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 md:gap-8">
+        <motion.div
+          className="overflow-hidden rounded-sm border border-line2 bg-panel p-2"
+          variants={fadeUp}
+        >
+          <img
+            src={actionPhoto}
+            alt="Nathaniel Bowman mixing audio at a live event"
+            className="aspect-[4/5] h-full max-h-[min(72vh,640px)] w-full object-cover grayscale-20 rounded-xs md:aspect-auto md:min-h-[420px]"
+            style={{ objectPosition: "center 75%" }}
+          />
+        </motion.div>
+
+        <motion.div className="flex flex-col gap-4" variants={stagger}>
+          {steps.map((step) => (
+            <motion.div
+              key={step.number}
+              className="flex flex-col gap-2 rounded-sm border border-line bg-panel p-5 text-left md:flex-1 md:justify-center"
+              variants={fadeUp}
+            >
+              <span className="font-mono text-[11px] tracking-[0.12em] text-faint">
+                {step.number}
+              </span>
+              <h3 className="m-0 text-xl font-bold">{step.title}</h3>
+              <p className="m-0 text-sm leading-relaxed text-dim">
+                {step.description}
+              </p>
+            </motion.div>
+          ))}
+        </motion.div>
+      </div>
     </motion.div>
   </TrackSection>
 );
@@ -505,7 +494,6 @@ const Events = () => {
       <main className="relative z-1">
         <Hero />
         <Services />
-        <PhotoDivider />
         <HowItWorks />
         <Reviews />
         <FAQ />

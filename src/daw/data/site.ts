@@ -7,25 +7,48 @@ export const socials = {
   youtube: "https://www.youtube.com/@actuallyitsnathaniel",
   spotify:
     "https://open.spotify.com/playlist/5YIJBk2ASIJqbd07gyOGdY?si=1cf595b570c24bf0",
+  soundbetter: "https://soundbetter.com/profiles/45520-actuallyitsnathaniel",
 } as const;
 
+/** Locked produce/mix offer — keep in sync with SoundBetter. */
+export const HIRE_EMAIL =
+  "mailto:nathanielrbowman@gmail.com?subject=" +
+  encodeURIComponent("produce+mix — [song title]");
+
+export type HireOffer = {
+  headline: string
+  lead: string
+  produceMix: string
+  mixOnly: string
+  scope: string
+  payment: string
+}
+
+export const hireOffer: HireOffer = {
+  headline: "Production and mixing for release-ready songs.",
+  lead:
+    "Selected work includes sound design for Adidas × Messi, assisted sound work for Netflix, sound design and presets for EVAbeat's Melody Sauce 2 (12 presets, 5 .sfz demos), mastering for Jessica Lea Mayfield (prod. Day Wave), Brand X Music library placements, and Aubit Sound packs used by artists including U2 and Cheat Codes. Produce and mix credits include Sam Denton, John White, KRPTK, and Platinum Roses.",
+  produceMix: "$1,000 / song",
+  mixOnly: "$400 / song",
+  scope: "Includes two revision rounds. Mastering quoted separately.",
+  payment: "New clients: SoundBetter escrow preferred; otherwise 50% deposit, 50% on delivery.",
+}
+
+export const siteDescription =
+  "Los Angeles producer and mix engineer. Credits include Adidas × Messi sound design, Jessica Lea Mayfield mastering, Brand X Music, EVAbeat Melody Sauce 2, and Aubit packs used by U2 and Cheat Codes."
+
 export const roles: string[] = [
-  "music production",
+  "production",
   "mixing",
   "mastering",
   "sound design",
-  "recording",
-  "sample packs",
-  "synth presets",
-  "live sound",
-  "film scoring",
-  "audio repair",
+  "composition",
 ];
 
 // Two hero paragraphs — the old "about" section was merged into the hero.
 export const aboutParagraphs: string[] = [
-  "i'm a music producer, sound designer, composer, arranger, songwriter, and recording artist. i've been messing around with beats and sounds for over 12 years, blending digital and analog stuff to make sounds that are nostalgic, but still fresh. i love using sounds and tones from all sorts of gadgets, like computer processors and even smart ovens. you can hear my work all over the place — from small artists, big artists, even adidas commercials. if i'm not doing music, i'm probably either writing code or playing video games.",
-  "feel free to poke around my projects — i'm really proud of my portfolio so far and i love collaborating, so reach out if my stuff interests you!",
+  "Los Angeles producer, mix engineer, and sound designer with over twelve years behind the board. Credits span artist records, commercial campaigns, trailer library cues, and sample libraries — digital and analog tools shaped into work that holds up on a release.",
+  "Selected work: sound design for Adidas × Messi; mastering for Jessica Lea Mayfield (produced by Day Wave); composition for Brand X Music; Aubit Sound packs used by artists including U2, Cheat Codes, and Virginia to Vegas; produce and mix for Sam Denton, John White, KRPTK, and Platinum Roses.",
 ];
 
 export interface PressItem {

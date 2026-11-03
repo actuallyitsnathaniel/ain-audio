@@ -32,3 +32,4 @@ db.json
 # showcase capture artifacts
 showcase/
 TODO.md
+.vercel

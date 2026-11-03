@@ -8,9 +8,9 @@ export function DawHome() {
   return (
     <main className="relative z-[1]">
       <Hero />
+      <ContactSection />
       <ProjectsSection />
       <PressSection />
-      <ContactSection />
     </main>
   );
 }

@@ -12,6 +12,7 @@ import johnWhiteArt from "/src/assets/images/daw-art/john-white.jpg";
 import brandXArt from "/src/assets/images/daw-art/brand-x.jpg";
 import krptkArt from "/src/assets/images/daw-art/krptk.jpg";
 import platinumRosesArt from "/src/assets/images/daw-art/platinum-roses.jpg";
+import evabeatArt from "/src/assets/images/daw-art/evabeat.jpg";
 
 export interface VimeoEmbed {
   src: string;
@@ -60,6 +61,15 @@ export const projects: Project[] = [
       { src: "https://player.vimeo.com/video/873468787?h=ebe0c2ae9f", ratio: "16 / 9.25" },
     ],
     desc: "Sound design for the campaign welcoming Lionel Messi to Inter Miami with Adidas, alongside videographer Jake Dahm. Impacts, sweeps, and foley-esque sounds of mine helped welcome Messi to the U.S.",
+  },
+  {
+    id: "evabeat",
+    artist: "EVAbeat",
+    subtitle: "Melody Sauce 2 · MIDI generator plugin",
+    roles: ["sound design", "presets"],
+    art: evabeatArt,
+    color: "#6B9BE0",
+    desc: "Created 12 preset sounds and 5 demos in .sfz format for Melody Sauce 2 by EVAbeat — a MIDI generator plugin for melodic ideas inside the DAW.",
   },
   {
     id: "sam-denton",

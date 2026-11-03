@@ -58,6 +58,7 @@ import art52 from "/src/assets/images/projects/platinum-roses/discography/whatd-
 import art53 from "/src/assets/images/projects/platinum-roses/discography/one-thing-i-know-single.jpg";
 import art54 from "/src/assets/images/projects/riley/Singles_EPs/aimless-remix.jpeg";
 import art55 from "/src/assets/images/projects/sam-denton/LPs/ebba_600x600bb.jpeg";
+import art56 from "/src/assets/images/projects/evabeat/melody-sauce-2.jpg";
 
 export type ReleaseType = "single" | "ep" | "album" | "general";
 
@@ -140,6 +141,15 @@ export const discography: Record<string, DiscoEntry[]> = {
     { title: "Spiraling (from Spiraling EP)", type: "general", art: art43, links: {"spotify":"https://open.spotify.com/track/2GUzeTEMKnWAjMWYA1Ui4V?si=5c39d40150734f62","apple":"https://music.apple.com/us/album/spiraling/1668083016?i=1668083021","youtube":"https://www.youtube.com/watch?v=AfTfGX5Wvrg&list=OLAK5uy_lhtTc3b8h0HPzM8iobZ40xmw4Cn38tGos"} },
     { title: "Tom's Diner (from Mixtape)", type: "general", art: art44, links: {"spotify":"https://open.spotify.com/track/4zBtv57k0H4dFcvSZSWDla?si=3ba3c0c6c8fe445f","apple":"https://music.apple.com/id/album/toms-diner/1705680543?i=1705680547","youtube":"https://www.youtube.com/watch?v=H8iVHmDxlBk"} },
     { title: "Don't Pretend (from Popfest Vol. 2)", type: "general", art: art45, links: {"spotify":"https://open.spotify.com/track/63SLRotYth5eukYcJw0Trt?si=939f1c747cb14117","apple":"https://music.apple.com/us/album/dont-pretend/1692907111?i=1692907112","youtube":"https://www.youtube.com/watch?v=bjuaf-LfdWg"} }
+  ],
+  "evabeat": [
+    {
+      title: "Melody Sauce 2",
+      type: "general",
+      art: art56,
+      links: {},
+      note: "12 preset sounds + 5 .sfz demos for EVAbeat's Melody Sauce 2.",
+    },
   ],
   "krptk": [
     { title: "Kintsugi - Single", type: "single", art: art46, links: {"spotify":"https://open.spotify.com/track/3uLhL3hk0rRo9w5L00Qn96?si=67a52b363d6744d4","apple":"https://music.apple.com/us/album/kintsugi/1620459267?i=1620459520","tidal":"https://tidal.com/browse/track/225869369","youtube":"https://www.youtube.com/watch?v=1z1o5ZM_DnU"} },

@@ -191,8 +191,8 @@ export function ProjectsSection() {
   };
 
   return (
-    <TrackSection id="projects" label="projects" rail="01">
-      <SectionHead num="01" title="projects" sub={projects.length + " clips · tap to load"} />
+    <TrackSection id="projects" label="projects" rail="02">
+      <SectionHead num="02" title="projects" sub={projects.length + " clips · tap to load"} />
       <div ref={gridRef} className="grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-[10px] max-[767px]:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] max-[767px]:gap-[7px]">
         {projects.map((proj, i) => (
           <Fragment key={proj.id}>

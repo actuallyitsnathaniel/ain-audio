@@ -144,6 +144,33 @@ body {
   backdrop-filter: blur(10px);
 }
 
+/* Hire panel client logo marquee
+   Each set uses the same gap + end padding so translateX(-50%) loops with no jump. */
+@keyframes client-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.client-marquee-set {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5.5rem;
+  padding-inline-end: 5.5rem;
+}
+.client-marquee-track {
+  animation: client-marquee 42s linear infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .client-marquee-track {
+    animation: none;
+  }
+}
+
 /* Hide scrollbar (used by other routes + the mobile transport nav). */
 .scrollbar-hide {
   scrollbar-width: none;

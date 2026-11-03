@@ -7,9 +7,10 @@ import { useRafLoop } from "./hooks/useRafLoop";
 import { scrollToId } from "./lab-utils";
 
 const NAV: { id?: string; path?: string; label: string; num: string }[] = [
-  { id: "projects", label: "projects", num: "01" },
-  { id: "press", label: "press", num: "02" },
-  { id: "contact", label: "contact", num: "03" },
+  { id: "hero", label: "intro", num: "00" },
+  { id: "hire", label: "hire", num: "01" },
+  { id: "projects", label: "projects", num: "02" },
+  { id: "press", label: "press", num: "03" },
   { path: "/events", label: "events", num: "04" },
 ];
 

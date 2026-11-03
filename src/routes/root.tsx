@@ -4,15 +4,12 @@ import { DawHome } from "../daw/DawHome";
 import { useAudioContent } from "../sanity/AudioContentContext";
 
 const Root = () => {
-  const { siteDescription, socials } = useAudioContent();
-  const description =
-    siteDescription ||
-    "Professional music producer and audio engineer specializing in modern production, mixing, and sound design. Explore my portfolio of projects and collaborations.";
+  const { socials, siteDescription } = useAudioContent();
   return (
     <>
       <SEO
         title="audio | actuallyitsnathaniel"
-        description={description}
+        description={siteDescription}
         url="https://audio.actuallyitsnathaniel.com"
         type="profile"
         jsonLd={{
@@ -29,7 +26,7 @@ const Root = () => {
             "Mastering",
             "Sound Design",
           ],
-          sameAs: [socials.instagram, socials.youtube, socials.spotify],
+          sameAs: [socials.instagram, socials.youtube, socials.spotify, socials.soundbetter],
         }}
       />
       <DawShell>

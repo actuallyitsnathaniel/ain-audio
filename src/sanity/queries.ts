@@ -1,7 +1,10 @@
 import {defineQuery} from 'groq'
 
 export const AUDIO_SITE_QUERY = defineQuery(`*[_type == "site" && key == "audio"][0]{
-  name, headline, description, about, links[]{label, url}, seo
+  name, headline, description, about,
+  links[]{label, url},
+  hire{headline, lead, produceMix, mixOnly, scope, payment},
+  seo
 }`)
 
 export const AUDIO_PROJECTS_QUERY = defineQuery(`*[_type == "project" && discipline == "audio" && "site-audio" in sites[]._ref]
