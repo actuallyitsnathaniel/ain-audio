@@ -49,6 +49,9 @@ function mergeHire(remote: Partial<HireOffer> | undefined): HireOffer {
     mixOnly: remote.mixOnly || localHire.mixOnly,
     scope: remote.scope || localHire.scope,
     payment: remote.payment || localHire.payment,
+    mailto: remote.mailto || localHire.mailto,
+    primaryCta: remote.primaryCta || localHire.primaryCta,
+    soundBetterCta: remote.soundBetterCta || localHire.soundBetterCta,
   }
 }
 

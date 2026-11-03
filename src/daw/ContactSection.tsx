@@ -1,7 +1,6 @@
 import { ClientLogoMarquee } from "./components/ClientLogoMarquee";
 import { SectionHead } from "./components/SectionHead";
 import { TrackSection } from "./components/TrackSection";
-import { HIRE_EMAIL } from "./data/site";
 import { scrollToId } from "./lab-utils";
 import { useAudioContent } from "../sanity/AudioContentContext";
 
@@ -47,8 +46,8 @@ export function ContactSection() {
         </p>
 
         <div className="flex flex-wrap gap-[10px]">
-          <a className={ctaAccent} href={HIRE_EMAIL}>
-            Start a project
+          <a className={ctaAccent} href={hireOffer.mailto}>
+            {hireOffer.primaryCta}
           </a>
           <a
             className={ctaBtn}
@@ -56,7 +55,7 @@ export function ContactSection() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Book on SoundBetter
+            {hireOffer.soundBetterCta}
           </a>
         </div>
 

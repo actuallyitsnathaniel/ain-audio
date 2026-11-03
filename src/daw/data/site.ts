@@ -22,6 +22,9 @@ export type HireOffer = {
   mixOnly: string
   scope: string
   payment: string
+  mailto: string
+  primaryCta: string
+  soundBetterCta: string
 }
 
 export const hireOffer: HireOffer = {
@@ -32,6 +35,9 @@ export const hireOffer: HireOffer = {
   mixOnly: "$400 / song",
   scope: "Includes two revision rounds. Mastering quoted separately.",
   payment: "New clients: SoundBetter escrow preferred; otherwise 50% deposit, 50% on delivery.",
+  mailto: HIRE_EMAIL,
+  primaryCta: "Start a project",
+  soundBetterCta: "Book on SoundBetter",
 }
 
 export const siteDescription =

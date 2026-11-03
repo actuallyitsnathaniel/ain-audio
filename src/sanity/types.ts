@@ -13,6 +13,9 @@ export type SanityHireOffer = {
   mixOnly?: string
   scope?: string
   payment?: string
+  mailto?: string
+  primaryCta?: string
+  soundBetterCta?: string
 }
 
 export type SanitySite = {
